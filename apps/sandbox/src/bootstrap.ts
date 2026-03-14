@@ -55,17 +55,17 @@ import { registerMessageTypes } from '@open-mercato/core/modules/messages/lib/me
 import { registerMessageObjectTypes } from '@open-mercato/core/modules/messages/lib/message-objects-registry'
 import { securityMfaProviderEntries } from '@/.mercato/generated/security-mfa-providers.generated'
 import { securitySudoTargetEntries } from '@/.mercato/generated/security-sudo.generated'
-import {
-  registerSecurityMfaProviderEntries,
-  registerSecuritySudoTargetEntries,
-} from '@open-mercato/enterprise/modules/security/lib/module-security-registry'
+// import {
+//   registerSecurityMfaProviderEntries,
+//   registerSecuritySudoTargetEntries,
+// } from '@open-mercato/enterprise/modules/security/lib/module-security-registry'
 
 // Register event configs globally (similar to search)
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
-registerSecurityMfaProviderEntries(securityMfaProviderEntries)
-registerSecuritySudoTargetEntries(securitySudoTargetEntries)
+// registerSecurityMfaProviderEntries(securityMfaProviderEntries)
+// registerSecuritySudoTargetEntries(securitySudoTargetEntries)
 
 // Bootstrap factory from shared package
 import { createBootstrap, isBootstrapped } from '@open-mercato/shared/lib/bootstrap'

@@ -18,7 +18,10 @@
     "sandbox:generate": "yarn workspace sandbox generate",
     "sandbox:dev": "yarn workspace sandbox dev",
     "sandbox:build": "yarn workspace sandbox build",
-    "sandbox:mercato": "yarn workspace sandbox mercato"
+    "sandbox:initialize": "yarn workspace sandbox initialize",
+    "sandbox:reinstall": "yarn workspace sandbox reinstall",
+    "sandbox:mercato": "yarn workspace sandbox mercato",
+    "build:packages": "turbo run build --filter='./packages/*'"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
