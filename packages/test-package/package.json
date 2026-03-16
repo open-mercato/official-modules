@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/test-package",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
@@ -52,17 +52,25 @@
       "default": "./dist/*/*/*/*.js"
     }
   },
+  "open-mercato": {
+    "kind": "module-package",
+    "displayName": "Test Package",
+    "moduleId": "test_package",
+    "ejectable": true,
+    "minCoreVersion": "0.4.7",
+    "testedCoreRange": ">=0.4.7 <0.5.0"
+  },
   "dependencies": {
-    "@open-mercato/ui": "workspace:*"
+    "@open-mercato/ui": "0.4.7"
   },
   "peerDependencies": {
-    "@open-mercato/shared": "0.4.8-canary-d29d23af60",
-    "@open-mercato/ui": "0.4.8-canary-d29d23af60",
+    "@open-mercato/shared": "0.4.7",
+    "@open-mercato/ui": "0.4.7",
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/shared": "0.4.8-canary-d29d23af60",
-    "@open-mercato/ui": "0.4.8-canary-d29d23af60",
+    "@open-mercato/shared": "0.4.7",
+    "@open-mercato/ui": "0.4.7",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",

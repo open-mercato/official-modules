@@ -25,7 +25,7 @@
     "@mikro-orm/postgresql": "^6.6.2",
     "@open-mercato/ai-assistant": "0.4.8-canary-d29d23af60",
     "@open-mercato/cache": "0.4.8-canary-d29d23af60",
-    "@open-mercato/cli": "patch:@open-mercato/cli@patch%3A@open-mercato/cli@npm%253A0.4.8-canary-d29d23af60%23~/.yarn/patches/@open-mercato-cli-npm-0.4.8-canary-d29d23af60-5c1372498c.patch%3A%3Aversion=0.4.8-canary-d29d23af60&hash=4fe616#~/.yarn/patches/@open-mercato-cli-patch-c79a956577.patch",
+    "@open-mercato/cli": "0.4.8-canary-d29d23af60",
     "@open-mercato/content": "0.4.8-canary-d29d23af60",
     "@open-mercato/core": "0.4.8-canary-d29d23af60",
     "@open-mercato/events": "0.4.8-canary-d29d23af60",

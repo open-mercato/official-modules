@@ -13,6 +13,14 @@
   "scripts": {
     "build": "turbo run build --filter='./packages/*'",
     "dev": "yarn sandbox:dev",
+    "pack:packages": "./scripts/pack-packages.sh",
+    "publish:preview": "./scripts/publish-preview.sh",
+    "publish:stable": "./scripts/publish-stable.sh",
+    "registry:down": "docker compose stop verdaccio",
+    "registry:ping": "./scripts/registry/ping.sh",
+    "registry:setup-user": "./scripts/registry/setup-user.sh",
+    "registry:up": "docker compose up -d verdaccio",
+    "registry:whoami": "./scripts/registry/whoami.sh",
     "typecheck": "turbo run typecheck --filter='./packages/*'",
     "test": "turbo run test --filter='./packages/*'",
     "sandbox:generate": "yarn workspace sandbox generate",
@@ -20,10 +28,10 @@
     "sandbox:build": "yarn workspace sandbox build",
     "sandbox:initialize": "yarn workspace sandbox initialize",
     "sandbox:reinstall": "yarn workspace sandbox reinstall",
-    "sandbox:mercato": "yarn workspace sandbox mercato",
-    "build:packages": "turbo run build --filter='./packages/*'"
+    "sandbox:mercato": "yarn workspace sandbox mercato"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "@types/node": "^24.10.1",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
