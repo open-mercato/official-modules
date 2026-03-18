@@ -12,6 +12,7 @@
 .pnp
 .pnp.*
 .turbo
+.artifacts
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
