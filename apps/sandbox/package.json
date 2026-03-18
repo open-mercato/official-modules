@@ -1,7 +1,8 @@
 {
   "name": "sandbox",
-  "version": "0.1.0",
+  "version": "0.4.7",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "mercato server dev",
     "build": "next build",
@@ -24,10 +25,11 @@
     "@mikro-orm/postgresql": "^6.6.2",
     "@open-mercato/ai-assistant": "0.4.8-canary-d29d23af60",
     "@open-mercato/cache": "0.4.8-canary-d29d23af60",
-    "@open-mercato/cli": "0.4.8-canary-d29d23af60",
+    "@open-mercato/cli": "patch:@open-mercato/cli@patch%3A@open-mercato/cli@npm%253A0.4.8-canary-d29d23af60%23~/.yarn/patches/@open-mercato-cli-npm-0.4.8-canary-d29d23af60-5c1372498c.patch%3A%3Aversion=0.4.8-canary-d29d23af60&hash=4fe616#~/.yarn/patches/@open-mercato-cli-patch-c79a956577.patch",
     "@open-mercato/content": "0.4.8-canary-d29d23af60",
     "@open-mercato/core": "0.4.8-canary-d29d23af60",
     "@open-mercato/events": "0.4.8-canary-d29d23af60",
+    "@open-mercato/gateway-stripe": "0.4.8-canary-d29d23af60",
     "@open-mercato/onboarding": "0.4.8-canary-d29d23af60",
     "@open-mercato/queue": "0.4.8-canary-d29d23af60",
     "@open-mercato/scheduler": "0.4.8-canary-d29d23af60",
@@ -39,6 +41,8 @@
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-slot": "^1.2.4",
     "@react-email/components": "^1.0.1",
+    "@stripe/react-stripe-js": "^3.9.0",
+    "@stripe/stripe-js": "^7.8.0",
     "@tanstack/react-query": "^5.90.12",
     "@tanstack/react-table": "^8.20.5",
     "@uiw/react-markdown-preview": "^5.1.5",
@@ -62,10 +66,7 @@
     "resend": "^6.5.2",
     "semver": "^7.7.3",
     "tailwind-merge": "^3.4.0",
-    "zod": "^4.1.13",
-    "@stripe/react-stripe-js": "^3.9.0",
-    "@stripe/stripe-js": "^7.8.0",
-    "@open-mercato/gateway-stripe": "0.4.8-canary-d29d23af60"
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
