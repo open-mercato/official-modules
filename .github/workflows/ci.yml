@@ -1,0 +1,62 @@
+name: CI for Develop&Main
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install markitdown CLI
+        run: python3 -m pip install --upgrade pip markitdown
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Build packages
+        run: yarn build:packages
+
+      - name: Prepare generated modules
+        run: yarn generate
+
+      - name: Rebuild packages with generated files
+        run: yarn build:packages
+
+      - name: Check dependency version conflicts
+        run: yarn check:dep-versions
+
+      - name: Check i18n sync
+        run: yarn tsx scripts/i18n-check-sync.ts
+
+      - name: Check i18n usage
+        run: yarn i18n:check-usage
+        continue-on-error: true
+
+      - name: Checking types
+        run: yarn typecheck
+
+      - name: Test
+        run: yarn test
+
+      - name: Build
+        run: yarn build:app
