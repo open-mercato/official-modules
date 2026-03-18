@@ -2453,9 +2453,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/ai-assistant@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/ai-assistant@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/ai-assistant@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/ai-assistant@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@ai-sdk/anthropic": "npm:^3.0.12"
     "@ai-sdk/google": "npm:^2.0.0"
@@ -2468,16 +2468,16 @@ __metadata:
     react-markdown: "npm:^9.0.0"
     zod-to-json-schema: "npm:^3.25.1"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
-    "@open-mercato/ui": 0.4.8-canary-d29d23af60
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+    "@open-mercato/ui": 0.4.9-canary-1f829e1484
     zod: ">=3.23.0"
-  checksum: 10/0b085c49465175bd71287f60410ec952e6af51080d285d91b7c295681a7576cbe0d380e129047675529de562f88c73f3e87cebc7ad98c84abccf38c90a9e7961
+  checksum: 10/f9ddd8f8c3065b76b03edfabbbe6c97607a8d1ac184d87bbef24ae838a7c1138f3d8993986a805c8d1fa8c8f77e59cc4712cde0a3aaabb03842ba5b9dfe64f84
   languageName: node
   linkType: hard
 
-"@open-mercato/cache@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/cache@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/cache@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/cache@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@types/better-sqlite3": "npm:^7.6.13"
   peerDependencies:
@@ -2488,41 +2488,41 @@ __metadata:
       optional: true
     ioredis:
       optional: true
-  checksum: 10/2ff2798cdc951568d887d006e8d8686907fdbdae2b1acdc5843c76fc8a2085380834a4c16d4d038e2238bedd70240ad338e4e3ff3a8f84082e87b6f6eb9d9deb
+  checksum: 10/652c097a7701a23bb498f369566f41cacaf29e27ebafa4c6782108bf81082c14e145d2a2bcb8c6a2fef2f408b2c7a6a076978f20f21ad59d3fd7d60602782528
   languageName: node
   linkType: hard
 
-"@open-mercato/cli@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/cli@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/cli@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/cli@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@mikro-orm/core": "npm:^6.6.2"
     "@mikro-orm/migrations": "npm:^6.6.2"
     "@mikro-orm/postgresql": "npm:^6.6.2"
-    "@open-mercato/shared": "npm:0.4.8-canary-d29d23af60"
+    "@open-mercato/shared": "npm:0.4.9-canary-1f829e1484"
     pg: "npm:8.20.0"
     testcontainers: "npm:^11.12.0"
     typescript: "npm:^5.9.3"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
   bin:
     mercato: ./bin/mercato
-  checksum: 10/ea1e66bf73f90aa8a4359c77287e8bc6cb08521b21bf7ada75ebad86c29e52ca00de76d531310eb9211d2015eeac1dc5db2a38b367e347d33d2dbf54cdbf2d4f
+  checksum: 10/5f51bd8ef32a0dcfa0156cb43afdc3e5c45195a6ed0a798313481864792bec0bbc93c841513341ee343154fdb9546135d60d6c30021a5d94c94eadcdb284bb1d
   languageName: node
   linkType: hard
 
-"@open-mercato/content@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/content@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/content@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/content@npm:0.4.9-canary-1f829e1484"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
-  checksum: 10/b0f0db128cb2697565931fb71aeb5c1b9d44a13a48298f74a6434d60e7d16234003a8fca13cee1a7b33b9d961edcd74a3300d972a04fc8c0d630b779a8c2cad6
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+  checksum: 10/f4bb73ea0e02e5fdcca4a84b5e8d5497101a11a5846a6476ea4fc05a62988bade85cfc273be9d02c753fc6e0499ebfb317fc5093af5b709824a62b5703adc0d5
   languageName: node
   linkType: hard
 
-"@open-mercato/core@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/core@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/core@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/core@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@types/html-to-text": "npm:^9.0.4"
     "@types/semver": "npm:^7.5.8"
@@ -2533,68 +2533,68 @@ __metadata:
     html-to-text: "npm:^9.0.5"
     semver: "npm:^7.6.3"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
-  checksum: 10/564b036fab283c45693ac7157f878ddb740a8d79ad052d30ae8643c7aced204b0d4cdd6c5d2db7bc6b31998ef0c9459a37cf1f0f571b643837265085adb97845
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+  checksum: 10/bc9944130b8bd84910a3c45cdc00396da5070472778087cf500162bf6e12b9625c8c2b00e5b84d2a0943c0cd977b0529a720c656e86916fd15df0936f4afa348
   languageName: node
   linkType: hard
 
-"@open-mercato/events@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/events@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/events@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/events@npm:0.4.9-canary-1f829e1484"
   dependencies:
-    "@open-mercato/queue": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/shared": "npm:0.4.8-canary-d29d23af60"
+    "@open-mercato/queue": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/shared": "npm:0.4.9-canary-1f829e1484"
     pg: "npm:8.20.0"
-  checksum: 10/0ef9c9391a42fdda0332c41809662eaf6555d857f30e90e040520db278267b92898cbb51e3b39d80abb8641e80804079d072efdce4c6377f13a1c742d1969589
+  checksum: 10/747ba5f8bcde24141f4f3dc9b8ca75c27553f61cf91f65bc09138b5b9e31a9f0c7ec1278440efe7bb878f17ab99d00a69204b03e87e18453db68f2d797faaad1
   languageName: node
   linkType: hard
 
-"@open-mercato/gateway-stripe@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/gateway-stripe@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/gateway-stripe@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/gateway-stripe@npm:0.4.9-canary-1f829e1484"
   dependencies:
-    "@open-mercato/core": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/queue": "npm:0.4.8-canary-d29d23af60"
+    "@open-mercato/core": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/queue": "npm:0.4.9-canary-1f829e1484"
     stripe: "npm:^17.0.0"
   peerDependencies:
     "@mikro-orm/postgresql": ^6.5.9
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
     react: ^19.0.0
-  checksum: 10/003321b0f8bf4fb2d4c7755ee289cd2938aabe8ca4fbf506c20640a8bcce59c062cfbbc58bbba4a8cba2d63264ee685cd48e3138f68e1b887dc65cf65fbccd4e
+  checksum: 10/53f9a38b7b2026912346d68d57dac21f0de7dc258c5c48dff460a5a348491a050fbd09a935b2e4bc96ec92e90946733c2b9377f499ddd7bbddcc1c10c038adcb
   languageName: node
   linkType: hard
 
-"@open-mercato/onboarding@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/onboarding@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/onboarding@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/onboarding@npm:0.4.9-canary-1f829e1484"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
-  checksum: 10/eb4eb05c68ab7337a03b456013a665e88a827b584d486170de8c000323215c09039a84d06a83121af5d2ec369ded08d21bc044f43657d173011e3520b3faccf8
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+  checksum: 10/1602bbe9cd25a180ba59b32bc4a03a8f14308da3df244860ecd4a60c992e61346908af99961b83282c78d8c9eda77945f1f566404e81870eedd25711957b153f
   languageName: node
   linkType: hard
 
-"@open-mercato/queue@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/queue@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/queue@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/queue@npm:0.4.9-canary-1f829e1484"
   peerDependencies:
     bullmq: ^5.0.0
   peerDependenciesMeta:
     bullmq:
       optional: true
-  checksum: 10/f97df59f843f3d35dac89175bd76ab7f6e7101472af9845e121206b301cc3ec69e73e33250d499114f6e529f3fe3fe34914da06a6c378384bbbdf8b5f2508d0b
+  checksum: 10/fd9b0cd9752ca4377998d4c1dfecc8a269bb4a0843b90ce39537c4259784be9dd49f2b008f2658bb6f6871796627a2bf5cbc8f080c6af1287bfbaf81bfe7bdb7
   languageName: node
   linkType: hard
 
-"@open-mercato/scheduler@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/scheduler@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/scheduler@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/scheduler@npm:0.4.9-canary-1f829e1484"
   dependencies:
-    "@open-mercato/events": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/queue": "npm:0.4.8-canary-d29d23af60"
+    "@open-mercato/events": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/queue": "npm:0.4.9-canary-1f829e1484"
     cron-parser: "npm:^4.9.0"
   peerDependencies:
     "@mikro-orm/core": ^6.6.2
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
     bullmq: ^5.0.0
     ioredis: ^5.0.0
     zod: ">=3.23.0"
@@ -2603,13 +2603,13 @@ __metadata:
       optional: true
     ioredis:
       optional: true
-  checksum: 10/7758beb1a935b96f6dea8450827b5c607ce34b1e592d4230f44555c926837ad91ded875b507f14c3d22e18f12c39a8737011fb570be95f30bfefa811230f501d
+  checksum: 10/dbef341c5c6ccde68bc3289b7f6cead5424b60a613de89a723517d44f19a6c170d3433afeeaca1c40374ff61dc064e1d85c5708ab58f74189d7d368a1e0f594e
   languageName: node
   linkType: hard
 
-"@open-mercato/search@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/search@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/search@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/search@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@ai-sdk/amazon-bedrock": "npm:^4.0.8"
     "@ai-sdk/cohere": "npm:^3.0.4"
@@ -2622,10 +2622,10 @@ __metadata:
     pg: "npm:8.20.0"
     zod: "npm:^4.0.0"
   peerDependencies:
-    "@open-mercato/core": 0.4.8-canary-d29d23af60
-    "@open-mercato/queue": 0.4.8-canary-d29d23af60
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
-  checksum: 10/a4c6fc8648289113983424a0956d706caf2c8c5dd6f099895e49bd986b5e9b0e6c6a489e0baad684da61049c8765d56946dd39c5c60cac9906f9338109d95150
+    "@open-mercato/core": 0.4.9-canary-1f829e1484
+    "@open-mercato/queue": 0.4.9-canary-1f829e1484
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+  checksum: 10/075a55679d61f3a24407694596bd7b82fce118d18142e046d0b8e5250da2d9e8be1d53fc862e617bfcc10fc1122fca206d8e730b475bccc51219143c9874527c
   languageName: node
   linkType: hard
 
@@ -2638,12 +2638,28 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/shared@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/shared@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/shared@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/shared@npm:0.4.9-canary-1f829e1484"
   dependencies:
     rate-limiter-flexible: "npm:^9.0.0"
-  checksum: 10/f0963d9db7dbd4fbd803320db7be6441ba1a642bb41ae051f466f181dd01ba4439db0e6079762a3ea79830a2d9c924b4753372929bb4e5a250699b346913c765
+  checksum: 10/18d8b046b005e060a4b70b4b0c824b1e282d8080f67a03d6460817c2a412ca79a716f7cfca493d5216d8d89983e13c89f86a2d7578bd6ed93af7f32348dbbe85
+  languageName: node
+  linkType: hard
+
+"@open-mercato/sync-akeneo@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/sync-akeneo@npm:0.4.9-canary-1f829e1484"
+  dependencies:
+    "@open-mercato/core": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/ui": "npm:0.4.9-canary-1f829e1484"
+    node-html-markdown: "npm:^2.0.0"
+  peerDependencies:
+    "@mikro-orm/postgresql": ^6.6.2
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
+    react: ^19.0.0
+    react-dom: ^19.0.0
+  checksum: 10/fde4e2b08e2bd66c5837f294d414efb39d4b68bd03f239b7041e9d001688c5581a4e17d21976db80a6b72a5f1554f468aa144323a52edc6f6056f5f7c4ffc300
   languageName: node
   linkType: hard
 
@@ -2683,9 +2699,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/ui@npm:0.4.8-canary-d29d23af60":
-  version: 0.4.8-canary-d29d23af60
-  resolution: "@open-mercato/ui@npm:0.4.8-canary-d29d23af60"
+"@open-mercato/ui@npm:0.4.9-canary-1f829e1484":
+  version: 0.4.9-canary-1f829e1484
+  resolution: "@open-mercato/ui@npm:0.4.9-canary-1f829e1484"
   dependencies:
     "@radix-ui/react-popover": "npm:^1.1.6"
     "@radix-ui/react-tooltip": "npm:^1.2.8"
@@ -2694,10 +2710,10 @@ __metadata:
     react-day-picker: "npm:^9.6.4"
     recharts: "npm:^2.15.0"
   peerDependencies:
-    "@open-mercato/shared": 0.4.8-canary-d29d23af60
+    "@open-mercato/shared": 0.4.9-canary-1f829e1484
     react: ">=18.0.0"
     react-dom: ">=18.0.0"
-  checksum: 10/3e0063b5c5d51986c94529b80c2cd32e1392a5f76cec9ef276ed2195016f4de7cde5f3e7c19ee1ee8bef3d1d35aec323c3906ec44a27fd219a6685d3f1d52a1e
+  checksum: 10/47e4c95f185522b0dcea8e7dd2b180aa6c0dfdcb2de92724287fe2a367bd2969109a696d6a229c5810e8bd4b339537bcff979cbe66ebf72eae11ebeaf92f744e
   languageName: node
   linkType: hard
 
@@ -6619,10 +6635,30 @@ __metadata:
   languageName: node
   linkType: hard
 
+"css-select@npm:^5.1.0":
+  version: 5.2.2
+  resolution: "css-select@npm:5.2.2"
+  dependencies:
+    boolbase: "npm:^1.0.0"
+    css-what: "npm:^6.1.0"
+    domhandler: "npm:^5.0.2"
+    domutils: "npm:^3.0.1"
+    nth-check: "npm:^2.0.1"
+  checksum: 10/ebb6a88446433312d1a16301afd1c5f75090805b730dbbdccb0338b0d6ca7922410375f16dde06673ef7da086e2cf3b9ad91afe9a8e0d2ee3625795cb5e0170d
+  languageName: node
+  linkType: hard
+
 "css-selector-parser@npm:^3.0.0":
   version: 3.3.0
   resolution: "css-selector-parser@npm:3.3.0"
   checksum: 10/492d662310e46353b321a4c3dd72f4046d7a0d73f4caf66b299b70d9973a61cf2a1ae35f73e1be6d608d24e48fd99f928f7c403d915863d157c85f1cfb152c1c
+  languageName: node
+  linkType: hard
+
+"css-what@npm:^6.1.0":
+  version: 6.2.2
+  resolution: "css-what@npm:6.2.2"
+  checksum: 10/3c5a53be94728089bd1716f915f7f96adde5dd8bf374610eb03982266f3d860bf1ebaf108cda30509d02ef748fe33eaa59aa75911e2c49ee05a85ef1f9fb5223
   languageName: node
   linkType: hard
 
@@ -9160,6 +9196,15 @@ __metadata:
     property-information: "npm:^7.0.0"
     space-separated-tokens: "npm:^2.0.0"
   checksum: 10/9aa8135faf0307807cca4075bef4e3403ae1ce959ad4b9e6720892ba957d58ff98b2f60b5eb3ac67d88ae897dc918997299cd4249d7ac602a0066dd46442c5d4
+  languageName: node
+  linkType: hard
+
+"he@npm:1.2.0":
+  version: 1.2.0
+  resolution: "he@npm:1.2.0"
+  bin:
+    he: bin/he
+  checksum: 10/d09b2243da4e23f53336e8de3093e5c43d2c39f8d0d18817abfa32ce3e9355391b2edb4bb5edc376aea5d4b0b59d6a0482aab4c52bc02ef95751e4b818e847f1
   languageName: node
   linkType: hard
 
@@ -12262,6 +12307,25 @@ __metadata:
   languageName: node
   linkType: hard
 
+"node-html-markdown@npm:^2.0.0":
+  version: 2.0.0
+  resolution: "node-html-markdown@npm:2.0.0"
+  dependencies:
+    node-html-parser: "npm:^6.1.13"
+  checksum: 10/b914aa9b815e90a4c009e5bbcef36819ae55d633c52650a566836f0e8cb41238b1d6f6e2d446495087b3fb06207c05726bc6b07c24feaefe29f744078a21fb0e
+  languageName: node
+  linkType: hard
+
+"node-html-parser@npm:^6.1.13":
+  version: 6.1.13
+  resolution: "node-html-parser@npm:6.1.13"
+  dependencies:
+    css-select: "npm:^5.1.0"
+    he: "npm:1.2.0"
+  checksum: 10/f5ebc5cea22e819e7b726b483e12241039ebdeac6eba198ebdb55a0921536798c1acd9c6f543e82f77542dc44fb2230f55891b1baae218c17969dd08f7295d14
+  languageName: node
+  linkType: hard
+
 "node-int64@npm:^0.4.0":
   version: 0.4.0
   resolution: "node-int64@npm:0.4.0"
@@ -12312,7 +12376,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nth-check@npm:^2.0.0":
+"nth-check@npm:^2.0.0, nth-check@npm:^2.0.1":
   version: 2.1.1
   resolution: "nth-check@npm:2.1.1"
   dependencies:
@@ -14233,19 +14297,20 @@ __metadata:
     "@mikro-orm/core": "npm:^6.6.2"
     "@mikro-orm/migrations": "npm:^6.6.2"
     "@mikro-orm/postgresql": "npm:^6.6.2"
-    "@open-mercato/ai-assistant": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/cache": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/cli": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/content": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/core": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/events": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/gateway-stripe": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/onboarding": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/queue": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/scheduler": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/search": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/shared": "npm:0.4.8-canary-d29d23af60"
-    "@open-mercato/ui": "npm:0.4.8-canary-d29d23af60"
+    "@open-mercato/ai-assistant": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/cache": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/cli": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/content": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/core": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/events": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/gateway-stripe": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/onboarding": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/queue": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/scheduler": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/search": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/shared": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/sync-akeneo": "npm:0.4.9-canary-1f829e1484"
+    "@open-mercato/ui": "npm:0.4.9-canary-1f829e1484"
     "@radix-ui/react-checkbox": "npm:^1.3.3"
     "@radix-ui/react-dialog": "npm:^1.0.5"
     "@radix-ui/react-label": "npm:^2.1.8"

@@ -17,6 +17,8 @@ const previewId =
   process.env.PREVIEW_VERSION_ID ??
   `${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}.${process.pid}`
 
+const versionLabel = process.env.VERSION_PRERELEASE_LABEL ?? 'preview'
+
 const dependencyScopes = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
 const slugifyPackageName = (packageName) => packageName.replace(/^@/, '').replace(/\//g, '-')
@@ -24,8 +26,8 @@ const slugifyPackageName = (packageName) => packageName.replace(/^@/, '').replac
 const toPreviewVersion = (version) => {
   const [baseVersion] = version.split('+', 1)
   return baseVersion.includes('-')
-    ? `${baseVersion}.preview.${previewId}`
-    : `${baseVersion}-preview.${previewId}`
+    ? `${baseVersion}.${versionLabel}.${previewId}`
+    : `${baseVersion}-${versionLabel}.${previewId}`
 }
 
 const tarballs = (await readdir(inputDir))

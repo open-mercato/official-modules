@@ -52,14 +52,6 @@
       "default": "./dist/*/*/*/*.js"
     }
   },
-  "open-mercato": {
-    "kind": "module-package",
-    "displayName": "Test Package",
-    "moduleId": "test_package",
-    "ejectable": true,
-    "minCoreVersion": "0.4.7",
-    "testedCoreRange": ">=0.4.7 <0.5.0"
-  },
   "dependencies": {
     "@open-mercato/ui": "0.4.7"
   },

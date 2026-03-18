@@ -30,7 +30,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'currencies', from: '@open-mercato/core' },
   { id: 'planner', from: '@open-mercato/core' },
   { id: 'resources', from: '@open-mercato/core' },
-  { id: 'staff', from: '@app' },
+  { id: 'staff', from: '@open-mercato/core' },
   { id: 'events', from: '@open-mercato/events' },
   { id: 'notifications', from: '@open-mercato/core' },
   { id: 'progress', from: '@open-mercato/core' },
@@ -45,8 +45,9 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'gateway_stripe', from: '@open-mercato/gateway-stripe' },
   { id: 'sync_akeneo', from: '@open-mercato/sync-akeneo' },
   { id: 'shipping_carriers', from: '@open-mercato/core' },
+  { id: 'customer_accounts', from: '@open-mercato/core' },
+  { id: 'portal', from: '@open-mercato/core' },
   { id: 'example', from: '@app' },
-  { id: 'test_package', from: '@open-mercato/test-package' },
 
 ]
 

@@ -34,13 +34,13 @@ jobs:
         run: yarn install --immutable
 
       - name: Build packages
-        run: yarn build:packages
+        run: yarn build
 
       - name: Prepare generated modules
         run: yarn generate
 
       - name: Rebuild packages with generated files
-        run: yarn build:packages
+        run: yarn build
 
       - name: Check dependency version conflicts
         run: yarn check:dep-versions
@@ -57,6 +57,3 @@ jobs:
 
       - name: Test
         run: yarn test
-
-      - name: Build
-        run: yarn build:app

@@ -1,27 +1,5 @@
 # Agent Context Routing — sandbox
 
-<!-- CODEX_ENFORCEMENT_RULES_START -->
-## CRITICAL rules — always follow without exception
-
-1. **After editing any entity file** (`src/modules/<id>/entities/*.ts`):
-   - STOP immediately before any further action
-   - Tell the user: "I modified an entity in module <id>. Should I create a migration?"
-   - If yes: run `yarn db:generate`
-   - Show the generated migration to the user before applying
-   - Ask for confirmation, then run `yarn db:migrate`
-   - Run `yarn generate` after migration is applied
-
-2. **After editing `src/modules.ts`**: immediately run `yarn generate`
-
-3. **Never edit `.mercato/generated/*`**: edit the source and run `yarn generate` instead
-
-4. **Before significant features**: check `.ai/specs/` for an existing spec.
-   If none exists, ask the user whether to create one first.
-
----
-<!-- CODEX_ENFORCEMENT_RULES_END -->
-
-
 Read this file before any task. Load ONLY the files listed for your task type.
 Do NOT load the entire src/ tree — Open Mercato apps can have many modules.
 
@@ -29,6 +7,7 @@ Do NOT load the entire src/ tree — Open Mercato apps can have many modules.
 
 A standalone Open Mercato application built ON TOP of the framework.
 The framework lives in `node_modules/@open-mercato/*`. Never edit `node_modules` directly.
+Install official packages with `yarn mercato module add @open-mercato/<package>`.
 To customise a built-in module beyond extensions, eject with `yarn mercato eject <module>`.
 
 ## Task → Context Map
@@ -180,6 +159,7 @@ import type { ApiInterceptor } from '@open-mercato/shared/lib/crud/api-intercept
 |---|---|
 | `yarn dev` | Start dev server |
 | `yarn generate` | Regenerate `.mercato/generated/` |
+| `yarn mercato module add <package>` | Install and enable an official module package |
 | `yarn db:generate` | Create migration for entity changes |
 | `yarn db:migrate` | Apply pending migrations |
 | `yarn initialize` | Bootstrap DB + first admin account |

@@ -1,25 +1,201 @@
-# Official Modules
+<p align="center">
+  <img src="https://raw.githubusercontent.com/open-mercato/open-mercato/main/apps/mercato/public/open-mercato.svg" alt="Open Mercato logo" width="120" />
+</p>
 
-Phase-one scaffold for the Open Mercato official modules monorepo.
+# Open Mercato — Official Modules
 
-## Structure
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/open-mercato/official-modules/issues)
 
-- `apps/sandbox` contains the standalone sandbox app used to validate published-style module consumption.
-- `packages/test-package` is the current publishable reference module package.
-- `scripts/` contains the registry, build, pack, and publish entrypoints used locally and later in CI.
-- `docker-compose.yml` now includes both sandbox infrastructure services and a local Verdaccio registry.
+A community monorepo for publishing ready-to-install `@open-mercato/*` modules that extend [Open Mercato](https://github.com/open-mercato/open-mercato) without touching its core.
 
-## Commands
+## What this is
 
-- `yarn build` builds publishable module packages.
-- `yarn build:packages` runs the repo-owned package build wrapper used by publish flows.
-- `yarn pack:packages` emits publishable tarballs into `.artifacts/packages/`.
-- `yarn registry:up` starts the local Verdaccio registry on `http://localhost:4873`.
-- `yarn registry:setup-user` creates or reuses a local Verdaccio login for preview publishing.
-- `yarn publish:preview` builds, packs, rewrites preview versions, and publishes tarballs to Verdaccio.
-- `DRY_RUN=true yarn publish:stable` exercises the stable publish path against packed artifacts without publishing.
-- `yarn typecheck` type-checks publishable module packages.
-- `yarn test` runs placeholder package-level test targets.
-- `yarn sandbox:generate` runs `mercato generate all` in the sandbox app.
-- `yarn sandbox:dev` starts the sandbox app.
-- `yarn sandbox:build` builds the sandbox app.
+Open Mercato ships with a module system that lets you add features to your app without forking or modifying the platform. **This repo is where the community publishes those features.**
+
+Every module here:
+
+- 🔌 **Installs in one command** — no manual wiring, no config files to edit
+- 🔒 **Stays isolated** — each module is its own npm package that hooks into the platform through declared extension points, never by patching core code
+- 🧬 **Is ejectable** — run `--mode source` to copy the module into your app and own it fully
+- 🤝 **Gets reviewed** — every submission goes through core team review before reaching npm
+
+Whether you're adding a small UI widget or shipping a full vertical feature with its own entities, API routes, and admin pages — if it runs on Open Mercato, it belongs here.
+
+## How it works
+
+Modules are published under `@open-mercato/*` and installed into any standalone Open Mercato app via the `mercato` CLI:
+
+```bash
+# Install and activate in one step
+yarn mercato module add @open-mercato/<module-name>
+
+# Copy the source locally for full ownership
+yarn mercato module add @open-mercato/<module-name> --mode source
+```
+
+Running `module add` fetches the package from npm, auto-discovers the module it contains, registers it in your app's `src/modules.ts`, and runs the code generators. Apply migrations and you're live.
+
+Each package integrates through [UMES extension points](https://docs.openmercato.com/framework/modules/overview): widget injection, event subscribers, response enrichers, API interceptors, and custom entities. Core packages stay untouched and upgradeable.
+
+## 🚀 Getting Started
+
+Clone the repo and spin up the sandbox environment to start building:
+
+```bash
+git clone https://github.com/open-mercato/official-modules.git
+cd official-modules
+
+cp apps/sandbox/.env.example apps/sandbox/.env
+
+docker compose up --build -d
+
+yarn install
+
+yarn generate
+
+yarn initialize
+
+yarn dev
+```
+
+Navigate to `http://localhost:3000/backend` and sign in with the credentials printed by `yarn initialize`.
+
+The sandbox is a full Open Mercato app wired to all workspace packages. Any package you build under `packages/` is immediately available to it — no registry publish required.
+
+## 🧩 Module List
+
+| Package | Description | Author |
+|---------|-------------|--------|
+| — | *No modules yet. Be the first to contribute!* | — |
+
+## ⚡ Installing a Module
+
+Modules are installed into your standalone Open Mercato app using the `mercato` CLI.
+
+**Install and register in one step:**
+
+```bash
+yarn mercato module add @open-mercato/<module-name>
+```
+
+**Apply database migrations and start:**
+
+```bash
+yarn generate
+yarn mercato db:migrate
+yarn dev
+```
+
+**Install a specific version or tag:**
+
+```bash
+yarn mercato module add @open-mercato/<module-name>@preview
+```
+
+**Take local ownership of the source:**
+
+```bash
+yarn mercato module add @open-mercato/<module-name> --mode source
+```
+
+When installed in source mode, the module is copied into your `src/modules/<moduleId>/` directory. You own the code — edit it freely while the rest of the platform stays on npm.
+
+**If the package is already in `node_modules` and only needs activating:**
+
+```bash
+yarn mercato module enable @open-mercato/<module-name>
+```
+
+Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmercato.com/cli/module-add)
+
+## 🏗️ Building a Module
+
+Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. The recommended workflow for humans and AI agents is:
+
+```
+spec-writing  →  scaffold-module  →  implement-spec
+```
+
+### Step 1 — Write a spec
+
+Before writing code, document your module in `.ai/specs/SPEC-XXX-YYYY-MM-DD-<title>.md`. This is the design document that `implement-spec` reads to know what to build.
+
+Minimum sections: TLDR · Problem Statement · UMES extension points used · Data models · API contracts · Phases.
+
+### Step 2 — Scaffold the package
+
+Use the `scaffold-module` skill (in `.ai/skills/scaffold-module/SKILL.md`) to generate the complete package skeleton from your spec. It produces all required files — `package.json`, build config, `acl.ts`, `setup.ts`, a placeholder backend page — ready to build immediately.
+
+```bash
+# After scaffold, verify it builds cleanly
+yarn workspace @open-mercato/<your-module> build
+yarn workspace @open-mercato/<your-module> typecheck
+```
+
+### Step 3 — Implement the spec
+
+Use the `implement-spec` skill to fill in the business logic phase by phase: entities, validators, API routes, UI pages, events, widget injection. Every phase must pass the code-review compliance gate before moving to the next.
+
+### Step 4 — Validate in the sandbox
+
+The sandbox is a workspace sibling — no registry publish needed. Add your module to `apps/sandbox/src/modules.ts`:
+
+```ts
+{ id: '<module_id>', from: '@open-mercato/<module-name>' },
+```
+
+Then build and start:
+
+```bash
+yarn build:packages                                 # build the package first
+yarn generate                                       # regenerate sandbox registry
+yarn mercato db:migrate                     # apply any new migrations
+yarn dev                                    # open localhost:3000/backend
+```
+
+Navigate to `/backend/<module-name>` and confirm the module loads, pages render, and APIs respond. Remove the entry from `modules.ts` before opening a PR.
+
+### Step 5 — Open a pull request
+
+Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist. The core team will review and, once approved, publish to npm.
+
+## 📦 Package Conventions
+
+- Package name: `@open-mercato/<module-name>` (kebab-case)
+- Module ID inside the package: `snake_case` (e.g. `my_module`) — derived by replacing `-` with `_`
+- Peer dependencies: declare `@open-mercato/shared` and `@open-mercato/ui` as peer deps; pin to the same version
+- Exports: follow the export map in `packages/test-package/package.json` exactly
+- `ejectable: true` in `index.ts` metadata if you want consumers to be able to take source ownership
+- Every module MUST use UMES extension points — it MUST NOT modify core packages
+
+## 🔗 Resources
+
+- [Open Mercato core repo](https://github.com/open-mercato/open-mercato)
+- [Documentation](https://docs.openmercato.com/)
+- [Module development guide](https://docs.openmercato.com/framework/modules/overview)
+- [CLI reference](https://docs.openmercato.com/cli/overview)
+- [Discord community](https://discord.gg/f4qwPtJ3qA)
+
+## Contributing
+
+We welcome modules of all sizes — from thin UI extensions to full vertical feature sets.
+
+1. Fork [open-mercato/official-modules](https://github.com/open-mercato/official-modules) and create a branch: `feat/<module-name>`.
+2. Follow the [Getting Started](#-getting-started) guide to set up your local environment.
+3. Write a spec in `.ai/specs/`, scaffold the package, implement the spec — see [AGENTS.md](AGENTS.md) for the full agentic workflow.
+4. Open a PR against `develop` with a description of what the module does, screenshots or a short demo, and the testing you performed.
+
+The core team reviews all submissions. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full branching conventions and PR checklist.
+Open Mercato is proudly supported by [Catch The Tornado](https://catchthetornado.com/).
+
+<div align="center">
+  <a href="https://catchthetornado.com/">
+    <img src="https://raw.githubusercontent.com/open-mercato/open-mercato/main/apps/mercato/public/catch-the-tornado-logo.png" alt="Catch The Tornado logo" width="96" />
+  </a>
+</div>
+
+## License
+
+MIT — see `LICENSE` for details.

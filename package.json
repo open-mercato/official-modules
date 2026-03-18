@@ -11,8 +11,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "turbo run build --filter='./packages/*'",
-    "dev": "yarn sandbox:dev",
+    "build:packages": "turbo run build --filter='./packages/*'",
+    "generate": "yarn workspace sandbox generate",
+    "dev": "yarn workspace sandbox dev",
     "pack:packages": "./scripts/pack-packages.sh",
     "publish:preview": "./scripts/publish-preview.sh",
     "publish:stable": "./scripts/publish-stable.sh",
@@ -23,12 +24,13 @@
     "registry:whoami": "./scripts/registry/whoami.sh",
     "typecheck": "turbo run typecheck --filter='./packages/*'",
     "test": "turbo run test --filter='./packages/*'",
-    "sandbox:generate": "yarn workspace sandbox generate",
-    "sandbox:dev": "yarn workspace sandbox dev",
-    "sandbox:build": "yarn workspace sandbox build",
-    "sandbox:initialize": "yarn workspace sandbox initialize",
-    "sandbox:reinstall": "yarn workspace sandbox reinstall",
-    "sandbox:mercato": "yarn workspace sandbox mercato"
+    "initialize": "yarn workspace sandbox initialize",
+    "reinstall": "yarn workspace sandbox reinstall",
+    "mercato": "yarn workspace sandbox mercato",
+    "clean:generated": "./scripts/clean-generated.sh",
+    "clean:packages": "./scripts/clean-packages.sh",
+    "clean": "yarn clean:generated && yarn clean:packages",
+    "sync": "./scripts/sync-sandbox.sh"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",

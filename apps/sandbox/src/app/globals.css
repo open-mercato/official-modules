@@ -2,25 +2,19 @@
 @import "tw-animate-css";
 @import "react-big-calendar/lib/css/react-big-calendar.css";
 @import "@xyflow/react/dist/style.css";
+@import "../../.mercato/generated/module-package-sources.css";
 
 /*
 Include workspace packages in Tailwind content scanning
 TODO: Fix that latter to have reference by the package names
 */
 @source "../../../../node_modules/@open-mercato/ui/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/ui/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/core/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/core/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/shared/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/shared/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/search/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/search/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/onboarding/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/onboarding/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/content/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/content/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/ai-assistant/src/**/*.{ts,tsx}";
-@source "../../node_modules/@open-mercato/ai-assistant/src/**/*.{ts,tsx}";
 
 @custom-variant dark (&:is(.dark *));
 

@@ -334,9 +334,9 @@ No application HTTP APIs are introduced by this spec. The external contracts are
 |---------|---------|
 | `yarn build` | Build all module packages and supporting tooling |
 | `yarn test` | Run package-level tests |
-| `yarn sandbox:generate` | Run `mercato generate all` in sandbox |
-| `yarn sandbox:dev` | Start sandbox development server |
-| `yarn sandbox:build` | Build sandbox as CI smoke test |
+| `yarn generate` | Run `mercato generate all` in sandbox |
+| `yarn dev` | Start sandbox development server |
+| `yarn build` | Build sandbox as CI smoke test |
 | `yarn changeset` | Create release notes/version intent |
 | `yarn publish:preview` | Publish preview versions for PR validation |
 | `yarn publish:stable` | Publish stable versions after merge |
@@ -438,7 +438,7 @@ Not applicable in the product UI. The relevant developer UX requirements are:
 ### Phase 3 — Sandbox Workflow
 
 1. Register reference module in sandbox `src/modules.ts`
-2. Add `sandbox:generate`, `sandbox:dev`, `sandbox:build`
+2. Add `generate`, `dev`, `build`
 3. Ensure sandbox uses real `mercato` CLI path and standalone behavior
 4. Add smoke tests for generate/build
 

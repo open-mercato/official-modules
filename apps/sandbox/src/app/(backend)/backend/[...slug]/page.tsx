@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { findBackendMatch } from '@open-mercato/shared/modules/registry'
 import { modules } from '@/.mercato/generated/modules.generated'
 import { getAuthFromCookies } from '@open-mercato/shared/lib/auth/server'
-import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import { ApplyBreadcrumb } from '@open-mercato/ui/backend/AppShell'
 import { AccessDeniedMessage } from '@open-mercato/ui/backend/detail'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
@@ -14,8 +13,6 @@ import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacS
 import { ComponentReplacementHandles, resolveRegisteredComponent } from '@open-mercato/shared/modules/widgets/component-registry'
 import type { Metadata } from 'next'
 import { resolveLocalizedTitleMetadata } from '@/lib/metadata'
-import { resolvePageMiddlewareRedirect } from '@open-mercato/shared/lib/middleware/page-executor'
-import { backendMiddlewareEntries } from '@/.mercato/generated/backend-middleware.generated'
 
 type Awaitable<T> = T | Promise<T>
 
@@ -55,16 +52,8 @@ export default async function BackendCatchAll(props: BackendParams) {
   const pathname = '/backend/' + (params.slug?.join('/') ?? '')
   const match = findBackendMatch(modules, pathname)
   if (!match) return notFound()
-  let auth: AuthContext = null
-  let container: Awaited<ReturnType<typeof createRequestContainer>> | null = null
-  const ensureContainer = async () => {
-    if (!container) {
-      container = await createRequestContainer()
-    }
-    return container
-  }
   if (match.route.requireAuth) {
-    auth = await getAuthFromCookies()
+    const auth = await getAuthFromCookies()
     if (!auth) redirect('/api/auth/session/refresh?redirect=' + encodeURIComponent(pathname))
     const required = match.route.requireRoles || []
     if (required.length) {
@@ -95,21 +84,6 @@ export default async function BackendCatchAll(props: BackendParams) {
       if (!ok) return renderAccessDenied()
     }
   }
-  const middlewareRedirect = await resolvePageMiddlewareRedirect({
-    entries: backendMiddlewareEntries,
-    context: {
-      pathname,
-      mode: 'backend',
-      routeMeta: {
-        requireAuth: match.route.requireAuth,
-        requireRoles: match.route.requireRoles,
-        requireFeatures: match.route.requireFeatures,
-      },
-      auth,
-      ensureContainer,
-    },
-  })
-  if (middlewareRedirect) redirect(middlewareRedirect)
   const pageHandle = ComponentReplacementHandles.page(pathname)
   const Component = resolveRegisteredComponent(pageHandle, match.route.Component)
 

@@ -1,0 +1,47 @@
+name: Publish Release
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+concurrency:
+  group: publish-release-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.title == 'chore: release packages'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout merged main branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Build packages
+        run: yarn build
+
+      - name: Publish packages to npm
+        run: yarn changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
