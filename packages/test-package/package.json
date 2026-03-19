@@ -58,7 +58,8 @@
   "peerDependencies": {
     "@open-mercato/shared": "0.4.7",
     "@open-mercato/ui": "0.4.7",
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@open-mercato/shared": "0.4.7",
@@ -67,7 +68,10 @@
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "jest": "^30.2.0",
-    "ts-jest": "^29.4.6"
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.9.3"
   },
   "publishConfig": {
     "access": "public"

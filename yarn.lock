@@ -2501,12 +2501,13 @@ __metadata:
     "@mikro-orm/postgresql": "npm:^6.6.2"
     "@open-mercato/shared": "npm:0.4.9-canary-1f829e1484"
     pg: "npm:8.20.0"
+    semver: "npm:^7.7.3"
     testcontainers: "npm:^11.12.0"
     typescript: "npm:^5.9.3"
   peerDependencies:
     "@open-mercato/shared": 0.4.9-canary-1f829e1484
   bin:
-    mercato: ./bin/mercato
+    mercato: bin/mercato
   checksum: 10/5f51bd8ef32a0dcfa0156cb43afdc3e5c45195a6ed0a798313481864792bec0bbc93c841513341ee343154fdb9546135d60d6c30021a5d94c94eadcdb284bb1d
   languageName: node
   linkType: hard
@@ -2673,11 +2674,15 @@ __metadata:
     esbuild: "npm:^0.25.0"
     glob: "npm:^13.0.6"
     jest: "npm:^30.2.0"
+    react: "npm:19.2.1"
+    react-dom: "npm:19.2.1"
     ts-jest: "npm:^29.4.6"
+    typescript: "npm:^5.9.3"
   peerDependencies:
     "@open-mercato/shared": 0.4.7
     "@open-mercato/ui": 0.4.7
     react: ^19.0.0
+    react-dom: ^19.0.0
   languageName: unknown
   linkType: soft
 
