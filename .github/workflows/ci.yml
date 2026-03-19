@@ -1,12 +1,9 @@
 name: CI for Develop&Main
+
 permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - main
-      - develop
   pull_request:
     branches:
       - main
@@ -57,3 +54,150 @@ jobs:
 
       - name: Test
         run: yarn test
+
+  detect-changes:
+    name: Detect changed packages
+    runs-on: ubuntu-latest
+    outputs:
+      changed_packages: ${{ steps.detect.outputs.changed_packages }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed packages
+        id: detect
+        run: |
+          CHANGED=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.sha }}" \
+            | grep '^packages/' | cut -d'/' -f2 | sort -u || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No package changes detected — skipping canary publish."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "changed_packages=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed packages:"
+            echo "$CHANGED"
+            PACKAGES_JSON=$(printf '%s\n' $CHANGED | jq -R . | jq -sc .)
+            echo "changed_packages=$PACKAGES_JSON" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish-canary:
+    name: Publish canary — ${{ matrix.package }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.detect-changes.outputs.changed_packages) }}
+      fail-fast: false
+    outputs:
+      # Last matrix job wins — all packages share the same PREVIEW_VERSION_ID so
+      # versions are identical in structure; consumers use published_packages for full detail.
+      canary_version_id: ${{ steps.publish.outputs.canary_version_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install monorepo dependencies
+        run: yarn install --immutable
+
+      - name: Publish canary package
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_PACKAGE_FILTER: ${{ matrix.package }}
+          PREVIEW_VERSION_ID: >-
+            ${{ format('{0}.{1}',
+              github.run_id,
+              github.sha) }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
+          export PREVIEW_VERSION_ID="${TIMESTAMP}.${SHORT_SHA}"
+
+          echo "canary_version_id=${PREVIEW_VERSION_ID}" >> "$GITHUB_OUTPUT"
+
+          bash scripts/publish-canary.sh
+
+  integration-test:
+    name: Integration test — ${{ matrix.package }}
+    needs: [detect-changes, publish-canary]
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.detect-changes.outputs.changed_packages) }}
+      fail-fast: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+  
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+  
+      - name: Enable Corepack
+        run: corepack enable
+  
+      - name: Install monorepo dependencies
+        run: yarn install --immutable
+  
+      - name: Build monorepo packages
+        run: |
+          yarn build:packages
+          yarn generate
+          yarn build:packages
+  
+      - name: Resolve canary version
+        id: version
+        run: |
+          VERSION_ID="${{ needs.publish-canary.outputs.canary_version_id }}"
+          # Read the base version from the package manifest
+          BASE_VERSION=$(node -p "require('./packages/${{ matrix.package }}/package.json').version")
+          PKG_NAME=$(node -p "require('./packages/${{ matrix.package }}/package.json').name")
+          CANARY_VERSION="${BASE_VERSION}-canary.${VERSION_ID}"
+          echo "pkg_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "canary_version=${CANARY_VERSION}" >> "$GITHUB_OUTPUT"
+  
+      - name: Wait for npm registry propagation
+        run: |
+          PKG="${{ steps.version.outputs.pkg_name }}"
+          VERSION="${{ steps.version.outputs.canary_version }}"
+          echo "Waiting for ${PKG}@${VERSION} on npm..."
+          for i in $(seq 1 30); do
+            if npm view "${PKG}@${VERSION}" version 2>/dev/null; then
+              echo "Available after attempt ${i}"
+              exit 0
+            fi
+            echo "Attempt ${i}/30: waiting 10s..."
+            sleep 10
+          done
+          echo "${PKG}@${VERSION} not available after 5 minutes"
+          exit 1
+  
+      - name: Scaffold standalone app
+        run: npx "create-mercato-app@latest" /tmp/standalone-app --registry https://registry.npmjs.org
+  
+      - name: Install canary module
+        working-directory: /tmp/standalone-app
+        run: |
+          yarn mercato module add \
+            "${{ steps.version.outputs.pkg_name }}@${{ steps.version.outputs.canary_version }}"
+  
+      - name: Run integration tests
+        run: BASE_URL=http://localhost:3001 yarn test:integration

@@ -47,6 +47,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'shipping_carriers', from: '@open-mercato/core' },
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
+  { id: 'test_package', from: '@open-mercato/test-package' },
   { id: 'example', from: '@app' },
 
 ]

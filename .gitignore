@@ -26,3 +26,9 @@ coverage
 *.tsbuildinfo
 yarn-debug.log*
 yarn-error.log*
+
+# testing
+/coverage
+/test-results
+/playwright-report
+published-app/
