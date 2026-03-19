@@ -30,7 +30,10 @@
     "clean:generated": "./scripts/clean-generated.sh",
     "clean:packages": "./scripts/clean-packages.sh",
     "clean": "yarn clean:generated && yarn clean:packages",
-    "sync": "./scripts/sync-sandbox.sh"
+    "sync": "./scripts/sync-sandbox.sh",
+    "i18n:check-sync": "tsx scripts/i18n-check-sync.ts",
+    "i18n:check-usage": "tsx scripts/i18n-check-usage.ts",
+    "i18n:check": "tsx scripts/i18n-check-sync.ts && tsx scripts/i18n-check-usage.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
