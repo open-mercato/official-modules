@@ -1,0 +1,7 @@
+{
+  "test_package.page.cardDescription": "Wenn diese Seite gerendert wird, funktionieren Paket-Build, Modulerkennung und Backend-Routing korrekt.",
+  "test_package.page.cardTitle": "Das Paket ist korrekt eingebunden",
+  "test_package.page.description": "Minimale Backend-Seite aus einem eigenständigen Workspace-Paket.",
+  "test_package.page.group": "Beispiele",
+  "test_package.page.title": "Testpaket"
+}

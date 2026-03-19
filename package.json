@@ -24,13 +24,21 @@
     "registry:whoami": "./scripts/registry/whoami.sh",
     "typecheck": "turbo run typecheck --filter='./packages/*'",
     "test": "turbo run test --filter='./packages/*'",
+    "test:integration": "npx playwright test --config .ai/qa/tests/playwright.config.ts",
     "initialize": "yarn workspace sandbox initialize",
     "reinstall": "yarn workspace sandbox reinstall",
     "mercato": "yarn workspace sandbox mercato",
     "clean:generated": "./scripts/clean-generated.sh",
     "clean:packages": "./scripts/clean-packages.sh",
     "clean": "yarn clean:generated && yarn clean:packages",
-    "sync": "./scripts/sync-sandbox.sh"
+    "sync": "./scripts/sync-sandbox.sh",
+    "i18n:check-sync": "tsx scripts/i18n-check-sync.ts",
+    "i18n:check-sync:packages": "tsx scripts/i18n-check-sync.ts --scope=packages",
+    "i18n:check-usage": "tsx scripts/i18n-check-usage.ts",
+    "i18n:check-usage:packages": "tsx scripts/i18n-check-usage.ts --scope=packages",
+    "i18n:check": "tsx scripts/i18n-check-sync.ts && tsx scripts/i18n-check-usage.ts",
+    "install-skills": "./scripts/install-skills.sh",
+    "check:dep-versions": "tsx scripts/check-dep-versions.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
@@ -40,5 +48,8 @@
     "tsx": "^4.21.0",
     "turbo": "^2.3.3",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.58.2"
   }
 }
