@@ -1,0 +1,7 @@
+{
+  "test_package.page.cardDescription": "Jeśli ta strona się wyświetla, działają build pakietu, wykrywanie modułu i routing zaplecza.",
+  "test_package.page.cardTitle": "Pakiet jest poprawnie podłączony",
+  "test_package.page.description": "Minimalna strona zaplecza z niezależnego pakietu workspace.",
+  "test_package.page.group": "Przykłady",
+  "test_package.page.title": "Pakiet testowy"
+}

@@ -9,7 +9,9 @@
  *  - Indirect property patterns: labelKey: 'key', titleKey: 'key', etc.
  *  - String literals matching known translation key patterns in arrays/objects
  *
- * Usage: tsx scripts/i18n-check-usage.ts
+ * Usage:
+ *   tsx scripts/i18n-check-usage.ts
+ *   tsx scripts/i18n-check-usage.ts --scope=packages
  * Exit code: 1 if missing keys found (referenced in code but not in JSON), 0 otherwise.
  * Unused keys are reported as warnings only.
  */
@@ -21,6 +23,9 @@ import { globSync } from 'glob'
 
 const __filename_ = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url)
 const ROOT = path.resolve(path.dirname(__filename_), '..')
+const VALID_SCOPES = ['all', 'packages', 'apps'] as const
+
+type Scope = (typeof VALID_SCOPES)[number]
 
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`
 const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`
@@ -42,12 +47,51 @@ function flattenDictionary(source: unknown, prefix = ''): Record<string, string>
   return result
 }
 
-function collectAllTranslationKeys(): Set<string> {
-  const enFiles = globSync('**/i18n/en.json', {
-    cwd: ROOT,
-    ignore: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/create-app/template/**'],
-    absolute: true,
-  })
+function parseScope(argv: string[]): Scope {
+  const scopeArg = argv.find(arg => arg.startsWith('--scope='))
+  if (!scopeArg) return 'all'
+
+  const scope = scopeArg.slice('--scope='.length)
+  if (VALID_SCOPES.includes(scope as Scope)) {
+    return scope as Scope
+  }
+
+  console.error(red(`Invalid --scope value "${scope}". Expected one of: ${VALID_SCOPES.join(', ')}`))
+  process.exit(1)
+}
+
+function getEnFilePatterns(scope: Scope): string[] {
+  switch (scope) {
+    case 'packages':
+      return ['packages/**/i18n/en.json']
+    case 'apps':
+      return ['apps/**/i18n/en.json']
+    case 'all':
+    default:
+      return ['**/i18n/en.json']
+  }
+}
+
+function getSourceFilePatterns(scope: Scope): string[] {
+  switch (scope) {
+    case 'packages':
+      return ['packages/**/*.{ts,tsx}']
+    case 'apps':
+      return ['apps/**/*.{ts,tsx}']
+    case 'all':
+    default:
+      return ['**/*.{ts,tsx}']
+  }
+}
+
+function collectAllTranslationKeys(scope: Scope): Set<string> {
+  const enFiles = getEnFilePatterns(scope).flatMap(pattern =>
+    globSync(pattern, {
+      cwd: ROOT,
+      ignore: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/create-app/template/**'],
+      absolute: true,
+    })
+  )
 
   const allKeys = new Set<string>()
   for (const f of enFiles) {
@@ -63,22 +107,24 @@ interface KeyReference {
   line: number
 }
 
-function scanSourceFiles(allTranslationKeys: Set<string>): { refs: KeyReference[]; dynamicCount: number } {
-  const sourceFiles = globSync('**/*.{ts,tsx}', {
-    cwd: ROOT,
-    ignore: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/.next/**',
-      '**/generated/**',
-      '**/*.test.*',
-      '**/*.spec.*',
-      '**/i18n/**',
-      '**/create-app/template/**',
-      'scripts/**',
-    ],
-    absolute: true,
-  })
+function scanSourceFiles(scope: Scope, allTranslationKeys: Set<string>): { refs: KeyReference[]; dynamicCount: number } {
+  const sourceFiles = getSourceFilePatterns(scope).flatMap(pattern =>
+    globSync(pattern, {
+      cwd: ROOT,
+      ignore: [
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/.next/**',
+        '**/generated/**',
+        '**/*.test.*',
+        '**/*.spec.*',
+        '**/i18n/**',
+        '**/create-app/template/**',
+        'scripts/**',
+      ],
+      absolute: true,
+    })
+  )
 
   // Pattern 1: Direct t('key') or translate('key') calls
   const directCallPattern = /(?<![a-zA-Z_])(?:t|translate)\(\s*(['"])([a-zA-Z0-9_.]+)\1/g
@@ -124,12 +170,14 @@ function scanSourceFiles(allTranslationKeys: Set<string>): { refs: KeyReference[
 }
 
 function main() {
-  console.log('Scanning codebase for translation key usage...\n')
+  const scope = parseScope(process.argv.slice(2))
 
-  const allTranslationKeys = collectAllTranslationKeys()
-  console.log(dim(`Found ${allTranslationKeys.size} translation keys across all en.json files`))
+  console.log(`Scanning codebase for translation key usage in scope "${scope}"...\n`)
 
-  const { refs, dynamicCount } = scanSourceFiles(allTranslationKeys)
+  const allTranslationKeys = collectAllTranslationKeys(scope)
+  console.log(dim(`Found ${allTranslationKeys.size} translation keys across scoped en.json files`))
+
+  const { refs, dynamicCount } = scanSourceFiles(scope, allTranslationKeys)
   const usedKeys = new Set(refs.map(r => r.key))
   console.log(dim(`Found ${refs.length} static references to ${usedKeys.size} unique keys`))
   console.log('')

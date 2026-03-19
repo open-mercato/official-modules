@@ -33,7 +33,9 @@
     "clean": "yarn clean:generated && yarn clean:packages",
     "sync": "./scripts/sync-sandbox.sh",
     "i18n:check-sync": "tsx scripts/i18n-check-sync.ts",
+    "i18n:check-sync:packages": "tsx scripts/i18n-check-sync.ts --scope=packages",
     "i18n:check-usage": "tsx scripts/i18n-check-usage.ts",
+    "i18n:check-usage:packages": "tsx scripts/i18n-check-usage.ts --scope=packages",
     "i18n:check": "tsx scripts/i18n-check-sync.ts && tsx scripts/i18n-check-usage.ts",
     "install-skills": "./scripts/install-skills.sh",
     "check:dep-versions": "tsx scripts/check-dep-versions.ts"

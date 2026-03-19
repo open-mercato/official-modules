@@ -12,6 +12,7 @@
  * Usage:
  *   tsx scripts/i18n-check-sync.ts          # Report only
  *   tsx scripts/i18n-check-sync.ts --fix    # Auto-fix: normalize format, add missing keys, remove extras
+ *   tsx scripts/i18n-check-sync.ts --scope=packages
  *
  * Exit code: 1 if any discrepancies found (report mode), 0 if all in sync or after fix.
  */
@@ -24,6 +25,9 @@ import { globSync } from 'glob'
 const REFERENCE_LOCALE = 'en'
 const TARGET_LOCALES = ['pl', 'es', 'de']
 const MAX_KEYS_TO_SHOW = 10
+const VALID_SCOPES = ['all', 'packages', 'apps'] as const
+
+type Scope = (typeof VALID_SCOPES)[number]
 
 const __filename_ = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url)
 const ROOT = path.resolve(path.dirname(__filename_), '..')
@@ -79,22 +83,53 @@ function deriveModuleName(enJsonPath: string): string {
     .replace(/^apps\/mercato\/src$/, 'app')
 }
 
+function parseScope(argv: string[]): Scope {
+  const scopeArg = argv.find(arg => arg.startsWith('--scope='))
+  if (!scopeArg) return 'all'
+
+  const scope = scopeArg.slice('--scope='.length)
+  if (VALID_SCOPES.includes(scope as Scope)) {
+    return scope as Scope
+  }
+
+  console.error(red(`Invalid --scope value "${scope}". Expected one of: ${VALID_SCOPES.join(', ')}`))
+  process.exit(1)
+}
+
+function getEnFilePatterns(scope: Scope): string[] {
+  switch (scope) {
+    case 'packages':
+      return ['packages/**/i18n/en.json']
+    case 'apps':
+      return ['apps/**/i18n/en.json']
+    case 'all':
+    default:
+      return ['**/i18n/en.json']
+  }
+}
+
 function main() {
   const fixMode = process.argv.includes('--fix')
+  const scope = parseScope(process.argv.slice(2))
+  const patterns = getEnFilePatterns(scope)
 
-  const enFiles = globSync('**/i18n/en.json', {
-    cwd: ROOT,
-    ignore: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/create-app/template/**'],
-    absolute: true,
-  }).sort()
+  const enFiles = patterns
+    .flatMap(pattern =>
+      globSync(pattern, {
+        cwd: ROOT,
+        ignore: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/create-app/template/**'],
+        absolute: true,
+      })
+    )
+    .sort()
 
   if (enFiles.length === 0) {
-    console.log(yellow('No translation files found.'))
+    console.log(yellow(`No translation files found for scope "${scope}".`))
     process.exit(0)
   }
 
   const mode = fixMode ? cyan('[fix]') : '[check]'
-  console.log(`${mode} Checking translation sync across ${TARGET_LOCALES.length + 1} locales (${REFERENCE_LOCALE}, ${TARGET_LOCALES.join(', ')})...`)
+  console.log(`${mode} Checking translation sync across ${TARGET_LOCALES.length + 1} locales (${REFERENCE_LOCALE}, ${TARGET_LOCALES.join(', ')}) in scope "${scope}"...`)
   console.log(dim(`Found ${enFiles.length} modules with translations\n`))
 
   let totalIssues = 0

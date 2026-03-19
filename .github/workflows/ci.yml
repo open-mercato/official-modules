@@ -43,10 +43,10 @@ jobs:
         run: yarn check:dep-versions
 
       - name: Check i18n sync
-        run: yarn tsx scripts/i18n-check-sync.ts
+        run: yarn i18n:check-sync:packages
 
       - name: Check i18n usage
-        run: yarn i18n:check-usage
+        run: yarn i18n:check-usage:packages
         continue-on-error: true
 
       - name: Checking types

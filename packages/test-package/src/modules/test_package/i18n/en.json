@@ -1,0 +1,7 @@
+{
+  "test_package.page.cardDescription": "If this page renders, the package build, module discovery, and backend routing are working.",
+  "test_package.page.cardTitle": "Package is wired correctly",
+  "test_package.page.description": "Minimal backend page from a standalone workspace package.",
+  "test_package.page.group": "Examples",
+  "test_package.page.title": "Test Package"
+}

@@ -1,0 +1,7 @@
+{
+  "test_package.page.cardDescription": "Si esta página se muestra, la compilación del paquete, el descubrimiento del módulo y el enrutamiento del panel funcionan correctamente.",
+  "test_package.page.cardTitle": "El paquete está conectado correctamente",
+  "test_package.page.description": "Página mínima del panel de administración desde un paquete workspace independiente.",
+  "test_package.page.group": "Ejemplos",
+  "test_package.page.title": "Paquete de prueba"
+}
