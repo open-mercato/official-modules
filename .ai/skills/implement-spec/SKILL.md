@@ -85,11 +85,18 @@ For every new function or class:
 After each phase that adds API endpoints or UI pages:
 
 ```bash
+# Validate the default installed flow
 yarn registry:up
 yarn publish:preview
 yarn mercato module add @open-mercato/<package-name>@preview
 yarn mercato db:migrate
 yarn dev
+```
+
+If the package is intended to be ejectable, also validate `--eject`:
+
+```bash
+yarn mercato module add @open-mercato/<package-name>@preview --eject
 ```
 
 Navigate to the relevant page and verify it renders and functions correctly.

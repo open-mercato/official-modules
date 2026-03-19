@@ -18,7 +18,7 @@ Every module here:
 
 - 🔌 **Installs in one command** — no manual wiring, no config files to edit
 - 🔒 **Stays isolated** — each module is its own npm package that hooks into the platform through declared extension points, never by patching core code
-- 🧬 **Is ejectable** — run `--mode package` to copy the module into your app and own it fully
+- 🧬 **Is ejectable** — run `--eject` to copy the module into your app and own it fully
 - 🤝 **Gets reviewed** — every submission goes through core team review before reaching npm
 
 Whether you're adding a small UI widget or shipping a full vertical feature with its own entities, API routes, and admin pages — if it runs on Open Mercato, it belongs here.
@@ -32,7 +32,10 @@ Modules are published under `@open-mercato/*` and installed into any standalone 
 yarn mercato module add @open-mercato/<module-name>
 
 # Copy the source code locally for full ownership
-yarn mercato module add @open-mercato/<module-name> --mode package
+yarn mercato module add @open-mercato/<module-name> --eject
+
+# If the package is already installed, copy it locally without reinstalling
+yarn mercato module enable @open-mercato/<module-name> --eject
 ```
 
 Running `module add` fetches the package from npm, auto-discovers the module it contains, registers it in your app's `src/modules.ts`, and runs the code generators. Apply migrations and you're live.
@@ -97,15 +100,21 @@ yarn mercato module add @open-mercato/<module-name>@preview
 **Take local ownership of the package:**
 
 ```bash
-yarn mercato module add @open-mercato/<module-name> --mode package
+yarn mercato module add @open-mercato/<module-name> --eject
 ```
 
-When installed in package mode, the module is copied into your `src/modules/<moduleId>/` directory. You own the code — edit it freely while the rest of the platform stays on npm.
+When added with `--eject`, the module is copied into your `src/modules/<moduleId>/` directory. You own the code — edit it freely while the rest of the platform stays on npm.
 
 **If the package is already in `node_modules` and only needs activating:**
 
 ```bash
 yarn mercato module enable @open-mercato/<module-name>
+```
+
+**If the package is already installed and you want local ownership immediately:**
+
+```bash
+yarn mercato module enable @open-mercato/<module-name> --eject
 ```
 
 Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmercato.com/cli/module-add)
