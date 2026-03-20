@@ -4,6 +4,7 @@ export const metadata: ModuleInfo = {
   name: 'test_package',
   title: 'Test Package',
   description: 'Minimal test package with a single backend page for workspace package scaffolding.',
+  ejectable: true,
 }
 
 export { features } from './acl'
