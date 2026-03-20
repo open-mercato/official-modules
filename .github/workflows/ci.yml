@@ -142,6 +142,20 @@ jobs:
       matrix:
         package: ${{ fromJson(needs.detect-changes.outputs.changed_packages) }}
       fail-fast: false
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mercato
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: mercato_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -191,13 +205,70 @@ jobs:
           exit 1
   
       - name: Scaffold standalone app
-        run: npx "create-mercato-app@latest" /tmp/standalone-app --registry https://registry.npmjs.org
+        run: npx "create-mercato-app@0.4.9-canary-1f829e1484" /tmp/standalone-app --registry https://registry.npmjs.org
   
+      - name: Configure standalone app environment
+        working-directory: /tmp/standalone-app
+        run: |
+          cp .env.example .env
+          cat >> .env << 'EOF'
+          DATABASE_URL=postgres://mercato:secret@localhost:5432/mercato_test
+          JWT_SECRET=ci-standalone-test-jwt-secret
+          TENANT_DATA_ENCRYPTION_FALLBACK_KEY=ci-standalone-test-fallback-key
+          NODE_ENV=test
+          OM_TEST_MODE=1
+          OM_TEST_AUTH_RATE_LIMIT_MODE=opt-in
+          OM_DISABLE_EMAIL_DELIVERY=1
+          ENABLE_CRUD_API_CACHE=true
+          NEXT_PUBLIC_OM_EXAMPLE_INJECTION_WIDGETS_ENABLED=true
+          OM_ENABLE_ENTERPRISE_MODULES=true
+          OM_ENABLE_ENTERPRISE_MODULES_SSO=true
+          OM_ENABLE_ENTERPRISE_MODULES_SECURITY=true
+          AUTO_SPAWN_WORKERS=false
+          AUTO_SPAWN_SCHEDULER=false
+          CACHE_STRATEGY=memory
+          EOF
+
+      - name: Install standalone app dependencies
+        working-directory: /tmp/standalone-app
+        run: yarn install
+
       - name: Install canary module
         working-directory: /tmp/standalone-app
         run: |
           yarn mercato module add \
             "${{ steps.version.outputs.pkg_name }}@${{ steps.version.outputs.canary_version }}"
-  
+
+      - name: Generate standalone app modules
+        working-directory: /tmp/standalone-app
+        run: yarn generate
+
+      - name: Initialize standalone app database
+        working-directory: /tmp/standalone-app
+        run: yarn initialize
+
+      - name: Build standalone app
+        working-directory: /tmp/standalone-app
+        run: yarn build
+
+      - name: Start standalone app
+        working-directory: /tmp/standalone-app
+        run: |
+          PORT=3001 yarn start &
+          echo "Waiting for standalone app to be ready..."
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3001/login > /dev/null 2>&1; then
+              echo "App ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App failed to start within 90s"
+          exit 1
+
+        # --- Run integration tests ---
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
       - name: Run integration tests
         run: BASE_URL=http://localhost:3001 yarn test:integration
