@@ -6,6 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
+[![Core Repo](https://img.shields.io/badge/core-open--mercato-24292F.svg)](https://github.com/open-mercato/open-mercato)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/open-mercato/official-modules/issues)
 
 A community monorepo for publishing ready-to-install `@open-mercato/*` modules that extend [Open Mercato](https://github.com/open-mercato/open-mercato) without touching its core.
@@ -13,6 +14,8 @@ A community monorepo for publishing ready-to-install `@open-mercato/*` modules t
 ## What this is
 
 Open Mercato ships with a module system that lets you add features to your app without forking or modifying the platform. **This repo is where the community publishes those features.**
+
+If you're looking for the main Open Mercato application and the core framework code, see the [Open Mercato core repository](https://github.com/open-mercato/open-mercato).
 
 Every module here:
 
@@ -31,10 +34,10 @@ Modules are published under `@open-mercato/*` and installed into any standalone 
 # Install and activate in one step
 yarn mercato module add @open-mercato/<module-name>
 
-# Copy the source code locally for full ownership
+# Install it and copy the source locally if you want to modify the module yourself
 yarn mercato module add @open-mercato/<module-name> --eject
 
-# If the package is already installed, copy it locally without reinstalling
+# If it is already installed, copy it locally now so you can start modifying it
 yarn mercato module enable @open-mercato/<module-name> --eject
 ```
 
@@ -97,7 +100,7 @@ yarn dev
 yarn mercato module add @open-mercato/<module-name>@preview
 ```
 
-**Take local ownership of the package:**
+**Install it and copy the source locally if you want to modify the module yourself:**
 
 ```bash
 yarn mercato module add @open-mercato/<module-name> --eject
@@ -111,7 +114,7 @@ When added with `--eject`, the module is copied into your `src/modules/<moduleId
 yarn mercato module enable @open-mercato/<module-name>
 ```
 
-**If the package is already installed and you want local ownership immediately:**
+**If the package is already installed, copy it locally now so you can start modifying it:**
 
 ```bash
 yarn mercato module enable @open-mercato/<module-name> --eject
@@ -121,7 +124,7 @@ Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmerca
 
 ## 🏗️ Building a Module
 
-Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. The recommended workflow for humans and AI agents is:
+Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. Before starting module work, first complete the [Getting Started](#-getting-started) setup above. Once your local environment is ready, the recommended workflow is:
 
 ```
 spec-writing  →  scaffold-module  →  implement-spec
