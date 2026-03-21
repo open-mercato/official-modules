@@ -26,14 +26,14 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      - name: Check platform sync
-        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
-
       - name: Install markitdown CLI
         run: python3 -m pip install --upgrade pip markitdown
 
       - name: Install dependencies
         run: yarn install --immutable
+
+      - name: Check platform sync
+        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
 
       - name: Build packages
         run: yarn build:packages
@@ -177,13 +177,13 @@ jobs:
   
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Check platform sync
-        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
   
       - name: Install monorepo dependencies
         run: yarn install --immutable
-  
+
+      - name: Check platform sync
+        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
+
       - name: Build monorepo packages
         run: |
           yarn build:packages
