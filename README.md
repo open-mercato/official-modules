@@ -70,6 +70,34 @@ Navigate to `http://localhost:3000/backend` and sign in with the credentials pri
 
 The sandbox is a full Open Mercato app wired to all workspace packages. Any package you build under `packages/` is immediately available to it — no registry publish required.
 
+## Platform Sync
+
+This repo follows one branch rule:
+
+- `develop` validates against Open Mercato `develop`
+- `main` validates against Open Mercato `latest`
+
+After switching branches, align the repo with:
+
+```bash
+yarn platform:sync
+```
+
+You can force a channel explicitly when needed:
+
+```bash
+yarn platform:sync --channel develop
+yarn platform:sync --channel latest
+```
+
+CI verifies the same state without mutating files:
+
+```bash
+yarn platform:sync --check
+```
+
+`platform:sync` rewrites only the sandbox app's exact platform pins, workspace package `devDependencies`, and `yarn.lock`. Published compatibility still lives in each package's `peerDependencies`, which must stay on stable ranges.
+
 ## 🧩 Module List
 
 | Package | Description | Author |
@@ -177,7 +205,8 @@ Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
 
 - Package name: `@open-mercato/<module-name>` (kebab-case)
 - Module ID inside the package: `snake_case` (e.g. `my_module`) — derived by replacing `-` with `_`
-- Peer dependencies: declare `@open-mercato/shared` and `@open-mercato/ui` as peer deps; pin to the same version
+- Peer dependencies: declare stable compatibility ranges for required `@open-mercato/*` host packages; do not use sync-managed exact pins there
+- Development pins: keep required `@open-mercato/*` build/test dependencies in `devDependencies`; `yarn platform:sync` owns their exact versions
 - Exports: follow the export map in `packages/test-package/package.json` exactly
 - `ejectable: true` in `index.ts` metadata if you want consumers to be able to take source ownership
 - Every module MUST use UMES extension points — it MUST NOT modify core packages
