@@ -1,0 +1,30 @@
+{
+  "channels": {
+    "develop": {
+      "distTag": "develop",
+      "createAppTag": "develop"
+    },
+    "main": {
+      "distTag": "latest",
+      "createAppTag": "latest"
+    }
+  },
+  "platformPackages": [
+    "@open-mercato/ai-assistant",
+    "@open-mercato/cache",
+    "@open-mercato/cli",
+    "@open-mercato/content",
+    "@open-mercato/core",
+    "@open-mercato/events",
+    "@open-mercato/gateway-stripe",
+    "@open-mercato/onboarding",
+    "@open-mercato/queue",
+    "@open-mercato/scheduler",
+    "@open-mercato/search",
+    "@open-mercato/shared",
+    "@open-mercato/sync-akeneo",
+    "@open-mercato/ui"
+  ],
+  "sandboxManifest": "apps/sandbox/package.json",
+  "workspaceGlob": "packages/*/package.json"
+}
