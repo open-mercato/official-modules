@@ -1,0 +1,44 @@
+---
+title: Modules
+description: Public catalog of official Open Mercato modules documented in this repository.
+---
+
+# Modules
+
+Browse official Open Mercato modules by capability.
+
+Start with the module page first, then follow the install and rollout guidance for that module.
+
+
+## Choosing a module
+
+Pick a module based on the capability you need, not the internal implementation.
+
+Before rollout, always check:
+
+- module status
+- setup requirements
+- external dependencies such as credentials, webhooks, or provider accounts
+- verification steps on the module page
+
+Repository-level rollout guidance lives in the [Overview](/overview) page.
+
+## Before production rollout
+
+For any module:
+
+- test it in staging first
+- rerun `yarn generate` and `yarn mercato db:migrate`
+- verify the main business flow end to end
+- verify webhook or callback paths if used
+- roll out in a reversible step
+
+## Next steps
+
+- Want to install a module: read [Using Modules](/using-modules)
+- Want to contribute a module: read [Development Guide](/development-guide)
+
+## Current catalog
+
+| Module | Status | Category | Requires external account | Summary |
+| --- | --- | --- | --- | --- |

@@ -1,0 +1,166 @@
+---
+title: Development Guide
+description: How to use this repository and the sandbox app to build, register, and test official modules.
+---
+
+# Development Guide
+
+`official-modules` is a working development repo for publishable Open Mercato modules.
+
+Use it as three things at once:
+
+- `packages/` for publishable module workspaces
+- `apps/sandbox` for a real Open Mercato app where you can enable and exercise modules
+- `apps/docs` for the public docs site shipped with this repository
+
+The normal loop is simple: build a module in `packages/`, enable it in the sandbox, run the app, and verify the behavior in the browser.
+
+## Start from the repository root
+
+Install dependencies and align the platform channel first:
+
+```bash
+yarn install
+yarn platform:sync
+```
+
+On first run, bootstrap the sandbox and start the app:
+
+```bash
+yarn initialize
+yarn dev
+```
+
+Open `http://localhost:3000/backend` and sign in with the credentials printed by `yarn initialize`.
+
+`yarn dev` is a root shortcut for `yarn workspace sandbox dev`, so you can stay in the repository root for most day-to-day work.
+
+## What the sandbox is for
+
+`apps/sandbox` is a full Open Mercato app wired to the monorepo. Any module package you build under `packages/` can be exercised there without publishing to npm first.
+
+Use the sandbox to:
+
+- verify backend pages, menus, widgets, and permissions
+- test API routes and generated OpenAPI output
+- validate entity changes, migrations, and tenant setup
+- reproduce bugs inside a real application shell before publishing
+
+## Register a module in the sandbox
+
+The sandbox enables modules in `apps/sandbox/src/modules.ts`.
+
+Each entry has two important parts:
+
+- `id`: the module ID, which must match the module metadata name
+- `from`: where the module should be loaded from
+
+Use `from: '@app'` for modules that live directly inside `apps/sandbox/src/modules/<id>`:
+
+```ts
+{ id: 'example', from: '@app' }
+```
+
+Use the package name for a publishable workspace module from `packages/`:
+
+```ts
+{ id: 'test_package', from: '@open-mercato/test-package' }
+```
+
+A typical `enabledModules` list looks like this:
+
+```ts
+export const enabledModules = [
+  { id: 'customers', from: '@open-mercato/core' },
+  { id: 'test_package', from: '@open-mercato/test-package' },
+  { id: 'example', from: '@app' },
+]
+```
+
+If you want the CLI to install and register a published module for you, use:
+
+```bash
+yarn mercato module add @open-mercato/<module-name>
+```
+
+That is the same flow used in a standalone Open Mercato app.
+
+## Recommended development loop
+
+For a module under `packages/<name>`:
+
+1. Build or watch the package.
+2. Keep the sandbox running.
+3. Regenerate platform files when module discovery changes.
+4. Reload the browser and verify the user flow.
+
+Typical commands:
+
+```bash
+yarn build:packages
+yarn generate
+yarn dev
+```
+
+## How to test app behavior
+
+The sandbox is useful only if you verify the real flow, not just whether TypeScript compiles.
+
+A practical checklist:
+
+- open the backend page or flow added by the module
+- confirm the module appears in the expected menu, route, or injection slot
+- create, edit, and delete records if the module owns data
+- verify access control with a role that should have access and one that should not
+- hit the relevant API route and check the response shape
+- rerun migrations and `yarn generate` after schema or discovery changes
+- run package tests before publishing or opening a pull request
+
+If you want to test the package as an installed artifact instead of a workspace link, use the local preview registry:
+
+```bash
+yarn registry:up
+yarn publish:preview
+yarn mercato module add @open-mercato/<name>@preview
+```
+
+## Use `develop` builds from the core repo
+
+This repository can validate modules against nightly `develop` packages from the main Open Mercato repo.
+
+The branch policy is:
+
+- `develop` validates against Open Mercato `develop`
+- `main` validates against Open Mercato `latest`
+
+After switching branches, or any time you want to realign the repo with a platform channel, run:
+
+```bash
+yarn platform:sync
+```
+
+You can force the channel explicitly:
+
+```bash
+yarn platform:sync --channel develop
+yarn platform:sync --channel latest
+```
+
+To verify that the repo is already aligned without mutating files:
+
+```bash
+yarn platform:sync --check
+```
+
+`platform:sync` updates the sandbox platform pins, workspace `devDependencies`, and `yarn.lock`. Use it when your module depends on APIs, UI primitives, or fixes that currently exist only on the Open Mercato `develop` channel.
+
+## Docs and reference links
+
+Useful references while working in this repo:
+
+- [Open Mercato documentation](https://docs.openmercato.com/)
+- [Framework modules overview](https://docs.openmercato.com/framework/modules/overview)
+- [CLI overview](https://docs.openmercato.com/cli/overview)
+- [Standalone app guide](https://docs.openmercato.com/customization/standalone-app)
+- [Open Mercato core repository](https://github.com/open-mercato/open-mercato)
+- [Official Modules repository](https://github.com/open-mercato/official-modules)

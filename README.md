@@ -7,9 +7,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
 [![Core Repo](https://img.shields.io/badge/core-open--mercato-24292F.svg)](https://github.com/open-mercato/open-mercato)
+[![Docs](https://img.shields.io/badge/docs-modules.openmercato.com-1F7AE0.svg)](https://modules.openmercato.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/open-mercato/official-modules/issues)
 
 A community monorepo for publishing ready-to-install `@open-mercato/*` modules that extend [Open Mercato](https://github.com/open-mercato/open-mercato) without touching its core.
+
+Install and operations docs for the published modules live at [modules.openmercato.com](https://modules.openmercato.com/).
 
 ## What this is
 
@@ -214,7 +217,7 @@ Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
 ## 🔗 Resources
 
 - [Open Mercato core repo](https://github.com/open-mercato/open-mercato)
-- [Documentation](https://docs.openmercato.com/)
+- [Official modules documentation](https://modules.openmercato.com/)
 - [Module development guide](https://docs.openmercato.com/framework/modules/overview)
 - [CLI reference](https://docs.openmercato.com/cli/overview)
 - [Discord community](https://discord.gg/f4qwPtJ3qA)

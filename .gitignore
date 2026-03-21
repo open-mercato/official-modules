@@ -22,6 +22,8 @@ node_modules
 **/node_modules
 dist
 **/dist
+build
+**/build
 coverage
 *.tsbuildinfo
 yarn-debug.log*
@@ -32,3 +34,5 @@ yarn-error.log*
 /test-results
 /playwright-report
 published-app/
+
+.vscode/
