@@ -8,6 +8,7 @@ import {
   normalizeChannel,
   parseArgs,
   rewriteManifest,
+  selectSyncTargets,
   toChannelHint,
 } from './platform-sync.mjs'
 
@@ -18,11 +19,38 @@ test('parseArgs reads check mode and explicit channel', () => {
     check: true,
     channel: 'develop',
     help: false,
+    packages: [],
   })
 })
 
 test('normalizeChannel rejects unsupported values', () => {
   assert.throws(() => normalizeChannel('preview'), /Unsupported channel/)
+})
+
+test('parseArgs collects package filters from repeated and whitespace-separated values', () => {
+  const parsed = parseArgs([
+    '--package',
+    '@open-mercato/test-package sandbox',
+    '--package=@open-mercato/other-package',
+    '--channel',
+    'latest',
+  ])
+
+  assert.deepEqual(parsed, {
+    check: false,
+    channel: 'latest',
+    help: false,
+    packages: [
+      '@open-mercato/test-package',
+      'sandbox',
+      '@open-mercato/other-package',
+    ],
+  })
+})
+
+test('parseArgs rejects --package without at least one workspace name', () => {
+  assert.throws(() => parseArgs(['--package']), /Missing value for --package/)
+  assert.throws(() => parseArgs(['--package', '--check']), /Missing value for --package/)
 })
 
 test('toChannelHint maps branch names and channel names', () => {
@@ -62,6 +90,55 @@ test('inferChannel prefers explicit channel over git hints', () => {
   })
 
   assert.equal(channel, 'latest')
+})
+
+test('selectSyncTargets returns all targets when no package filter is provided', () => {
+  const targets = [
+    {
+      kind: 'sandbox',
+      manifestPath: '/repo/apps/sandbox/package.json',
+      workspaceName: 'sandbox',
+    },
+    {
+      kind: 'workspace',
+      manifestPath: '/repo/packages/test-package/package.json',
+      workspaceName: '@open-mercato/test-package',
+    },
+  ]
+
+  assert.deepEqual(selectSyncTargets(targets, []), targets)
+})
+
+test('selectSyncTargets keeps only requested workspace names', () => {
+  const targets = [
+    {
+      kind: 'sandbox',
+      manifestPath: '/repo/apps/sandbox/package.json',
+      workspaceName: 'sandbox',
+    },
+    {
+      kind: 'workspace',
+      manifestPath: '/repo/packages/test-package/package.json',
+      workspaceName: '@open-mercato/test-package',
+    },
+  ]
+
+  assert.deepEqual(selectSyncTargets(targets, ['sandbox']), [targets[0]])
+})
+
+test('selectSyncTargets rejects unknown workspace names', () => {
+  const targets = [
+    {
+      kind: 'sandbox',
+      manifestPath: '/repo/apps/sandbox/package.json',
+      workspaceName: 'sandbox',
+    },
+  ]
+
+  assert.throws(
+    () => selectSyncTargets(targets, ['@open-mercato/missing-package']),
+    /Unknown workspace package name\(s\) for --package/
+  )
 })
 
 test('rewriteManifest updates sandbox platform pins without touching peerDependencies', () => {

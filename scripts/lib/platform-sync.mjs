@@ -27,6 +27,7 @@ export function parseArgs(argv) {
     check: false,
     channel: null,
     help: false,
+    packages: [],
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -59,10 +60,56 @@ export function parseArgs(argv) {
       continue
     }
 
+    if (argument === '--package') {
+      const rawValues = []
+
+      while (index + 1 < argv.length) {
+        const nextValue = argv[index + 1]
+
+        if (!nextValue || nextValue.startsWith('-')) {
+          break
+        }
+
+        rawValues.push(nextValue)
+        index += 1
+      }
+
+      const packageNames = parsePackageNames(rawValues)
+
+      if (packageNames.length === 0) {
+        throw new Error(
+          'Missing value for --package. Expected one or more workspace package names.'
+        )
+      }
+
+      result.packages.push(...packageNames)
+      continue
+    }
+
+    if (argument.startsWith('--package=')) {
+      const packageNames = parsePackageNames([argument.slice('--package='.length)])
+
+      if (packageNames.length === 0) {
+        throw new Error(
+          'Missing value for --package. Expected one or more workspace package names.'
+        )
+      }
+
+      result.packages.push(...packageNames)
+      continue
+    }
+
     throw new Error(`Unknown argument: ${argument}`)
   }
 
   return result
+}
+
+function parsePackageNames(values) {
+  return values
+    .flatMap((value) => value.split(/\s+/))
+    .map((value) => value.trim())
+    .filter(Boolean)
 }
 
 export function normalizeChannel(value) {
@@ -377,13 +424,62 @@ export function rewriteManifest(manifest, { kind, exactVersions }) {
   }
 }
 
-function buildExpectedManifestMap(repoRoot, policy, exactVersions) {
+function collectSyncTargets(repoRoot, policy) {
+  const targets = []
   const sandboxManifestPath = path.join(repoRoot, policy.sandboxManifest)
   const workspaceManifestPaths = listPathsFromSingleStarPattern(repoRoot, policy.workspaceGlob)
+
+  if (existsSync(sandboxManifestPath)) {
+    targets.push({
+      kind: 'sandbox',
+      manifestPath: sandboxManifestPath,
+      workspaceName: readJson(sandboxManifestPath).name,
+    })
+  }
+
+  for (const manifestPath of workspaceManifestPaths) {
+    targets.push({
+      kind: 'workspace',
+      manifestPath,
+      workspaceName: readJson(manifestPath).name,
+    })
+  }
+
+  return targets.sort((left, right) => left.manifestPath.localeCompare(right.manifestPath))
+}
+
+export function selectSyncTargets(targets, packageNames) {
+  if (!Array.isArray(packageNames) || packageNames.length === 0) {
+    return targets
+  }
+
+  const requestedPackageNames = new Set(packageNames)
+  const selectedTargets = targets.filter((target) => requestedPackageNames.has(target.workspaceName))
+
+  if (selectedTargets.length !== requestedPackageNames.size) {
+    const availableWorkspaceNames = [...new Set(targets.map((target) => target.workspaceName))].sort()
+    const missingPackageNames = [...requestedPackageNames]
+      .filter(
+        (packageName) => !selectedTargets.some((target) => target.workspaceName === packageName)
+      )
+      .sort()
+
+    throw new Error(
+      [
+        `Unknown workspace package name(s) for --package: ${missingPackageNames.join(', ')}`,
+        `Available workspace names: ${availableWorkspaceNames.join(', ')}`,
+      ].join('. ')
+    )
+  }
+
+  return selectedTargets
+}
+
+function buildExpectedManifestMap(repoRoot, policy, exactVersions, packageNames = []) {
+  const syncTargets = selectSyncTargets(collectSyncTargets(repoRoot, policy), packageNames)
   const expectedManifestMap = new Map()
 
-  for (const manifestPath of [sandboxManifestPath, ...workspaceManifestPaths]) {
-    const kind = manifestPath === sandboxManifestPath ? 'sandbox' : 'workspace'
+  for (const { kind, manifestPath } of syncTargets) {
     const currentManifest = readJson(manifestPath)
     const { manifest } = rewriteManifest(currentManifest, { kind, exactVersions })
     expectedManifestMap.set(manifestPath, manifest)
@@ -465,11 +561,12 @@ function applyExpectedState(repoRoot, expectedManifestMap, expectedLockfilePath)
 
 function buildHelpText() {
   return [
-    'Usage: yarn platform:sync [--check] [--channel develop|latest]',
+    'Usage: yarn platform:sync [--check] [--channel develop|latest] [--package <name...>]',
     '',
     'Options:',
     '  --check                 Verify manifests and yarn.lock without writing files',
     '  --channel <channel>     Override channel detection with develop or latest',
+    '  --package <name...>     Limit sync to selected workspace package names, for example sandbox @open-mercato/test-package',
     '  --help                  Show this message',
   ].join('\n')
 }
@@ -496,7 +593,12 @@ export function main(argv, options = {}) {
   }
 
   const exactVersions = resolveExactVersions(policy.platformPackages ?? [], policyChannel.distTag)
-  const expectedManifestMap = buildExpectedManifestMap(repoRoot, policy, exactVersions)
+  const expectedManifestMap = buildExpectedManifestMap(
+    repoRoot,
+    policy,
+    exactVersions,
+    parsedArgs.packages
+  )
   const tempRepoRoot = createExpectedTempRepo(repoRoot, expectedManifestMap)
 
   try {
