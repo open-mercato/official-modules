@@ -1,0 +1,50 @@
+---
+title: Overview
+description: What official modules are and why they exist.
+---
+
+# Overview
+
+`official-modules` is the official repository for publishable Open Mercato modules.
+
+It exists to ship optional platform capabilities as installable packages instead of pushing everything into core.
+
+## Why it exists
+
+Not every feature belongs in core.
+
+Some capabilities are better delivered as standalone modules, especially:
+
+- payment integrations
+- shipping integrations
+- external service connectors
+- vertical or operational workflows not needed by every app
+
+This repository keeps core smaller and lets the ecosystem grow through installable modules built on stable extension points.
+
+## What official modules are
+
+Official modules are:
+
+- installable npm packages
+- reviewed and accepted by maintainers
+- published through the official Open Mercato distribution path
+- updatable over time without forking the whole app
+
+They let teams add specific capabilities to an existing app without modifying core directly.
+
+## What belongs here
+
+Good fits for `official-modules`:
+
+- carriers
+- payment gateways
+- third-party integrations
+- optional business workflows
+- features built through existing extension points
+
+Bad fits for `official-modules`:
+
+- core framework primitives
+- features every app depends on
+- changes that require patching core directly

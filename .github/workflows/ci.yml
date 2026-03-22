@@ -33,6 +33,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Check platform sync
+        if: github.base_ref == 'main'
         run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
 
       - name: Build packages
@@ -182,6 +183,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Check platform sync
+        if: github.base_ref == 'main'
         run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
 
       - name: Build monorepo packages

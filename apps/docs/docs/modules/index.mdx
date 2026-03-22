@@ -1,0 +1,51 @@
+---
+title: Modules
+description: Public catalog of official Open Mercato modules documented in this repository.
+---
+
+# Modules
+
+Browse official Open Mercato modules by capability.
+
+Official modules are installable packages that add optional Open Mercato capabilities without expanding core.
+
+## What this catalog covers
+
+This page lists the official Open Mercato modules documented in this repository.
+
+Use it to quickly understand what a module adds before moving to installation and setup.
+
+## Install a module
+
+Use the Open Mercato CLI:
+
+```bash
+yarn mercato module add @open-mercato/<module-name>
+```
+
+After adding a module, the usual next steps are:
+
+```bash
+yarn generate
+yarn mercato db:migrate
+yarn dev
+```
+
+For the full add, enable, and eject flow, see [Using Modules](/using-modules).
+
+## How to use this catalog
+
+- `Module` is the npm package you install.
+- `Category` helps group modules by purpose.
+- `Summary` gives the shortest practical description of what the module adds.
+
+## Current catalog
+
+| Module | Category | Summary |
+| --- | --- | --- |
+
+## Next steps
+
+- Read [Using Modules](/using-modules) for the CLI workflow
+- Read [Development Guide](/development-guide) for sandbox-based module development
+- Read the [Framework modules overview](https://docs.openmercato.com/framework/modules/overview) for extension-system concepts

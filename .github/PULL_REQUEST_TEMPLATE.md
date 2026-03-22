@@ -1,6 +1,6 @@
 <!--
 Please ensure this pull request targets the `develop` branch.
-Checking the CLA box below confirms you accept the terms in docs/cla.md.
+Checking the CLA box below confirms you accept the terms in apps/docs/cla.md.
 -->
 
 ## Summary
@@ -31,7 +31,7 @@ List the tests or commands you ran to validate the change.
 ## Checklist
 
 - [ ] This pull request targets `develop`.
-- [ ] I have read and accept the Open Mercato Contributor License Agreement (see `docs/cla.md`).
+- [ ] I have read and accept the Open Mercato Contributor License Agreement (see `apps/docs/cla.md`).
 - [ ] I updated documentation, locales, or generators if the change requires it.
 - [ ] I added or adjusted tests that cover the change.
 - [ ] I created or updated the spec in `.ai/specs/` with a changelog entry (if applicable).

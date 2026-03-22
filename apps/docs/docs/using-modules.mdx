@@ -1,0 +1,74 @@
+---
+title: Using Modules
+description: The practical CLI flow for adding, enabling, and ejecting official modules.
+---
+
+# Using Modules
+
+The normal way to use an official module is to add it to a standalone Open Mercato app with the CLI.
+
+## Typical flow
+
+Create the app and install dependencies:
+
+```bash
+npx create-mercato-app my-app
+cd my-app
+yarn install
+```
+
+Add the module:
+
+```bash
+yarn mercato module add @open-mercato/<module-name>
+```
+
+The CLI should add the module to `src/modules.ts`. For example:
+
+```ts
+{ id: 'test_package', from: '@open-mercato/test-package' },
+```
+
+Then run the usual bootstrap commands:
+
+```bash
+yarn generate
+yarn mercato db:migrate
+yarn dev
+```
+
+Use this when you want the default package-backed setup and the cleanest upgrade path.
+
+## Enable or eject
+
+If the package is already installed and you only want to enable it in `src/modules.ts`:
+
+```bash
+yarn mercato module enable @open-mercato/<module-name>
+```
+
+If you want to install the module as local source instead of using the published package:
+
+```bash
+yarn mercato module add @open-mercato/<module-name> --eject
+```
+
+If the module is already installed and you want to switch it to ejected mode:
+
+```bash
+yarn mercato module enable @open-mercato/<module-name> --eject
+```
+
+After any module change, rerun:
+
+```bash
+yarn generate
+yarn mercato db:migrate
+yarn dev
+```
+
+## Next steps
+
+- Browse the [Modules catalog](/modules)
+- Read the main [Open Mercato module system docs](https://docs.openmercato.com/framework/modules/overview)
+- Open the [Standalone app guide](https://docs.openmercato.com/customization/standalone-app)
