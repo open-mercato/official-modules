@@ -43,6 +43,10 @@ for (const entry of packageDirs) {
     continue
   }
 
+  if (manifest.publishConfig?.access !== 'public') {
+    continue
+  }
+
   if (!manifest.name || !manifest.version) {
     console.error(`Error: ${path.relative(repoRoot, manifestPath)} is missing required publish metadata.`)
     process.exit(1)

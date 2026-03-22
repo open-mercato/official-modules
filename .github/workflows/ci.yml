@@ -83,14 +83,26 @@ jobs:
             "${{ github.sha }}" \
             | grep '^packages/' | cut -d'/' -f2 | sort -u || true)
 
-          if [ -z "$CHANGED" ]; then
-            echo "No package changes detected — skipping canary publish."
+          PUBLISHABLE_CHANGED=$(printf '%s\n' "$CHANGED" | while IFS= read -r package_dir; do
+            if [ -z "$package_dir" ]; then
+              continue
+            fi
+
+            manifest_path="packages/$package_dir/package.json"
+
+            if [ -f "$manifest_path" ] && jq -e '.private != true and .publishConfig.access == "public"' "$manifest_path" >/dev/null; then
+              printf '%s\n' "$package_dir"
+            fi
+          done | sort -u)
+
+          if [ -z "$PUBLISHABLE_CHANGED" ]; then
+            echo "No public publishable package changes detected — skipping canary publish."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "changed_packages=[]" >> "$GITHUB_OUTPUT"
           else
-            echo "Changed packages:"
-            echo "$CHANGED"
-            PACKAGES_JSON=$(printf '%s\n' $CHANGED | jq -R . | jq -sc .)
+            echo "Changed public publishable packages:"
+            echo "$PUBLISHABLE_CHANGED"
+            PACKAGES_JSON=$(printf '%s\n' "$PUBLISHABLE_CHANGED" | jq -R . | jq -sc .)
             echo "changed_packages=$PACKAGES_JSON" >> "$GITHUB_OUTPUT"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi

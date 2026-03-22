@@ -8,8 +8,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/common.sh"
 
 NPM_REGISTRY_URL="$(normalize_registry_url "${NPM_REGISTRY_URL:-https://registry.npmjs.org}")"
-CANARY_DIST_TAG="${CANARY_DIST_TAG:-canary}"
-CANARY_OUTPUT_DIR="$REPO_ROOT/.artifacts/packages-canary"
+VERSION_PRERELEASE_LABEL="${VERSION_PRERELEASE_LABEL:-canary}"
+CANARY_DIST_TAG="${CANARY_DIST_TAG:-$VERSION_PRERELEASE_LABEL}"
+CANARY_OUTPUT_DIR="${CANARY_OUTPUT_DIR:-$REPO_ROOT/.artifacts/packages-$VERSION_PRERELEASE_LABEL}"
 PREPARE_PREVIEW_SCRIPT="$REPO_ROOT/scripts/lib/prepare-preview-tarballs.mjs"
 
 trap cleanup_temp_npmrc EXIT
@@ -33,7 +34,10 @@ fi
 CANARY_TARBALLS=()
 while IFS= read -r tarball_record; do
   CANARY_TARBALLS+=("$tarball_record")
-done < <(VERSION_PRERELEASE_LABEL=canary node "$PREPARE_PREVIEW_SCRIPT" "$ARTIFACTS_DIR" "$CANARY_OUTPUT_DIR")
+done < <(
+  VERSION_PRERELEASE_LABEL="$VERSION_PRERELEASE_LABEL" \
+    node "$PREPARE_PREVIEW_SCRIPT" "$ARTIFACTS_DIR" "$CANARY_OUTPUT_DIR"
+)
 
 for tarball_record in "${CANARY_TARBALLS[@]}"; do
   IFS=$'\t' read -r package_name canary_version tarball_path <<<"$tarball_record"
@@ -42,4 +46,4 @@ for tarball_record in "${CANARY_TARBALLS[@]}"; do
   printf '%s\t%s\n' "$package_name" "$canary_version"
 done
 
-echo "Published ${#CANARY_TARBALLS[@]} canary package(s) to $NPM_REGISTRY_URL" >&2
+echo "Published ${#CANARY_TARBALLS[@]} $VERSION_PRERELEASE_LABEL package(s) to $NPM_REGISTRY_URL" >&2
