@@ -7,22 +7,22 @@ import Link from '@docusaurus/Link';
 const repositoryGuides = [
   {
     title: 'Overview',
-    description: 'Understand what official modules are, what belongs in this repository, and how these docs relate to the main Open Mercato docs.',
+    description: 'What official modules are and why they exist.',
     to: '/overview',
   },
   {
     title: 'Using Modules',
-    description: 'Install modules with the CLI, choose ownership mode, and verify the critical path before wider rollout.',
+    description: 'Install, eject, upgrade, and verify modules.',
     to: '/using-modules',
   },
   {
     title: 'Development Guide',
-    description: 'Follow the spec-driven workflow for adding a new official module to this repository.',
+    description: 'Add a new official module with the spec-driven workflow.',
     to: '/development-guide',
   },
   {
     title: 'Modules Catalog',
-    description: 'Browse the current official module pages instead of reading raw package output.',
+    description: 'Browse available modules and open their setup guides.',
     to: '/modules',
   },
 ];
@@ -30,22 +30,22 @@ const repositoryGuides = [
 const coreDocsLinks = [
   {
     title: 'Framework Modules',
-    description: 'Open the canonical Open Mercato module-system docs when you need extension-point details.',
+    description: 'Extension points and module-system concepts.',
     to: 'https://docs.openmercato.com/framework/modules/overview',
   },
   {
     title: 'Standalone App Guide',
-    description: 'Use the main docs for broader platform setup and standalone app bootstrapping.',
+    description: 'Standalone app setup and bootstrapping.',
     to: 'https://docs.openmercato.com/customization/standalone-app',
   },
   {
     title: 'CLI Reference',
-    description: 'Check the main CLI documentation for commands beyond the scope of this repository-specific guide.',
+    description: 'CLI commands outside this repository guide.',
     to: 'https://docs.openmercato.com/cli/overview',
   },
   {
     title: 'GitHub Repository',
-    description: 'Open the official-modules repository for code, specs, releases, and pull request workflow.',
+    description: 'Source code, specs, releases, and pull requests.',
     to: 'https://github.com/open-mercato/official-modules',
   },
 ];
@@ -54,13 +54,12 @@ function HomepageHeader() {
   return (
     <header className="hero hero--primary">
       <div className="container">
-        <h1 className="hero__title">Official Modules Documentation</h1>
-        <p className="hero__subtitle">
-          Repository docs for installing, operating, and building official Open Mercato modules.
+      <h1 className="hero__title">Official Open Mercato Modules</h1>
+      <p className="hero__subtitle">
+        Official modules are installable Open Mercato packages for optional capabilities like payments, shipping, integrations, and business workflows.
         </p>
         <p>
-          This docs app stays focused on the `official-modules` repository: what it ships, how to use modules in a real app,
-          and how to contribute new ones without drifting away from the core platform workflow.
+        This repository exists to keep core focused while growing the ecosystem through stable extension points.
         </p>
         <div>
           <Link className="button button--lg button--secondary" to="/modules">
@@ -79,7 +78,7 @@ function RepositoryGuides() {
   return (
     <section className="margin-top--xl">
       <div className="container">
-        <h2>Repository Guides</h2>
+        <h2>Start Here</h2>
         <div className="feature-grid">
           {repositoryGuides.map((guide) => (
             <Link key={guide.title} className="feature-card" to={guide.to}>
@@ -98,7 +97,7 @@ function CoreDocs() {
     <section className="margin-vert--xl">
       <div className="container">
         <h2>Related Resources</h2>
-        <p>Framework theory and broader platform setup still live in the main Open Mercato docs.</p>
+        <p>Use the main docs for framework details and full platform setup.</p>
         <div className="feature-grid">
           {coreDocsLinks.map((link) => (
             <Link key={link.title} className="feature-card" to={link.to}>

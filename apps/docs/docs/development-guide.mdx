@@ -17,23 +17,15 @@ The normal loop is simple: build a module in `packages/`, enable it in the sandb
 
 ## Start from the repository root
 
-Install dependencies and align the platform channel first:
+Install dependencies and start the app:
 
 ```bash
 yarn install
-yarn platform:sync
-```
-
-On first run, bootstrap the sandbox and start the app:
-
-```bash
 yarn initialize
 yarn dev
 ```
 
-Open `http://localhost:3000/backend` and sign in with the credentials printed by `yarn initialize`.
-
-`yarn dev` is a root shortcut for `yarn workspace sandbox dev`, so you can stay in the repository root for most day-to-day work.
+Open `http://localhost:3000/backend` and sign in with the credentials printed by `yarn initialize`
 
 ## What the sandbox is for
 
@@ -126,33 +118,13 @@ yarn mercato module add @open-mercato/<name>@preview
 
 ## Use `develop` builds from the core repo
 
-This repository can validate modules against nightly `develop` packages from the main Open Mercato repo.
-
-The branch policy is:
-
-- `develop` validates against Open Mercato `develop`
-- `main` validates against Open Mercato `latest`
-
-After switching branches, or any time you want to realign the repo with a platform channel, run:
+If your module depends on an API, UI primitive, or fix from the Open Mercato core `develop` branch that has not been published yet, run:
 
 ```bash
-yarn platform:sync
+yarn platform:sync --channel develop --package @open-mercato/<package-name>
 ```
 
-You can force the channel explicitly:
-
-```bash
-yarn platform:sync --channel develop
-yarn platform:sync --channel latest
-```
-
-To verify that the repo is already aligned without mutating files:
-
-```bash
-yarn platform:sync --check
-```
-
-`platform:sync` updates the sandbox platform pins, workspace `devDependencies`, and `yarn.lock`. Use it when your module depends on APIs, UI primitives, or fixes that currently exist only on the Open Mercato `develop` channel.
+This updates the local development dependency pins in this repo so the sandbox and workspace build against that unpublished core package while you develop and test the module.
 
 ## Docs and reference links
 
