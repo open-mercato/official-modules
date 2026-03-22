@@ -47,6 +47,7 @@
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
     "@types/node": "^24.10.1",
+    "@types/pg": "^8.20.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "tsx": "^4.21.0",
