@@ -13,7 +13,7 @@ COPY package.json yarn.lock .yarnrc.yml ./
 COPY apps/docs/package.json ./apps/docs/
 
 # Install dependencies
-RUN yarn workspaces focus open-mercato-docs
+RUN yarn workspaces focus official-modules-docs
 
 # Copy docs source files
 COPY apps/docs ./apps/docs
