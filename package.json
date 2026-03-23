@@ -12,6 +12,9 @@
   ],
   "scripts": {
     "build:packages": "turbo run build --filter='./packages/*'",
+    "build:sandbox": "turbo run build --filter='./apps/sandbox'",
+    "build": "yarn build:packages && yarn build:sandbox",
+    "start": "turbo run start --filter='./apps/sandbox'",
     "generate": "yarn workspace sandbox generate",
     "dev": "yarn workspace sandbox dev",
     "pack:packages": "./scripts/pack-packages.sh",
