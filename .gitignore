@@ -36,3 +36,5 @@ yarn-error.log*
 published-app/
 
 .vscode/
+
+apps/sandbox/data
