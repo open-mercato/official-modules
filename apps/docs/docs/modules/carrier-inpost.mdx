@@ -1,0 +1,130 @@
+---
+title: InPost Carrier
+description: Ship parcels via InPost lockers (Paczkomat) and courier services with rate calculation, label generation, real-time tracking, and webhook updates.
+---
+
+# InPost Carrier
+
+`@open-mercato/carrier-inpost` integrates InPost shipping into Open Mercato. It covers locker (Paczkomat) and courier delivery, rate calculation, label generation, tracking, and webhook status updates.
+
+**Supported services**
+
+| Service | Code | Description |
+|---|---|---|
+| Locker Standard | `inpost_locker_standard` | Parcel locker (Paczkomat) delivery |
+| Courier Standard | `inpost_courier_standard` | Door-to-door courier |
+| Courier C2C | `inpost_courier_c2c` | Customer-to-customer courier with drop-off |
+
+## Requirements
+
+- An active InPost ShipX account with API access
+- Your InPost Organization ID
+- A ShipX API token
+
+Optionally, configure a webhook secret for signature verification.
+
+## Installation
+
+```bash
+yarn mercato module add @open-mercato/carrier-inpost
+yarn generate
+yarn mercato db:migrate
+```
+
+## Configuration
+
+InPost credentials are managed through the **Integrations** hub at `/backend/integrations`. Find the InPost entry and fill in:
+
+| Field | Required | Description |
+|---|---|---|
+| API Token | Yes | ShipX Bearer token |
+| Organization ID | Yes | Your InPost organization identifier |
+| API Base URL | No | Override the ShipX endpoint (default: `https://api-shipx-pl.easypack24.net`) |
+| Points API Base URL | No | Override the Points endpoint (default: `https://api.inpost.pl`) |
+| Webhook Secret | No | HMAC-SHA256 secret for verifying webhook payloads |
+
+### Environment-based auto-configuration
+
+You can pre-configure credentials via environment variables. Useful for CI environments or single-tenant setups:
+
+```bash
+OM_INTEGRATION_INPOST_API_TOKEN=your_token
+OM_INTEGRATION_INPOST_ORGANIZATION_ID=your_org_id
+OM_INTEGRATION_INPOST_API_BASE_URL=           # optional
+OM_INTEGRATION_INPOST_API_POINTS_BASE_URL=    # optional
+OM_INTEGRATION_INPOST_WEBHOOK_SECRET=         # optional
+OM_INTEGRATION_INPOST_ENABLED=true            # set to apply preset on tenant init
+OM_INTEGRATION_INPOST_FORCE_PRECONFIGURE=true # overwrite if already configured
+```
+
+## Webhooks
+
+InPost sends shipment status updates to your webhook endpoint.
+
+### Endpoint
+
+```
+POST /api/shipping-carriers/webhook/inpost
+```
+
+### Setup in InPost Manager
+
+1. Log in to [InPost Manager](https://manager.inpost.pl)
+2. Go to **Settings → Webhooks**
+3. Add your endpoint URL: `https://your-domain.com/api/shipping-carriers/webhook/inpost`
+4. Copy the generated secret and set it as `OM_INTEGRATION_INPOST_WEBHOOK_SECRET` (or save it in the Integrations hub)
+
+For local development, expose your local server with a tunnel:
+
+```bash
+npx ngrok http 3000
+# use the https://xxxx.ngrok.io URL in InPost Manager
+```
+
+## Shipping status mapping
+
+The module maps InPost-specific statuses to unified Open Mercato statuses:
+
+| Unified status | InPost statuses |
+|---|---|
+| `label_created` | `created`, `offers_prepared`, `offer_selected`, `confirmed` |
+| `picked_up` | `taken_by_courier`, `dispatched_by_sender`, `dispatched_by_sender_to_pok` |
+| `in_transit` | `adopted_at_sorting_center`, `sent_from_sorting_center`, `adopted_at_source_branch`, `sent_from_source_branch`, `out_for_delivery_to_pok`, `adopted_at_pok`, `ready_to_pickup` |
+| `out_for_delivery` | `out_for_delivery` |
+| `delivered` | `delivered`, `pickup_reminder_sent`, `pickup_time_expired` (locker collected) |
+| `failed_delivery` | `avizo`, `pickup_time_expired` (courier failed), `undelivered` |
+| `returned` | `return_in_progress`, `returned_to_sender` |
+| `cancelled` | `cancelled` |
+
+## Drop-off point search
+
+The module exposes a `searchDropOffPoints` method on the shipping adapter for finding nearby InPost points by postal code, type, or name query. This powers the drop-off picker widget on the shipment creation wizard.
+
+## Permissions
+
+| Feature | Description |
+|---|---|
+| `carrier_inpost.view` | View InPost configuration and tracking widgets |
+| `carrier_inpost.configure` | Edit InPost credentials and settings |
+
+Both `superadmin` and `admin` roles receive both permissions on initial setup.
+
+## Widgets
+
+The module injects two UI widgets automatically — no manual configuration required:
+
+- **InPost Configuration** — appears in the Integrations hub detail page for InPost, under the Settings tab. Allows editing credentials inline.
+- **InPost Tracking** — appears in the order shipping detail panel. Shows the current unified status and available tracking events for InPost shipments.
+
+## Parcel sizing
+
+Locker and C2C services select a template based on parcel height:
+
+| Template | Max height |
+|---|---|
+| Small | ≤ 80 mm |
+| Medium | ≤ 150 mm |
+| Large | ≤ 410 mm |
+| XLarge | > 410 mm |
+
+Courier Standard uses the exact package dimensions you provide (in cm, converted to mm).
