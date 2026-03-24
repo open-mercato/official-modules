@@ -23,6 +23,25 @@ description: Ship parcels via InPost lockers (Paczkomat) and courier services wi
 
 Optionally, configure a webhook secret for signature verification.
 
+## Testing with the InPost sandbox
+
+InPost provides a sandbox environment for testing without real shipments:
+
+- **Sandbox Manager**: [https://sandbox-manager.paczkomaty.pl](https://sandbox-manager.paczkomaty.pl)
+- **Sandbox API base URL**: `https://sandbox-api-shipx-pl.easypack24.net`
+
+Register at the Sandbox Manager to obtain a sandbox API token and organization ID. Set the **API Base URL** field in the Integrations hub (or via `OM_INTEGRATION_INPOST_API_BASE_URL`) to the sandbox endpoint so all requests hit the sandbox instead of production:
+
+```bash
+OM_INTEGRATION_INPOST_API_TOKEN=your_sandbox_token
+OM_INTEGRATION_INPOST_ORGANIZATION_ID=your_sandbox_org_id
+OM_INTEGRATION_INPOST_API_BASE_URL=https://sandbox-api-shipx-pl.easypack24.net
+```
+
+:::note
+The InPost sandbox does not populate courier C2C function tags on points, so drop-off point searches filtered by type may return fewer results than in production. This is expected.
+:::
+
 ## Installation
 
 ```bash
