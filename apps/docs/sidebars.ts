@@ -9,7 +9,8 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Modules',
       items: [
-        'modules/index'
+        'modules/index',
+        'modules/carrier-inpost',
       ],
     },
   ],
