@@ -2496,9 +2496,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@open-mercato/carrier-inpost@workspace:packages/carrier-inpost"
   dependencies:
-    "@open-mercato/core": "npm:0.4.8"
-    "@open-mercato/shared": "npm:0.4.8"
-    "@open-mercato/ui": "npm:0.4.8"
+    "@open-mercato/core": "npm:0.4.9-develop.1080.5a6ccf821e"
+    "@open-mercato/shared": "npm:0.4.9-develop.1080.5a6ccf821e"
+    "@open-mercato/ui": "npm:0.4.9-develop.1080.5a6ccf821e"
     "@playwright/test": "npm:^1.58.2"
     "@types/chance": "npm:^1.1.7"
     "@types/jest": "npm:^30.0.0"
@@ -2513,9 +2513,9 @@ __metadata:
     typescript: "npm:^5.9.3"
   peerDependencies:
     "@mikro-orm/postgresql": ^6.5.9
-    "@open-mercato/core": 0.4.8
-    "@open-mercato/shared": 0.4.8
-    "@open-mercato/ui": 0.4.8
+    "@open-mercato/core": 0.4.9-develop.1080.5a6ccf821e
+    "@open-mercato/shared": 0.4.9-develop.1080.5a6ccf821e
+    "@open-mercato/ui": 0.4.9-develop.1080.5a6ccf821e
     react: ^19.0.0
     react-dom: ^19.0.0
   languageName: unknown
@@ -2550,24 +2550,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/core@npm:0.4.8":
-  version: 0.4.8
-  resolution: "@open-mercato/core@npm:0.4.8"
-  dependencies:
-    "@types/html-to-text": "npm:^9.0.4"
-    "@types/semver": "npm:^7.5.8"
-    "@xyflow/react": "npm:^12.6.0"
-    ai: "npm:^6.0.0"
-    date-fns: "npm:^4.1.0"
-    date-fns-tz: "npm:^3.2.0"
-    html-to-text: "npm:^9.0.5"
-    semver: "npm:^7.6.3"
-  peerDependencies:
-    "@open-mercato/shared": 0.4.8
-  checksum: 10/a006af2fa3e606384b2b23100cd9e9a221ac5291fae5fbc5bd8c2fad1c289a7efa7b348fc1a69056bec012e65af2c613583dadfbf1b5e94ac3beee70e456b0fa
-  languageName: node
-  linkType: hard
-
 "@open-mercato/core@npm:0.4.9-canary-1f829e1484":
   version: 0.4.9-canary-1f829e1484
   resolution: "@open-mercato/core@npm:0.4.9-canary-1f829e1484"
@@ -2583,6 +2565,25 @@ __metadata:
   peerDependencies:
     "@open-mercato/shared": 0.4.9-canary-1f829e1484
   checksum: 10/bc9944130b8bd84910a3c45cdc00396da5070472778087cf500162bf6e12b9625c8c2b00e5b84d2a0943c0cd977b0529a720c656e86916fd15df0936f4afa348
+  languageName: node
+  linkType: hard
+
+"@open-mercato/core@npm:0.4.9-develop.1080.5a6ccf821e":
+  version: 0.4.9-develop.1080.5a6ccf821e
+  resolution: "@open-mercato/core@npm:0.4.9-develop.1080.5a6ccf821e"
+  dependencies:
+    "@types/html-to-text": "npm:^9.0.4"
+    "@types/semver": "npm:^7.5.8"
+    "@xyflow/react": "npm:^12.6.0"
+    ai: "npm:^6.0.0"
+    date-fns: "npm:^4.1.0"
+    date-fns-tz: "npm:^3.2.0"
+    html-to-text: "npm:^9.0.5"
+    semver: "npm:^7.6.3"
+    ts-pattern: "npm:^5.0.0"
+  peerDependencies:
+    "@open-mercato/shared": 0.4.9-develop.1080.5a6ccf821e
+  checksum: 10/6865cd10583f2730a5afc7d1baa79db7cff7eabf55947fec4c2d6088f2eac42617c02aac66f2e53e92a24e77dab59fa2f4c3e4e02da87f8ac3789b51b5e42001
   languageName: node
   linkType: hard
 
@@ -2686,21 +2687,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/shared@npm:0.4.8":
-  version: 0.4.8
-  resolution: "@open-mercato/shared@npm:0.4.8"
-  dependencies:
-    rate-limiter-flexible: "npm:^9.0.0"
-  checksum: 10/808bc51980b2a420249cd52dc5837dca3c8543728ec26e1ef2104bcc530c3740b13695ed31dd432abe4e7dbc56663a26719ea47da0fdc1b04a0f920d8bc2a064
-  languageName: node
-  linkType: hard
-
 "@open-mercato/shared@npm:0.4.9-canary-1f829e1484":
   version: 0.4.9-canary-1f829e1484
   resolution: "@open-mercato/shared@npm:0.4.9-canary-1f829e1484"
   dependencies:
     rate-limiter-flexible: "npm:^9.0.0"
   checksum: 10/18d8b046b005e060a4b70b4b0c824b1e282d8080f67a03d6460817c2a412ca79a716f7cfca493d5216d8d89983e13c89f86a2d7578bd6ed93af7f32348dbbe85
+  languageName: node
+  linkType: hard
+
+"@open-mercato/shared@npm:0.4.9-develop.1080.5a6ccf821e":
+  version: 0.4.9-develop.1080.5a6ccf821e
+  resolution: "@open-mercato/shared@npm:0.4.9-develop.1080.5a6ccf821e"
+  dependencies:
+    rate-limiter-flexible: "npm:^9.0.0"
+  checksum: 10/c13b377f47d6a1f115f4f9804d06e9f841d4378689e7d66f4bb313e9be64c6f9ec2a0bee1ea3e0a97cd92130233962f2b599a9346e4a790075f94cec030e3bca
   languageName: node
   linkType: hard
 
@@ -2760,24 +2761,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/ui@npm:0.4.8":
-  version: 0.4.8
-  resolution: "@open-mercato/ui@npm:0.4.8"
-  dependencies:
-    "@radix-ui/react-popover": "npm:^1.1.6"
-    "@radix-ui/react-tooltip": "npm:^1.2.8"
-    date-fns: "npm:^4.1.0"
-    react-big-calendar: "npm:^1.19.4"
-    react-day-picker: "npm:^9.6.4"
-    recharts: "npm:^2.15.0"
-  peerDependencies:
-    "@open-mercato/shared": 0.4.8
-    react: ">=18.0.0"
-    react-dom: ">=18.0.0"
-  checksum: 10/8ce1d8e28f01eaf034a6a290b4f84a5bcc972735c414de56944e55e2dbd29bff77ab52f4e2f233d4d62d75559ae1017424c723464e500b34a15e8c5406ddf5e8
-  languageName: node
-  linkType: hard
-
 "@open-mercato/ui@npm:0.4.9-canary-1f829e1484":
   version: 0.4.9-canary-1f829e1484
   resolution: "@open-mercato/ui@npm:0.4.9-canary-1f829e1484"
@@ -2793,6 +2776,24 @@ __metadata:
     react: ">=18.0.0"
     react-dom: ">=18.0.0"
   checksum: 10/47e4c95f185522b0dcea8e7dd2b180aa6c0dfdcb2de92724287fe2a367bd2969109a696d6a229c5810e8bd4b339537bcff979cbe66ebf72eae11ebeaf92f744e
+  languageName: node
+  linkType: hard
+
+"@open-mercato/ui@npm:0.4.9-develop.1080.5a6ccf821e":
+  version: 0.4.9-develop.1080.5a6ccf821e
+  resolution: "@open-mercato/ui@npm:0.4.9-develop.1080.5a6ccf821e"
+  dependencies:
+    "@radix-ui/react-popover": "npm:^1.1.6"
+    "@radix-ui/react-tooltip": "npm:^1.2.8"
+    date-fns: "npm:^4.1.0"
+    react-big-calendar: "npm:^1.19.4"
+    react-day-picker: "npm:^9.6.4"
+    recharts: "npm:^2.15.0"
+  peerDependencies:
+    "@open-mercato/shared": 0.4.9-develop.1080.5a6ccf821e
+    react: ">=18.0.0"
+    react-dom: ">=18.0.0"
+  checksum: 10/e85041fba081d781a34691258faff2ecb6bb5fe4491068fd5b04c773a0b023b10cf8c9c8d7645b1e86a0f9c9f97b4b4d9db641392b480f4c07b15b4e52746fef
   languageName: node
   linkType: hard
 
