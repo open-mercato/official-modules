@@ -671,3 +671,12 @@ None.
 - Added explicit env var names to `setup.ts` step and `lib/preset.ts` manifest entry: `OM_INTEGRATION_DHL_PARCEL_USER_ID`, `OM_INTEGRATION_DHL_PARCEL_API_KEY`, `OM_INTEGRATION_DHL_PARCEL_ACCOUNT_NUMBER`, `OM_INTEGRATION_DHL_PARCEL_API_BASE_URL`, `OM_INTEGRATION_DHL_PARCEL_ENABLED`, `OM_INTEGRATION_DHL_PARCEL_FORCE_PRECONFIGURE`
 - Added XSS note to tracking widget UI section: DHL `status` text must be rendered as escaped text, not `dangerouslySetInnerHTML`
 - **Verdict**: Approved — all checklist items resolved
+
+---
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 1 — Foundation | Done | 2026-04-03 | All 25 files created; build, typecheck, and 60 unit tests pass; no `any`, no raw fetch in UI, no hardcoded strings |
+| Phase 2 — Webhooks | Not Started | — | `verifyWebhook` is a stub returning `eventType: 'unknown'`; full Track-Trace Pusher webhook support deferred |
