@@ -5727,6 +5727,36 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@open-mercato/carrier-dhl-parcel@workspace:packages/carrier-dhl-parcel":
+  version: 0.0.0-use.local
+  resolution: "@open-mercato/carrier-dhl-parcel@workspace:packages/carrier-dhl-parcel"
+  dependencies:
+    "@open-mercato/core": "npm:0.4.9-develop.1080.5a6ccf821e"
+    "@open-mercato/shared": "npm:0.4.9-develop.1080.5a6ccf821e"
+    "@open-mercato/ui": "npm:0.4.9-develop.1080.5a6ccf821e"
+    "@types/chance": "npm:^1.1.7"
+    "@types/jest": "npm:^30.0.0"
+    "@types/uuid": "npm:^9.0.0"
+    chance: "npm:^1.1.13"
+    esbuild: "npm:^0.25.0"
+    glob: "npm:^13.0.6"
+    jest: "npm:^30.2.0"
+    react: "npm:19.2.1"
+    react-dom: "npm:19.2.1"
+    ts-jest: "npm:^29.4.6"
+    ts-pattern: "npm:^5.0.0"
+    typescript: "npm:^5.9.3"
+    uuid: "npm:^9.0.0"
+  peerDependencies:
+    "@mikro-orm/postgresql": ^6.5.9
+    "@open-mercato/core": 0.4.9-develop.1080.5a6ccf821e
+    "@open-mercato/shared": 0.4.9-develop.1080.5a6ccf821e
+    "@open-mercato/ui": 0.4.9-develop.1080.5a6ccf821e
+    react: ^19.0.0
+    react-dom: ^19.0.0
+  languageName: unknown
+  linkType: soft
+
 "@open-mercato/carrier-inpost@workspace:packages/carrier-inpost":
   version: 0.0.0-use.local
   resolution: "@open-mercato/carrier-inpost@workspace:packages/carrier-inpost"
@@ -8845,6 +8875,13 @@ __metadata:
   version: 2.0.11
   resolution: "@types/unist@npm:2.0.11"
   checksum: 10/6d436e832bc35c6dde9f056ac515ebf2b3384a1d7f63679d12358766f9b313368077402e9c1126a14d827f10370a5485e628bf61aa91117cf4fc882423191a4e
+  languageName: node
+  linkType: hard
+
+"@types/uuid@npm:^9.0.0":
+  version: 9.0.8
+  resolution: "@types/uuid@npm:9.0.8"
+  checksum: 10/b8c60b7ba8250356b5088302583d1704a4e1a13558d143c549c408bf8920535602ffc12394ede77f8a8083511b023704bc66d1345792714002bfa261b17c5275
   languageName: node
   linkType: hard
 
@@ -25399,7 +25436,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uuid@npm:^9.0.1":
+"uuid@npm:^9.0.0, uuid@npm:^9.0.1":
   version: 9.0.1
   resolution: "uuid@npm:9.0.1"
   bin:

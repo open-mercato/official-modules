@@ -678,5 +678,51 @@ None.
 
 | Phase | Status | Date | Notes |
 |-------|--------|------|-------|
-| Phase 1 — Foundation | Done | 2026-04-03 | All 25 files created; build, typecheck, and 60 unit tests pass; no `any`, no raw fetch in UI, no hardcoded strings |
-| Phase 2 — Webhooks | Not Started | — | `verifyWebhook` is a stub returning `eventType: 'unknown'`; full Track-Trace Pusher webhook support deferred |
+| Phase 1 — Core Adapter + Integration Registration | Done | 2026-05-06 | All 27 files created; 46 unit tests passing; build + typecheck clean |
+| Phase 2 — Webhook / Push-Based Tracking | Not Started | — | Planned for future sprint |
+
+### Phase 1 Verification
+
+```
+yarn workspace @open-mercato/carrier-dhl-parcel build      ✓ 18 entry points, no errors
+yarn workspace @open-mercato/carrier-dhl-parcel typecheck  ✓ clean
+yarn workspace @open-mercato/carrier-dhl-parcel test       ✓ 46 passed (3 suites)
+```
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `packages/carrier-dhl-parcel/package.json` | Package manifest `@open-mercato/carrier-dhl-parcel` |
+| `packages/carrier-dhl-parcel/tsconfig.json` | Extends `../../tsconfig.base.json` |
+| `packages/carrier-dhl-parcel/build.mjs` | esbuild script |
+| `packages/carrier-dhl-parcel/jest.config.cjs` | jest + ts-jest config |
+| `src/index.ts` | Barrel export |
+| `src/modules/carrier_dhl_parcel/index.ts` | ModuleInfo metadata |
+| `src/modules/carrier_dhl_parcel/acl.ts` | Feature definitions |
+| `src/modules/carrier_dhl_parcel/setup.ts` | Tenant init + env preset |
+| `src/modules/carrier_dhl_parcel/di.ts` | Awilix registrar |
+| `src/modules/carrier_dhl_parcel/integration.ts` | IntegrationDefinition |
+| `src/modules/carrier_dhl_parcel/lib/errors.ts` | Typed error factory |
+| `src/modules/carrier_dhl_parcel/lib/status-map.ts` | DHL category → UnifiedShipmentStatus |
+| `src/modules/carrier_dhl_parcel/lib/client.ts` | HTTP client + TokenManager (with concurrent-request dedup) |
+| `src/modules/carrier_dhl_parcel/lib/rate-resolver.ts` | Rate calculation logic |
+| `src/modules/carrier_dhl_parcel/lib/health.ts` | Health check service |
+| `src/modules/carrier_dhl_parcel/lib/preset.ts` | Env var → credentials preset |
+| `src/modules/carrier_dhl_parcel/lib/adapters/v1.ts` | ShippingAdapter implementation |
+| `src/modules/carrier_dhl_parcel/widgets/injection/dhl-config/widget.ts` | Config widget definition |
+| `src/modules/carrier_dhl_parcel/widgets/injection/dhl-config/widget.client.tsx` | Config widget React component |
+| `src/modules/carrier_dhl_parcel/widgets/injection/dhl-tracking/widget.ts` | Tracking widget definition |
+| `src/modules/carrier_dhl_parcel/widgets/injection/dhl-tracking/widget.client.tsx` | Tracking widget React component |
+| `src/modules/carrier_dhl_parcel/widgets/injection-table.ts` | Slot mappings |
+| `src/modules/carrier_dhl_parcel/i18n/en.json` | English locale strings |
+| `src/modules/carrier_dhl_parcel/__tests__/status-map.test.ts` | Unit tests — status mapping |
+| `src/modules/carrier_dhl_parcel/__tests__/client.test.ts` | Unit tests — token lifecycle |
+| `src/modules/carrier_dhl_parcel/__tests__/adapter-v1.test.ts` | Unit tests — adapter methods |
+
+### Implementation Notes
+
+- **TokenManager race-condition fix**: `getToken` uses a `pendingAuthRequests` Map to deduplicate concurrent auth requests (e.g. from `Promise.all([dhlRequest(...), dhlRequest(...)])`). This ensures only one `POST /authenticate/api-key` call is made even when multiple requests are in-flight simultaneously.
+- **Rate amounts**: When DHL does not return a price on a parcel type, `amount` is set to `0` (quote-at-shipment-time). The caller should check for `amount === 0` and surface this to the operator.
+- **Label fetch non-fatal**: If `GET /labels/{id}` fails after a successful `POST /shipments`, `labelData` is omitted from the result rather than throwing. The shipment is still created in DHL's system.
+- **Track-trace postalCode**: The DHL `/track-trace` endpoint accepts `key={trackerCode}` without postal code. If postal-code-scoped tracking is required in future, pass it as `{trackerCode}+{postalCode}`.
