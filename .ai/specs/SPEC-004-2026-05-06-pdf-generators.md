@@ -359,30 +359,3 @@ No changes to existing code required.
 1. Template versioning — record which template version was used at generation time; archived versions remain renderable
 2. Draft watermark — render a "DRAFT" overlay when the source resource is not in a final status
 3. Auto-generation trigger — emit `pdf_generators.document.generated` event on resource status change (e.g. quote accepted)
-
----
-
----
-
-## Final Compliance Report — 2026-05-07
-
-### Compliance Matrix
-
-| Rule | Status | Notes |
-|------|--------|-------|
-| No direct ORM relationships between modules | ✅ | No DB entities yet; FK IDs planned |
-| Filter by organization_id | ✅ | Planned for Phase 5 entity |
-| Validate inputs with Zod | ✅ | generate route validates template_id + data presence |
-| API routes export openApi | ✅ | generate route exports openApi |
-| Module code in `packages/<name>/` | ✅ | `packages/pdf-generators/` |
-| defaultRoleFeatures in setup.ts | ✅ | |
-| Never hardcode user-facing strings | ✅ | All via useT() |
-| No direct imports from other module internals | ✅ | Data via context.record only |
-
-### Non-Compliant / Pending
-
-- **Line items missing from context.record**: `toDocumentData()` returns `lines: []` until core exposes line items in the injection context. Not a blocker — PDF renders correctly with empty lines section.
-
-### Verdict
-
-**Compliant for Phases 1–4.** Phase 5 requires DB entity + migration review before implementation.
