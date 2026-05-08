@@ -40,3 +40,4 @@ published-app/
 .codex/
 
 apps/sandbox/data
+apps/sandbox/storage/attachments
