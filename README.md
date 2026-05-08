@@ -62,6 +62,8 @@ docker compose up --build -d
 
 yarn install
 
+yarn install-skills
+
 yarn generate
 
 yarn initialize
@@ -163,7 +165,7 @@ spec-writing  →  scaffold-module  →  implement-spec
 
 ### Step 1 — Write a spec
 
-Before writing code, document your module in `.ai/specs/SPEC-XXX-YYYY-MM-DD-<title>.md`. This is the design document that `implement-spec` reads to know what to build.
+Before writing code, document your module in `.ai/specs/SPEC-YYYY-MM-DD-<title>.md`. This is the design document that `implement-spec` reads to know what to build. You might (and probably shall) use the `spec-writing` skill - available in any of the LLM coding envs. you're using after running the `yarn install-skills`
 
 Minimum sections: TLDR · Problem Statement · UMES extension points used · Data models · API contracts · Phases.
 
@@ -203,6 +205,8 @@ Navigate to `/backend/<module-name>` and confirm the module loads, pages render,
 ### Step 5 — Open a pull request
 
 Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist. The core team will review and, once approved, publish to npm.
+
+**Note**: The `app/sandbox` changes should be limited to enabling your module, and potentially nothing more - as the users will be using your module without this app (with their own, created with the `create-mercato-app` command). 
 
 ## 📦 Package Conventions
 
