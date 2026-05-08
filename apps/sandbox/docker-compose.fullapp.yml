@@ -1,20 +1,26 @@
+# Before first run: cp .env.example .env && yarn install
 services:
   app:
     build:
       context: .
       args:
         - CONTAINER_PORT=${CONTAINER_PORT:-3000}
-    image: open-mercato/app:${DEPLOY_ENV:-local}
+        - OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
     user: "0"
-    command: >
-      sh -c "if [ ! -f /tmp/init-marker/.seeded ]; then
-        echo 'First run: full initialization...';
-        yarn initialize && mkdir -p /tmp/init-marker && touch /tmp/init-marker/.seeded;
-      else
-        echo 'Subsequent run: migrations only...';
-        yarn db:migrate;
-      fi &&
-      yarn start"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        if [ ! -f /app/docker/scripts/init-or-migrate.sh ]; then
+          echo "ERROR: init-or-migrate.sh not found. Please rebuild the container: docker compose build --no-cache app"
+          exit 1
+        fi
+        sh /app/docker/scripts/init-or-migrate.sh
+        yarn start
     working_dir: /app
     volumes:
       - init_marker:/tmp/init-marker
@@ -100,7 +106,7 @@ services:
     volumes:
       - meilisearch_data:/meili_data
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7700/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
       interval: 10s
       timeout: 5s
       retries: 5

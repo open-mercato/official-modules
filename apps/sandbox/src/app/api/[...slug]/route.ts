@@ -1,12 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { findApi, type HttpMethod } from '@open-mercato/shared/modules/registry'
+import { findApiRouteManifestMatch, registerApiRouteManifests, registerBackendRouteManifests, registerFrontendRouteManifests, type HttpMethod } from '@open-mercato/shared/modules/registry'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { modules } from '@/.mercato/generated/modules.generated'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import { apiRoutes } from '@/.mercato/generated/api-routes.generated'
+import { backendRoutes } from '@/.mercato/generated/backend-routes.generated'
+import { frontendRoutes } from '@/.mercato/generated/frontend-routes.generated'
+import { resolveAuthFromRequestDetailed } from '@open-mercato/shared/lib/auth/server'
 import { bootstrap } from '@/bootstrap'
 
 // Ensure all package registrations are initialized for API routes
 bootstrap()
+registerBackendRouteManifests(backendRoutes)
+registerFrontendRouteManifests(frontendRoutes)
+registerApiRouteManifests(apiRoutes)
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
@@ -22,6 +27,7 @@ import { applicationLifecycleEvents, type ApplicationLifecycleEventId } from '@o
 
 type MethodMetadata = {
   requireAuth?: boolean
+  /** @deprecated Use `requireFeatures` instead — role names are mutable and can be spoofed */
   requireRoles?: string[]
   requireFeatures?: string[]
   rateLimit?: RateLimitConfig
@@ -35,6 +41,19 @@ type HandlerContext = {
 type LifecycleEventBus = {
   emit?: (event: string, payload: unknown) => Promise<void>
   emitEvent?: (event: string, payload: unknown) => Promise<void>
+}
+
+function clearStaffAuthCookies(response: Response): Response {
+  const nextResponse = response instanceof NextResponse
+    ? response
+    : new NextResponse(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      })
+  nextResponse.cookies.set('auth_token', '', { path: '/', maxAge: 0 })
+  nextResponse.cookies.set('session_token', '', { path: '/', maxAge: 0 })
+  return nextResponse
 }
 
 function buildRequestId(req: NextRequest): string {
@@ -71,9 +90,11 @@ async function emitLifecycleEvent(eventId: ApplicationLifecycleEventId, payload:
 
 function extractMethodMetadata(metadata: unknown, method: HttpMethod): MethodMetadata | null {
   if (!metadata || typeof metadata !== 'object') return null
-  const entry = (metadata as Partial<Record<HttpMethod, unknown>>)[method]
-  if (!entry || typeof entry !== 'object') return null
-  const source = entry as Record<string, unknown>
+  const metadataRecord = metadata as Partial<Record<HttpMethod, unknown>>
+  const entry = metadataRecord[method]
+  const source = entry && typeof entry === 'object'
+    ? entry as Record<string, unknown>
+    : metadata as Record<string, unknown>
   const normalized: MethodMetadata = {}
   if (typeof source.requireAuth === 'boolean') normalized.requireAuth = source.requireAuth
   if (Array.isArray(source.requireRoles)) {
@@ -93,7 +114,21 @@ function extractMethodMetadata(metadata: unknown, method: HttpMethod): MethodMet
       }
     }
   }
-  return normalized
+  return Object.keys(normalized).length > 0 ? normalized : null
+}
+
+function normalizeLoadedMetadata(
+  metadata: unknown,
+  method: HttpMethod,
+  routeKind: 'route-file' | 'legacy'
+): unknown {
+  if (routeKind !== 'legacy') return metadata
+  if (!metadata || typeof metadata !== 'object') return metadata
+  const source = metadata as Record<string, unknown>
+  if (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].some((entryMethod) => entryMethod in source)) {
+    return metadata
+  }
+  return { [method]: metadata }
 }
 
 async function checkAuthorization(
@@ -102,7 +137,8 @@ async function checkAuthorization(
   req: NextRequest
 ): Promise<NextResponse | null> {
   const { t } = await resolveTranslations()
-  if (methodMetadata?.requireAuth && !auth) {
+  const requiresAuthentication = methodMetadata?.requireAuth !== false
+  if (requiresAuthentication && !auth) {
     return NextResponse.json({ error: t('api.errors.unauthorized', 'Unauthorized') }, { status: 401 })
   }
 
@@ -122,7 +158,7 @@ async function checkAuthorization(
     return container
   }
 
-  if (auth && methodMetadata?.requireAuth !== false) {
+  if (auth && requiresAuthentication) {
     const rawTenantCandidate = await extractTenantCandidate(req)
     if (rawTenantCandidate !== undefined) {
       const tenantCandidate = sanitizeTenantCandidate(rawTenantCandidate)
@@ -257,8 +293,8 @@ async function handleRequest(
     receivedAt: new Date().toISOString(),
   }
   await emitLifecycleEvent(applicationLifecycleEvents.requestReceived, receivedPayload)
-  const api = findApi(modules, method, pathname)
-  if (!api) {
+  const match = findApiRouteManifestMatch(apiRoutes, method, pathname)
+  if (!match) {
     const response = NextResponse.json({ error: t('api.errors.notFound', 'Not Found') }, { status: 404 })
     await emitLifecycleEvent(applicationLifecycleEvents.requestNotFound, {
       ...receivedPayload,
@@ -267,7 +303,23 @@ async function handleRequest(
     })
     return response
   }
-  const auth = await getAuthFromRequest(req)
+  const loadedRouteModule = await match.route.load()
+  const rawHandler = match.route.kind === 'legacy'
+    ? (loadedRouteModule.default ?? loadedRouteModule[method] ?? loadedRouteModule.handler)
+    : loadedRouteModule[method]
+  if (typeof rawHandler !== 'function') {
+    const response = NextResponse.json({ error: t('api.errors.notFound', 'Not Found') }, { status: 404 })
+    await emitLifecycleEvent(applicationLifecycleEvents.requestNotFound, {
+      ...receivedPayload,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+    })
+    return response
+  }
+  const handler = rawHandler as (req: NextRequest, ctx?: HandlerContext) => Promise<Response> | Response
+  const routeMetadata = normalizeLoadedMetadata(loadedRouteModule.metadata, method, match.route.kind)
+  const authResolution = await resolveAuthFromRequestDetailed(req)
+  const auth = authResolution.auth
   await emitLifecycleEvent(applicationLifecycleEvents.requestAuthResolved, {
     ...receivedPayload,
     authenticated: !!auth,
@@ -275,17 +327,20 @@ async function handleRequest(
     tenantId: auth?.tenantId ?? null,
   })
 
-  const methodMetadata = extractMethodMetadata(api.metadata, method)
+  const methodMetadata = extractMethodMetadata(routeMetadata, method)
   const authError = await checkAuthorization(methodMetadata, auth, req)
   if (authError) {
+    const response = authResolution.status === 'invalid' && authError.status === 401
+      ? clearStaffAuthCookies(authError)
+      : authError
     await emitLifecycleEvent(applicationLifecycleEvents.requestAuthorizationDenied, {
       ...receivedPayload,
-      status: authError.status,
+      status: response.status,
       userId: auth?.sub ?? null,
       tenantId: auth?.tenantId ?? null,
       durationMs: Date.now() - startedAt,
     })
-    return authError
+    return response
   }
 
   if (methodMetadata?.rateLimit) {
@@ -315,16 +370,19 @@ async function handleRequest(
   }
 
   try {
-    const handlerContext: HandlerContext = { params: api.params, auth }
-    const response = await runWithCacheTenant(auth?.tenantId ?? null, () => api.handler(req, handlerContext))
+    const handlerContext: HandlerContext = { params: match.params, auth }
+    const response = await runWithCacheTenant(auth?.tenantId ?? null, () => handler(req, handlerContext))
+    const finalResponse = authResolution.status === 'invalid' && response.status === 401
+      ? clearStaffAuthCookies(response)
+      : response
     await emitLifecycleEvent(applicationLifecycleEvents.requestCompleted, {
       ...receivedPayload,
-      status: response.status,
+      status: finalResponse.status,
       userId: auth?.sub ?? null,
       tenantId: auth?.tenantId ?? null,
       durationMs: Date.now() - startedAt,
     })
-    return response
+    return finalResponse
   } catch (error) {
     await emitLifecycleEvent(applicationLifecycleEvents.requestFailed, {
       ...receivedPayload,
