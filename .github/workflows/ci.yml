@@ -12,6 +12,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      PLATFORM_CHANNEL: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -29,6 +31,10 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+
+      - name: Check platform sync
+        if: github.base_ref == 'main'
+        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
 
       - name: Build packages
         run: yarn build:packages
@@ -61,6 +67,8 @@ jobs:
     outputs:
       changed_packages: ${{ steps.detect.outputs.changed_packages }}
       has_changes: ${{ steps.detect.outputs.has_changes }}
+    # Skip PRs from forks (no access to secrets)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -75,14 +83,26 @@ jobs:
             "${{ github.sha }}" \
             | grep '^packages/' | cut -d'/' -f2 | sort -u || true)
 
-          if [ -z "$CHANGED" ]; then
-            echo "No package changes detected — skipping canary publish."
+          PUBLISHABLE_CHANGED=$(printf '%s\n' "$CHANGED" | while IFS= read -r package_dir; do
+            if [ -z "$package_dir" ]; then
+              continue
+            fi
+
+            manifest_path="packages/$package_dir/package.json"
+
+            if [ -f "$manifest_path" ] && jq -e '.private != true and .publishConfig.access == "public"' "$manifest_path" >/dev/null; then
+              printf '%s\n' "$package_dir"
+            fi
+          done | sort -u)
+
+          if [ -z "$PUBLISHABLE_CHANGED" ]; then
+            echo "No public publishable package changes detected — skipping canary publish."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "changed_packages=[]" >> "$GITHUB_OUTPUT"
           else
-            echo "Changed packages:"
-            echo "$CHANGED"
-            PACKAGES_JSON=$(printf '%s\n' $CHANGED | jq -R . | jq -sc .)
+            echo "Changed public publishable packages:"
+            echo "$PUBLISHABLE_CHANGED"
+            PACKAGES_JSON=$(printf '%s\n' "$PUBLISHABLE_CHANGED" | jq -R . | jq -sc .)
             echo "changed_packages=$PACKAGES_JSON" >> "$GITHUB_OUTPUT"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
@@ -138,10 +158,27 @@ jobs:
     needs: [detect-changes, publish-canary]
     if: needs.detect-changes.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
+    env:
+      PLATFORM_CHANNEL: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
+      CREATE_APP_TAG: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
     strategy:
       matrix:
         package: ${{ fromJson(needs.detect-changes.outputs.changed_packages) }}
       fail-fast: false
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mercato
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: mercato_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -156,7 +193,11 @@ jobs:
   
       - name: Install monorepo dependencies
         run: yarn install --immutable
-  
+
+      - name: Check platform sync
+        if: github.base_ref == 'main'
+        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
+
       - name: Build monorepo packages
         run: |
           yarn build:packages
@@ -191,13 +232,66 @@ jobs:
           exit 1
   
       - name: Scaffold standalone app
-        run: npx "create-mercato-app@latest" /tmp/standalone-app --registry https://registry.npmjs.org
+        run: npx "create-mercato-app@${CREATE_APP_TAG}" /tmp/standalone-app --registry https://registry.npmjs.org
   
+      - name: Configure standalone app environment
+        working-directory: /tmp/standalone-app
+        run: |
+          cp .env.example .env
+          cat >> .env << 'EOF'
+          DATABASE_URL=postgres://mercato:secret@localhost:5432/mercato_test
+          TENANT_DATA_ENCRYPTION_FALLBACK_KEY=ci-standalone-test-fallback-key
+          NODE_ENV=test
+          OM_TEST_MODE=1
+          OM_TEST_AUTH_RATE_LIMIT_MODE=opt-in
+          OM_DISABLE_EMAIL_DELIVERY=1
+          ENABLE_CRUD_API_CACHE=true
+          NEXT_PUBLIC_OM_EXAMPLE_INJECTION_WIDGETS_ENABLED=true
+          AUTO_SPAWN_WORKERS=false
+          AUTO_SPAWN_SCHEDULER=false
+          CACHE_STRATEGY=memory
+          EOF
+
+      - name: Install standalone app dependencies
+        working-directory: /tmp/standalone-app
+        run: yarn install
+
       - name: Install canary module
         working-directory: /tmp/standalone-app
         run: |
           yarn mercato module add \
             "${{ steps.version.outputs.pkg_name }}@${{ steps.version.outputs.canary_version }}"
-  
+
+      - name: Generate standalone app modules
+        working-directory: /tmp/standalone-app
+        run: yarn generate
+
+      - name: Initialize standalone app database
+        working-directory: /tmp/standalone-app
+        run: yarn initialize
+
+      - name: Build standalone app
+        working-directory: /tmp/standalone-app
+        run: yarn build
+
+      - name: Start standalone app
+        working-directory: /tmp/standalone-app
+        run: |
+          PORT=3001 yarn start &
+          echo "Waiting for standalone app to be ready..."
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3001/login > /dev/null 2>&1; then
+              echo "App ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App failed to start within 90s"
+          exit 1
+
+        # --- Run integration tests ---
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
       - name: Run integration tests
         run: BASE_URL=http://localhost:3001 yarn test:integration

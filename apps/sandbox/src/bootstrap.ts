@@ -28,8 +28,18 @@ registerAppDictionaryLoader(async (locale: Locale): Promise<Record<string, unkno
   }
 })
 
+// modules.ts inline overrides (replace/disable any contract a module
+// presents — AI today, other domains rolling out per the unified spec).
+// Importing @open-mercato/ai-assistant here also runs the side-effect
+// that registers the AI domain applier with the umbrella dispatcher.
+import { enabledModules } from '@/modules'
+import { applyModuleOverridesFromEnabledModules } from '@open-mercato/shared/modules/overrides'
+import '@open-mercato/ai-assistant'
+
+applyModuleOverridesFromEnabledModules(enabledModules)
+
 // Generated imports (static - works with bundlers)
-import { modules } from '@/.mercato/generated/modules.generated'
+import { modules } from '@/.mercato/generated/modules.app.generated'
 import { entities } from '@/.mercato/generated/entities.generated'
 import { diRegistrars } from '@/.mercato/generated/di.generated'
 import { E } from '@/.mercato/generated/entities.ids.generated'
@@ -53,11 +63,13 @@ import { messageTypes } from '@/.mercato/generated/message-types.generated'
 import { messageObjectTypes } from '@/.mercato/generated/message-objects.generated'
 import { registerMessageTypes } from '@open-mercato/core/modules/messages/lib/message-types-registry'
 import { registerMessageObjectTypes } from '@open-mercato/core/modules/messages/lib/message-objects-registry'
+import { runBootstrapRegistrations } from '@/.mercato/generated/bootstrap-registrations.generated'
 
 // Register event configs globally (similar to search)
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
+runBootstrapRegistrations()
 
 // Bootstrap factory from shared package
 import { createBootstrap, isBootstrapped } from '@open-mercato/shared/lib/bootstrap'

@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { raiseCrudError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { emitOrganizationScopeChanged } from '@open-mercato/shared/lib/frontend/organizationEvents'
@@ -27,6 +27,7 @@ type SwitcherState =
       nodes: OrganizationMenuNode[]
       selectedId: string | null
       canManage: boolean
+      canViewAllOrganizations: boolean
       tenantId: string | null
       tenants: TenantRecord[]
       isSuperAdmin: boolean
@@ -48,6 +49,7 @@ type OrganizationSwitcherPayload = {
   items?: unknown
   selectedId?: string | null
   canManage?: boolean
+  canViewAllOrganizations?: boolean
   tenantId?: string | null
   tenants?: unknown
   isSuperAdmin?: boolean
@@ -118,6 +120,7 @@ type OrganizationSwitcherExternalProps = {
 
 export default function OrganizationSwitcher({ compact }: OrganizationSwitcherExternalProps = {}) {
   const router = useRouter()
+  const pathname = usePathname()
   const t = useT()
   const [state, setState] = React.useState<SwitcherState>({ status: 'loading' })
   const [cookieState, setCookieState] = React.useState<SelectedCookieState>(() => readSelectedOrganizationCookie())
@@ -212,6 +215,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
         )
       const fallbackSelected = selected ?? (shouldFallbackToFirst ? findFirstSelectable(rawItems) : null)
       const isSuperAdmin = Boolean(json.isSuperAdmin)
+      const canViewAllOrganizations = Boolean(json.canViewAllOrganizations)
       if (!rawItems.length && !manage && !isSuperAdmin && tenantList.length === 0) {
         setState({ status: 'hidden' })
         if (fallbackSelected) {
@@ -227,6 +231,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
         nodes: rawItems as OrganizationMenuNode[],
         selectedId: fallbackSelected,
         canManage: manage,
+        canViewAllOrganizations,
         tenantId: resolvedTenantId,
         tenants: tenantList,
         isSuperAdmin,
@@ -285,7 +290,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
     const abortRef = { current: false }
     load({ abortRef })
     return () => { abortRef.current = true }
-  }, [load])
+  }, [load, pathname])
 
   const nodes = React.useMemo<OrganizationTreeNode[]>(() => {
     if (state.status !== 'ready') return []
@@ -306,6 +311,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
 
   const hasOptions = nodes.length > 0 && state.status === 'ready'
   const canManage = state.status === 'ready' && state.canManage
+  const showAllOption = state.status === 'ready' && state.canViewAllOrganizations
   const tenantSelectOptions = state.status === 'ready' ? state.tenants : []
   const tenantSelectValue = state.status === 'ready'
     ? state.tenantId ?? ''
@@ -349,7 +355,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
               onChange={handleChange}
               nodes={nodes}
               fetchOnMount={false}
-              includeAllOption
+              includeAllOption={showAllOption}
               aria-label={t('organizationSwitcher.label')}
               className="h-10 w-full rounded border px-2 text-sm"
             />
@@ -377,7 +383,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
             tenants={tenantSelectOptions}
             fetchOnMount={false}
             includeEmptyOption={false}
-            className="h-9 rounded border px-2 text-sm"
+            className="h-9 rounded border pl-2 pr-7 text-sm truncate"
             aria-label={t('organizationSwitcher.tenantLabel', 'Tenant')}
           />
         </>
@@ -393,9 +399,9 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
           onChange={handleChange}
           nodes={nodes}
           fetchOnMount={false}
-          includeAllOption
+          includeAllOption={showAllOption}
           aria-label={t('organizationSwitcher.label')}
-          className="h-9 rounded border px-2 text-sm"
+          className="h-9 rounded border pl-2 pr-7 text-sm truncate"
         />
       ) : (
         <span className="text-xs text-muted-foreground">{t('organizationSwitcher.empty')}</span>

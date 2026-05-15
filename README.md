@@ -6,13 +6,19 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
+[![Core Repo](https://img.shields.io/badge/core-open--mercato-24292F.svg)](https://github.com/open-mercato/open-mercato)
+[![Docs](https://img.shields.io/badge/docs-modules.openmercato.com-1F7AE0.svg)](https://modules.openmercato.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/open-mercato/official-modules/issues)
 
 A community monorepo for publishing ready-to-install `@open-mercato/*` modules that extend [Open Mercato](https://github.com/open-mercato/open-mercato) without touching its core.
 
+Install and operations docs for the published modules live at [modules.openmercato.com](https://modules.openmercato.com/).
+
 ## What this is
 
 Open Mercato ships with a module system that lets you add features to your app without forking or modifying the platform. **This repo is where the community publishes those features.**
+
+If you're looking for the main Open Mercato application and the core framework code, see the [Open Mercato core repository](https://github.com/open-mercato/open-mercato).
 
 Every module here:
 
@@ -31,10 +37,10 @@ Modules are published under `@open-mercato/*` and installed into any standalone 
 # Install and activate in one step
 yarn mercato module add @open-mercato/<module-name>
 
-# Copy the source code locally for full ownership
+# Install it and copy the source locally if you want to modify the module yourself
 yarn mercato module add @open-mercato/<module-name> --eject
 
-# If the package is already installed, copy it locally without reinstalling
+# If it is already installed, copy it locally now so you can start modifying it
 yarn mercato module enable @open-mercato/<module-name> --eject
 ```
 
@@ -69,11 +75,39 @@ Navigate to `http://localhost:3000/backend` and sign in with the credentials pri
 
 The sandbox is a full Open Mercato app wired to all workspace packages. Any package you build under `packages/` is immediately available to it — no registry publish required.
 
+## Platform Sync
+
+This repo follows one branch rule:
+
+- `develop` validates against Open Mercato `develop`
+- `main` validates against Open Mercato `latest`
+
+After switching branches, align the repo with:
+
+```bash
+yarn platform:sync
+```
+
+You can force a channel explicitly when needed:
+
+```bash
+yarn platform:sync --channel develop
+yarn platform:sync --channel latest
+```
+
+CI verifies the same state without mutating files:
+
+```bash
+yarn platform:sync --check
+```
+
+`platform:sync` rewrites only the sandbox app's exact platform pins, workspace package `devDependencies`, and `yarn.lock`. Published compatibility still lives in each package's `peerDependencies`, which must stay on stable ranges.
+
 ## 🧩 Module List
 
 | Package | Description | Author |
 |---------|-------------|--------|
-| — | *No modules yet. Be the first to contribute!* | — |
+| [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato |
 
 ## ⚡ Installing a Module
 
@@ -99,7 +133,7 @@ yarn dev
 yarn mercato module add @open-mercato/<module-name>@preview
 ```
 
-**Take local ownership of the package:**
+**Install it and copy the source locally if you want to modify the module yourself:**
 
 ```bash
 yarn mercato module add @open-mercato/<module-name> --eject
@@ -113,7 +147,7 @@ When added with `--eject`, the module is copied into your `src/modules/<moduleId
 yarn mercato module enable @open-mercato/<module-name>
 ```
 
-**If the package is already installed and you want local ownership immediately:**
+**If the package is already installed, copy it locally now so you can start modifying it:**
 
 ```bash
 yarn mercato module enable @open-mercato/<module-name> --eject
@@ -123,7 +157,7 @@ Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmerca
 
 ## 🏗️ Building a Module
 
-Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. The recommended workflow for humans and AI agents is:
+Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. Before starting module work, first complete the [Getting Started](#-getting-started) setup above. Once your local environment is ready, the recommended workflow is:
 
 ```
 spec-writing  →  scaffold-module  →  implement-spec
@@ -178,7 +212,8 @@ Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
 
 - Package name: `@open-mercato/<module-name>` (kebab-case)
 - Module ID inside the package: `snake_case` (e.g. `my_module`) — derived by replacing `-` with `_`
-- Peer dependencies: declare `@open-mercato/shared` and `@open-mercato/ui` as peer deps; pin to the same version
+- Peer dependencies: declare stable compatibility ranges for required `@open-mercato/*` host packages; do not use sync-managed exact pins there
+- Development pins: keep required `@open-mercato/*` build/test dependencies in `devDependencies`; `yarn platform:sync` owns their exact versions
 - Exports: follow the export map in `packages/test-package/package.json` exactly
 - `ejectable: true` in `index.ts` metadata if you want consumers to be able to take source ownership
 - Every module MUST use UMES extension points — it MUST NOT modify core packages
@@ -186,7 +221,7 @@ Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
 ## 🔗 Resources
 
 - [Open Mercato core repo](https://github.com/open-mercato/open-mercato)
-- [Documentation](https://docs.openmercato.com/)
+- [Official modules documentation](https://modules.openmercato.com/)
 - [Module development guide](https://docs.openmercato.com/framework/modules/overview)
 - [CLI reference](https://docs.openmercato.com/cli/overview)
 - [Discord community](https://discord.gg/f4qwPtJ3qA)

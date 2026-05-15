@@ -1,0 +1,44 @@
+name: Snapshot
+
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-snapshot:
+    name: Publish develop snapshots
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install monorepo dependencies
+        run: yarn install --immutable
+
+      - name: Publish develop snapshots
+        env:
+          CI: true
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION_PRERELEASE_LABEL: develop
+          CANARY_DIST_TAG: develop
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:10}"
+          export PREVIEW_VERSION_ID="${GITHUB_RUN_NUMBER}.${SHORT_SHA}"
+
+          bash scripts/publish-canary.sh

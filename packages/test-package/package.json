@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/test-package",
-  "version": "0.1.2",
+  "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
@@ -52,18 +52,15 @@
       "default": "./dist/*/*/*/*.js"
     }
   },
-  "dependencies": {
-    "@open-mercato/ui": "0.4.7"
-  },
   "peerDependencies": {
-    "@open-mercato/shared": "0.4.7",
-    "@open-mercato/ui": "0.4.7",
+    "@open-mercato/shared": ">=0.4.8 <0.5.0",
+    "@open-mercato/ui": ">=0.4.8 <0.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/shared": "0.4.7",
-    "@open-mercato/ui": "0.4.7",
+    "@open-mercato/shared": "0.4.9-develop.1013.aa3a9dea92",
+    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
