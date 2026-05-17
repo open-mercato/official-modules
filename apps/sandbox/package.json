@@ -52,6 +52,7 @@
     "@open-mercato/events": "0.6.0",
     "@open-mercato/gateway-stripe": "0.6.0",
     "@open-mercato/onboarding": "0.6.0",
+    "@open-mercato/pdf-generators": "workspace:*",
     "@open-mercato/queue": "0.6.0",
     "@open-mercato/scheduler": "0.6.0",
     "@open-mercato/search": "0.6.0",

@@ -34,6 +34,7 @@ Thumbs.db
 *.tgz
 .cache/
 tmp/
+data/cache.db
 
 # debug
 *.log
