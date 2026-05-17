@@ -1,0 +1,80 @@
+{
+  "name": "@open-mercato/pdf-generators",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Generates PDF sales documents.",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node watch.mjs",
+    "test": "jest --config jest.config.cjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./*.ts": {
+      "types": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "./*.tsx": {
+      "types": "./src/*.tsx",
+      "default": "./dist/*.js"
+    },
+    "./*.json": "./src/*.json",
+    "./*": {
+      "types": [
+        "./src/*.ts",
+        "./src/*.tsx"
+      ],
+      "default": "./dist/*.js"
+    },
+    "./*/*.json": "./src/*/*.json",
+    "./*/*": {
+      "types": [
+        "./src/*/*.ts",
+        "./src/*/*.tsx"
+      ],
+      "default": "./dist/*/*.js"
+    },
+    "./*/*/*.json": "./src/*/*/*.json",
+    "./*/*/*": {
+      "types": [
+        "./src/*/*/*.ts",
+        "./src/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*.js"
+    },
+    "./*/*/*/*.json": "./src/*/*/*/*.json",
+    "./*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*.ts",
+        "./src/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*.js"
+    }
+  },
+  "dependencies": {
+    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
+    "@react-pdf/renderer": "4.3.0"
+  },
+  "peerDependencies": {
+    "@open-mercato/shared": "0.4.9-develop.1013.aa3a9dea92",
+    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@open-mercato/shared": "0.6.2-develop.3330.1.8ad2b3b84c",
+    "@open-mercato/ui": "0.6.2-develop.3330.1.8ad2b3b84c",
+    "@types/jest": "^30.0.0",
+    "esbuild": "^0.25.0",
+    "glob": "^13.0.6",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
