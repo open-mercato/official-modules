@@ -6,6 +6,7 @@ A community module for generating and previewing PDF documents (invoices, sales 
 
 ## Contents
 
+- [Screenshots](#screenshots)
 - [Using the module](#using-the-module)
   - [Installation](#installation)
   - [Registering templates from another module](#registering-templates-from-another-module)
@@ -15,6 +16,32 @@ A community module for generating and previewing PDF documents (invoices, sales 
   - [Running locally](#running-locally)
   - [Reference implementation](#reference-implementation)
   - [Package structure](#package-structure)
+
+---
+
+## Screenshots
+
+**Template registry — admin page**
+
+Lists all registered templates grouped by origin (internal built-ins vs. external templates registered by other modules).
+
+![Available templates admin page](screenshots/screen-1.png)
+
+**PDF tab on an Order detail page**
+
+The tab appears automatically — no widget registration needed in your module.
+
+![PDF tab on order detail](screenshots/screen-2.png)
+
+**PDF tab on a Quote detail page**
+
+![PDF tab on quote detail](screenshots/screen-4.png)
+
+**Document preview dialog**
+
+Clicking a template card opens a full-screen preview with a Download PDF button.
+
+![Document preview dialog](screenshots/screen-3.png)
 
 ---
 
