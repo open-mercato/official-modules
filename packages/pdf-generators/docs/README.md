@@ -1,12 +1,15 @@
 # @open-mercato/pdf-generators
 
-A community module for generating and previewing PDF documents (invoices, sales offers, shipment labels) inside Open Mercato. It ships two built-in templates (order invoice, sales offer) and exposes a public extension API so any other module can register its own templates with zero changes to this package.
+A framework for generating and previewing PDF documents from any Open Mercato module. It provides the rendering infrastructure, a global template registry, a preview/download UI, and an extension API — any module can register its own templates without touching this package.
+
+The built-in templates (order invoice, sales offer) are included as working examples and a starting point, not as the primary use case.
 
 ---
 
 ## Contents
 
 - [Screenshots](#screenshots)
+- [Built-in templates](#built-in-templates)
 - [Using the module](#using-the-module)
   - [Installation](#installation)
   - [Registering templates from another module](#registering-templates-from-another-module)
@@ -42,6 +45,21 @@ The tab appears automatically — no widget registration needed in your module.
 Clicking a template card opens a full-screen preview with a Download PDF button.
 
 ![Document preview dialog](screenshots/screen-3.png)
+
+---
+
+## Built-in templates
+
+The package ships two templates out of the box. They serve as working examples of the extension API and cover the most common sales document use cases.
+
+| Template | ID | Resource | Document type |
+|----------|----|----------|---------------|
+| Order Invoice | `order-invoice` | `sales.order` | invoice |
+| Sales Offer | `sales-offer` | `sales.quote` | offer |
+
+Both templates use the shared Inter font and design tokens from `templates/shared/theme.ts`. The PDF tab that renders them on Order and Quote detail pages is owned by the core sales module — this package only provides the templates and the rendering infrastructure.
+
+To replace or extend them, implement your own `BaseDocumentService` and register it via a `pdf-generators.ts` convention file. The built-in templates remain available alongside yours unless you explicitly filter them out.
 
 ---
 

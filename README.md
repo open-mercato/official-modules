@@ -108,7 +108,7 @@ yarn platform:sync --check
 | Package | Description | Author |
 |---------|-------------|--------|
 | [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato |
-| [`@open-mercato/pdf-generators`](packages/pdf-generators) | PDF document generation — built-in order invoice and sales offer templates, preview and download UI, and an extension API for registering custom templates from any module | Open Mercato |
+| [`@open-mercato/pdf-generators`](packages/pdf-generators) | PDF document generation — a framework for generating and previewing PDF documents from any module. Ships with built-in order invoice and sales offer templates as examples, and exposes an extension API for registering custom templates | Open Mercato |
 
 ## ⚡ Installing a Module
 
