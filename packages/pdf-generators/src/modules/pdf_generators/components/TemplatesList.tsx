@@ -47,7 +47,7 @@ export function TemplatesList({ record, filter, resource }: TemplatesListProps) 
 
   return (
     <>
-      <h2 className="mb-4 text-sm font-semibold">{t('pdf_generators.templates.title', 'Dostępne szablony PDF')}</h2>
+      <h2 className="mb-4 text-sm font-semibold">{t('pdf_generators.templates.title', 'Available PDF templates')}</h2>
       <TemplatesListView templates={templates} onSelect={setSelected} />
 
       {selected && (

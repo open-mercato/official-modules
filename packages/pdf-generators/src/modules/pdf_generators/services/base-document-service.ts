@@ -89,7 +89,7 @@ export abstract class BaseDocumentService {
       tags: template.tags,
       note: template.note,
       fromRecord: (data: unknown) => this.toTemplateData({ data }),
-      filename: (data: Record<string, unknown>) => this.filename({ data }),
+      filename: (input: { data: Record<string, unknown> }) => this.filename(input),
       fetchData: (input: { data: unknown }, ctx: { container: AppContainer }) => this.fetchData(input, ctx),
       load: template.load,
     }))

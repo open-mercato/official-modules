@@ -59,7 +59,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
 
       if (cancelled) return
       if (apiError || !result) {
-        setError(t('pdf_generators.preview.error', 'Nie udało się wygenerować dokumentu.'))
+        setError(t('pdf_generators.preview.error', 'Failed to generate document.'))
         return
       }
       objectUrl = URL.createObjectURL(result)
@@ -67,7 +67,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
     }
 
     run().catch(() => {
-      if (!cancelled) setError(t('pdf_generators.preview.error', 'Nie udało się wygenerować dokumentu.'))
+      if (!cancelled) setError(t('pdf_generators.preview.error', 'Failed to generate document.'))
     }).finally(() => { if (!cancelled) setLoading(false) })
 
     return () => {
@@ -102,7 +102,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="flex h-screen w-screen max-w-none sm:h-screen sm:max-w-none sm:rounded-none flex-col gap-0 p-0 translate-x-0 translate-y-0 sm:translate-x-0 sm:translate-y-0 sm:inset-0 sm:top-0 sm:left-0">
         <DialogHeader className="border-b px-4 py-4">
-          <DialogTitle>{t('pdf_generators.preview.title', 'Podgląd dokumentu')}</DialogTitle>
+          <DialogTitle>{t('pdf_generators.preview.title', 'Document preview')}</DialogTitle>
           <DialogDescription>{template.label}</DialogDescription>
         </DialogHeader>
 
@@ -124,8 +124,8 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
             <Button onClick={handleDownload} disabled={loading || downloading} className="w-full">
               <Download className="mr-2 h-4 w-4" />
               {downloading
-                ? t('pdf_generators.generate.generating', 'Generowanie...')
-                : t('pdf_generators.generate.button', 'Pobierz PDF')}
+                ? t('pdf_generators.generate.generating', 'Generating...')
+                : t('pdf_generators.generate.button', 'Download PDF')}
             </Button>
           </div>
         </div>

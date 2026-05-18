@@ -6492,14 +6492,20 @@ __metadata:
     "@open-mercato/ui": "npm:0.6.2-develop.3330.1.8ad2b3b84c"
     "@react-pdf/renderer": "npm:4.3.0"
     "@types/jest": "npm:^30.0.0"
+    "@types/react": "npm:^19.0.0"
     esbuild: "npm:^0.25.0"
     glob: "npm:^13.0.6"
     jest: "npm:^30.2.0"
+    react: "npm:^19.0.0"
+    react-dom: "npm:^19.0.0"
     ts-jest: "npm:^29.4.6"
   peerDependencies:
-    "@open-mercato/shared": 0.4.9-develop.1013.aa3a9dea92
-    "@open-mercato/ui": 0.4.9-develop.1013.aa3a9dea92
+    "@open-mercato/shared": ^0.6.2
+    "@open-mercato/ui": ^0.6.2
+    "@types/react": ^19.0.0
     react: ^19.0.0
+    react-dom: ^19.0.0
+    react-is: ^19.0.0
   languageName: unknown
   linkType: soft
 
@@ -9997,7 +10003,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:*, @types/react@npm:>=16.9.11, @types/react@npm:^19.2.14":
+"@types/react@npm:*, @types/react@npm:>=16.9.11, @types/react@npm:^19.0.0, @types/react@npm:^19.2.14":
   version: 19.2.14
   resolution: "@types/react@npm:19.2.14"
   dependencies:
@@ -23700,6 +23706,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"react-dom@npm:^19.0.0":
+  version: 19.2.6
+  resolution: "react-dom@npm:19.2.6"
+  dependencies:
+    scheduler: "npm:^0.27.0"
+  peerDependencies:
+    react: ^19.2.6
+  checksum: 10/695122e37dec3460311231ff1f9a96368d74457d4ccf60010eaebc08c3e1c47b054c9267b40d98c689ae99d0c29a340acacfd405016a954a4f11613146191e68
+  languageName: node
+  linkType: hard
+
 "react-email@npm:^6.0.0":
   version: 6.1.1
   resolution: "react-email@npm:6.1.1"
@@ -24033,6 +24050,13 @@ __metadata:
   dependencies:
     loose-envify: "npm:^1.1.0"
   checksum: 10/261137d3f3993eaa2368a83110466fc0e558bc2c7f7ae7ca52d94f03aac945f45146bd85e5f481044db1758a1dbb57879e2fcdd33924e2dde1bdc550ce73f7bf
+  languageName: node
+  linkType: hard
+
+"react@npm:^19.0.0":
+  version: 19.2.6
+  resolution: "react@npm:19.2.6"
+  checksum: 10/205f0db93bd6c6485f94471d1c3437ae1d410f322297c76186fe4f658f88a6786bb0805e3cf8f330f24d1daa923b6b610ec63960d2461e9201bca64ca8361db9
   languageName: node
   linkType: hard
 

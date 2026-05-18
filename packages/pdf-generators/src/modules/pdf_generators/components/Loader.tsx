@@ -9,7 +9,7 @@ export function Loader() {
   return (
     <div className="flex flex-col items-center gap-2 text-muted-foreground">
       <Spinner />
-      <p className="text-sm">{t('pdf_generators.templates.loading', 'Ładowanie danych...')}</p>
+      <p className="text-sm">{t('pdf_generators.templates.loading', 'Loading data...')}</p>
     </div>
   )
 }

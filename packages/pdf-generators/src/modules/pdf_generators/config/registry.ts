@@ -10,5 +10,5 @@ templateRegistry.registerInternal([
   ...ordersService.getEntries(),
 ])
 
-/** All built-in template IDs — exported for TemplateId type derivation only, not intended for runtime use. */
+/** Built-in template IDs — for TemplateId type derivation only, not for runtime use. */
 export const REGISTRY = [...QUOTES_TEMPLATE_IDS, ...ORDERS_TEMPLATE_IDS] as const
