@@ -1,5 +1,6 @@
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { NextResponse } from 'next/server'
 import '../../../config/registry'
 import { renderPdf } from '../../../lib/render-pdf'
@@ -19,6 +20,7 @@ export const metadata = {
  */
 export async function POST(request: Request) {
   const container = await createRequestContainer()
+  const auth = await getAuthFromRequest(request)
 
   let body: {
     template_id: TemplateId
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
   // TODO Phase 5: persist PdfGeneratedDocument + emit pdf_generators.document.generated event
   // const { resource_kind, resource_id, resource_label } = body
 
-  return renderPdf({ template_id, data }, { container }, 'generate')
+  return renderPdf({ template_id, data }, { container, auth }, 'generate')
 }
 
 export const openApi: OpenApiRouteDoc = {

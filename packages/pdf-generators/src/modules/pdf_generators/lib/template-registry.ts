@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import type { TemplateMeta, TemplateEntry, TemplateRegistry as TemplateRegistryInterface, LoadedTemplate } from './interfaces'
 
 /**
@@ -70,10 +71,10 @@ class TemplateRegistry implements TemplateRegistryInterface {
    * @param data - Raw data from the widget context
    * @param container - Request-scoped DI container passed to fetchData
    */
-  private async enrich({ id, data }: { id: string; data: unknown }, { container }: { container: AppContainer }): Promise<unknown> {
+  private async enrich({ id, data }: { id: string; data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const entry = this.findTemplate(id)
     if (!entry.fetchData) return data
-    return entry.fetchData({ data }, { container })
+    return entry.fetchData({ data }, { container, auth })
   }
 
   /**
@@ -84,9 +85,9 @@ class TemplateRegistry implements TemplateRegistryInterface {
    * @param container - Request-scoped DI container passed to fetchData
    * @throws Error if template ID is not registered
    */
-  async load({ id, data: rawData }: { id: string; data: unknown }, { container }: { container: AppContainer }): Promise<LoadedTemplate> {
+  async load({ id, data: rawData }: { id: string; data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<LoadedTemplate> {
     const entry = this.findTemplate(id)
-    const enriched = await this.enrich({ id, data: rawData }, { container })
+    const enriched = await this.enrich({ id, data: rawData }, { container, auth })
     const component = await entry.load()
     const data = entry.fromRecord(enriched)
     const filename = entry.filename({ data })

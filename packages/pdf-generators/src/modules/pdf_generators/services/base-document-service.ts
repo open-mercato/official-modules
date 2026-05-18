@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import type { TemplateEntry } from '../lib/interfaces'
 
 /**
@@ -59,7 +60,7 @@ export abstract class BaseDocumentService {
    * @param container - Request-scoped Awilix DI container
    * @returns Enriched record with related data attached
    */
-  async fetchData(input: { data: unknown }, _ctx: { container: AppContainer }): Promise<unknown> {
+  async fetchData(input: { data: unknown }, _ctx: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     return input.data
   }
 
@@ -90,7 +91,7 @@ export abstract class BaseDocumentService {
       note: template.note,
       fromRecord: (data: unknown) => this.toTemplateData({ data }),
       filename: (input: { data: Record<string, unknown> }) => this.filename(input),
-      fetchData: (input: { data: unknown }, ctx: { container: AppContainer }) => this.fetchData(input, ctx),
+      fetchData: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => this.fetchData(input, ctx),
       load: template.load,
     }))
   }

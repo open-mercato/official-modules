@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from './base-document-service'
 import { formatDate } from '../utils/formatDate'
@@ -71,7 +72,7 @@ export class OrdersDocumentService extends BaseDocumentService {
    * @param record - Widget record containing at minimum { id }
    * @param container - Request-scoped Awilix DI container
    */
-  override async fetchData({ data }: { data: unknown }, { container }: { container: AppContainer }): Promise<unknown> {
+  override async fetchData({ data }: { data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const { id } = data as { id: string }
     if (!id) return data
 
@@ -79,7 +80,11 @@ export class OrdersDocumentService extends BaseDocumentService {
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
       const SalesOrder = container.resolve('SalesOrder')
 
-      const order = await findOneWithDecryption(em, SalesOrder, { id } as any, { populate: ['lines'] } as any) as any
+      const order = await findOneWithDecryption(em, SalesOrder, {
+        id,
+        ...(auth?.tenantId ? { tenantId: auth.tenantId } : {}),
+        ...(auth?.orgId ? { organizationId: auth.orgId } : {}),
+      } as any, { populate: ['lines'] } as any) as any
       if (!order) return data
 
       const lines: OrderLineItem[] = (order.lines?.getItems?.() ?? []).map((line: any) => ({

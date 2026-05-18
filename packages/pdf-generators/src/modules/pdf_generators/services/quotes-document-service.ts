@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from './base-document-service'
 import { formatDate } from '../utils/formatDate'
@@ -71,7 +72,7 @@ export class QuotesDocumentService extends BaseDocumentService {
    * @param input - Widget record containing at minimum { id }
    * @param ctx - Request-scoped Awilix DI container
    */
-  override async fetchData({ data }: { data: unknown }, { container }: { container: AppContainer }): Promise<unknown> {
+  override async fetchData({ data }: { data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const { id } = data as { id: string }
     if (!id) return data
 
@@ -81,12 +82,19 @@ export class QuotesDocumentService extends BaseDocumentService {
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
       const conn = (em as any).getConnection() as { execute: (sql: string, params?: unknown[]) => Promise<any[]> }
 
+      const tenantId = auth?.tenantId ?? null
+      const organizationId = auth?.orgId ?? null
+
       const [quote] = await conn.execute(
         `SELECT id, quote_number, currency_code, valid_from, valid_until, comments,
                 grand_total_net_amount, grand_total_gross_amount, tax_total_amount,
                 customer_entity_id, billing_address_snapshot
-         FROM sales_quotes WHERE id = ? LIMIT 1`,
-        [id]
+         FROM sales_quotes
+         WHERE id = ?
+           AND (tenant_id = ? OR ? IS NULL)
+           AND (organization_id = ? OR ? IS NULL)
+         LIMIT 1`,
+        [id, tenantId, tenantId, organizationId, organizationId]
       )
       if (!quote) return data
 
@@ -94,7 +102,7 @@ export class QuotesDocumentService extends BaseDocumentService {
         `SELECT id, name, description, quantity, unit_price_net, unit_price_gross,
                 total_net_amount, total_gross_amount, tax_rate, currency_code
          FROM sales_quote_lines WHERE quote_id = ? ORDER BY line_number ASC`,
-        [id]
+        [quote.id]
       )
 
       const lines: QuoteLineItem[] = rows.map((row) => ({

@@ -1,5 +1,6 @@
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { NextResponse } from 'next/server'
 import '../../../config/registry'
 import { renderPdf } from '../../../lib/render-pdf'
@@ -19,6 +20,7 @@ export const metadata = {
  */
 export async function POST(request: Request) {
   const container = await createRequestContainer()
+  const auth = await getAuthFromRequest(request)
 
   let body: { template_id: TemplateId; data: unknown }
 
@@ -34,7 +36,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing template_id or data' }, { status: 400 })
   }
 
-  return renderPdf({ template_id, data }, { container }, 'preview')
+  return renderPdf({ template_id, data }, { container, auth }, 'preview')
 }
 
 export const openApi: OpenApiRouteDoc = {

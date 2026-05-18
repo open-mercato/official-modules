@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 
 /** UI-facing metadata for a PDF template — used in listings and filtering. */
 export interface TemplateMeta {
@@ -17,7 +18,7 @@ export interface TemplateRegistryEntry {
   fromRecord: (data: unknown) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
   filename: (input: { data: Record<string, unknown> }) => string // derives the PDF filename from normalized data
   load: () => Promise<React.ComponentType<{ data: Record<string, unknown> }>> // lazy-loaded React-PDF component
-  fetchData?: (input: { data: unknown }, ctx: { container: AppContainer }) => Promise<unknown> // server-side hook; called before normalization to fetch related data
+  fetchData?: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => Promise<unknown> // server-side hook; called before normalization to fetch related data
 }
 
 /** Full template descriptor — UI metadata combined with runtime handlers. */
@@ -42,5 +43,5 @@ export interface TemplateRegistry {
   registerInternal(entries: TemplateEntry[]): void
   registerExternal(entries: TemplateEntry[]): void
   listTemplates(): { internal: TemplateMeta[]; external: TemplateMeta[] }
-  load(input: { id: string; data: unknown }, ctx: { container: AppContainer }): Promise<LoadedTemplate>
+  load(input: { id: string; data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }): Promise<LoadedTemplate>
 }
