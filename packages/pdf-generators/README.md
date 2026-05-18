@@ -4,8 +4,6 @@
 
 A framework for generating and previewing PDF documents from any Open Mercato module. It provides the rendering infrastructure, a global template registry, a preview/download UI, and an extension API — any module can register its own templates without touching this package.
 
-The built-in templates (order invoice, sales offer) are included as working examples and a starting point, not as the primary use case.
-
 ---
 
 ## Requirements
