@@ -1,0 +1,45 @@
+# Installation
+
+## Requirements
+
+- Open Mercato `^0.5.0`
+- `react` `^19` (peer dependency — provided by the host application)
+
+---
+
+## Step-by-step
+
+**1. Add the package** to your Open Mercato application:
+
+```bash
+yarn mercato module add @open-mercato/pdf-generators
+```
+
+**2. Register the module** in `src/modules.ts`:
+
+```ts
+{ id: 'pdf_generators', from: '@open-mercato/pdf-generators' }
+```
+
+**3. Regenerate** the module registry so the built-in templates are picked up:
+
+```bash
+yarn generate
+```
+
+**4. Grant permissions** — new features are automatically added to default roles on the next `yarn generate` run. To sync existing tenants manually:
+
+```bash
+yarn mercato auth sync-role-acls
+```
+
+---
+
+## Verification
+
+Navigate to a sales order or quote detail page. A **PDF** tab appears automatically. Clicking any template card opens a preview; clicking **Download PDF** streams the file.
+
+If the tab does not appear, confirm that:
+- The module is listed in `src/modules.ts`
+- `yarn generate` was run after registration
+- The current user's role has the `pdf_generators.view` feature
