@@ -147,15 +147,3 @@ yarn generate
 
 The template now appears in the **PDF** tab on all sales order detail pages.
 
----
-
-## Dependencies
-
-| Package | Role |
-|---------|------|
-| `@react-pdf/renderer` `4.x` | Renders React component trees to PDF binary |
-| `@open-mercato/shared` | DI container types, shared utilities |
-| `@open-mercato/ui` | Design system components used in `TemplatesList` and `PreviewPanel` |
-| `react` `^19` | Peer dependency — provided by the host application |
-
-Font files (Inter Regular, Medium, SemiBold) are bundled inside the package and registered automatically via the `theme` side-effect import.
