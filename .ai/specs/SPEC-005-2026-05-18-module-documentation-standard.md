@@ -156,6 +156,15 @@ Contains real, shortened content. Standard sections:
 
 ---
 
+## Requirements
+
+| Dependency | Version |
+|------------|---------|
+| Open Mercato | `^<x.y.z>` |
+| `react` | `^19.0.0` |
+
+---
+
 ## Screenshots
 
 <At least 1 screenshot if the module has UI — referenced from docs/screenshots/>
@@ -188,6 +197,8 @@ MIT
 
 Target size: **roughly 50–150 lines**. If the "Quick start" section grows beyond one example — move it to `docs/usage.md` and leave only a link.
 
+The Open Mercato version in Requirements must match the stable range declared in `peerDependencies` in `package.json` — never a develop pin (e.g. `^0.6.2`, not `0.6.2-develop.3330.xxx`).
+
 ---
 
 ## Required File Contents
@@ -196,10 +207,11 @@ Target size: **roughly 50–150 lines**. If the "Quick start" section grows beyo
 
 Required elements:
 
-1. **Requirements** — Open Mercato version, peer dependencies (if non-obvious)
-2. **Step-by-step installation** — `mercato module add`, registration in `src/modules.ts`, `yarn generate`, migrations, verification
-3. **Permissions** — if the module adds new ACL features, how to sync them with roles
-4. **Verification** — what to check to confirm the module is working
+1. **Step-by-step installation** — `mercato module add`, registration in `src/modules.ts`, `yarn generate`, migrations, verification
+2. **Permissions** — if the module adds new ACL features, how to sync them with roles
+3. **Verification** — what to check to confirm the module is working
+
+> Requirements (Open Mercato version, `react`) live in the `## Requirements` section of the root `README.md` — do not repeat them here.
 
 ### `docs/usage.md`
 
@@ -326,3 +338,5 @@ For `carrier-inpost`:
 - `packages/<name>/README.md` contains real content, not just navigation
 - Added `skill/SKILL.md` requirement for modules with extensible APIs
 - CI blocks PRs when required files are missing
+- Added `## Requirements` section to `README.md` template (Open Mercato version + react) — derived from stable `peerDependencies` range, not a develop pin
+- Removed requirements from `docs/installation.md` — single source of truth is the root README
