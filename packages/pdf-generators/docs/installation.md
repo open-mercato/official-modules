@@ -2,8 +2,7 @@
 
 ## Requirements
 
-- Open Mercato `^0.5.0`
-- `react` `^19` (peer dependency — provided by the host application)
+- `react` `^19.0.0` (peer dependency — provided by the host application)
 
 ---
 
