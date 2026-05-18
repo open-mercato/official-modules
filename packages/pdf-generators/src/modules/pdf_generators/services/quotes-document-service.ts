@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from './base-document-service'
 import { formatDate } from '../utils/formatDate'
 
@@ -77,8 +78,8 @@ export class QuotesDocumentService extends BaseDocumentService {
     try {
       // SalesQuote is not in DI — use raw SQL, but skip encrypted columns (customerSnapshot, billingAddressSnapshot)
       // and resolve customer data separately via CustomerEntity which is in DI
-      const em = container.resolve('em') as any
-      const conn = em.getConnection() as { execute: (sql: string, params?: unknown[]) => Promise<any[]> }
+      const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
+      const conn = (em as any).getConnection() as { execute: (sql: string, params?: unknown[]) => Promise<any[]> }
 
       const [quote] = await conn.execute(
         `SELECT id, quote_number, currency_code, valid_from, valid_until, comments,
@@ -117,7 +118,7 @@ export class QuotesDocumentService extends BaseDocumentService {
         const CustomerEntity = container.resolve('CustomerEntity')
         const CustomerAddress = container.resolve('CustomerAddress')
 
-        const customer = await em.findOne(CustomerEntity, { id: quote.customer_entity_id }, { populate: ['personProfile', 'companyProfile'] }) as any
+        const customer = await findOneWithDecryption(em, CustomerEntity, { id: quote.customer_entity_id } as any, { populate: ['personProfile', 'companyProfile'] } as any) as any
         if (customer) {
           customerSnapshot = {
             customer: {
@@ -135,7 +136,7 @@ export class QuotesDocumentService extends BaseDocumentService {
             contact: null,
           }
 
-          const address = await em.findOne(CustomerAddress, { entity: customer.id, isPrimary: true }) as any
+          const address = await findOneWithDecryption(em, CustomerAddress, { entity: customer.id, isPrimary: true } as any) as any
           if (address) {
             billingAddressSnapshot = {
               addressLine1: address.addressLine1,

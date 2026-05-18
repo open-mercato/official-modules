@@ -1,4 +1,5 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from './base-document-service'
 import { formatDate } from '../utils/formatDate'
 
@@ -75,10 +76,10 @@ export class OrdersDocumentService extends BaseDocumentService {
     if (!id) return data
 
     try {
-      const em = container.resolve('em') as { findOne: (entity: unknown, where: unknown, options?: unknown) => Promise<unknown> }
+      const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
       const SalesOrder = container.resolve('SalesOrder')
 
-      const order = await em.findOne(SalesOrder, { id }, { populate: ['lines'] }) as any
+      const order = await findOneWithDecryption(em, SalesOrder, { id } as any, { populate: ['lines'] } as any) as any
       if (!order) return data
 
       const lines: OrderLineItem[] = (order.lines?.getItems?.() ?? []).map((line: any) => ({
@@ -99,7 +100,7 @@ export class OrdersDocumentService extends BaseDocumentService {
       // fall back to the customer's primary address when the order has no billing address snapshot
       if (!billingAddressSnapshot && order.customerEntityId) {
         const CustomerAddress = container.resolve('CustomerAddress')
-        const address = await em.findOne(CustomerAddress, { entity: order.customerEntityId, isPrimary: true }) as any
+        const address = await findOneWithDecryption(em, CustomerAddress, { entity: order.customerEntityId, isPrimary: true } as any) as any
         if (address) {
           billingAddressSnapshot = {
             addressLine1: address.addressLine1,
