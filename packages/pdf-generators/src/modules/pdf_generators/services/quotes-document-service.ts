@@ -75,6 +75,7 @@ export class QuotesDocumentService extends BaseDocumentService {
   override async fetchData({ data }: { data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const { id } = data as { id: string }
     if (!id) return data
+    if (!auth?.tenantId || !auth?.orgId) return data
 
     try {
       // SalesQuote is not in DI — use raw SQL, but skip encrypted columns (customerSnapshot, billingAddressSnapshot)
@@ -82,19 +83,17 @@ export class QuotesDocumentService extends BaseDocumentService {
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
       const conn = (em as any).getConnection() as { execute: (sql: string, params?: unknown[]) => Promise<any[]> }
 
-      const tenantId = auth?.tenantId ?? null
-      const organizationId = auth?.orgId ?? null
+      const tenantId = auth.tenantId
+      const organizationId = auth.orgId
 
       const [quote] = await conn.execute(
         `SELECT id, quote_number, currency_code, valid_from, valid_until, comments,
                 grand_total_net_amount, grand_total_gross_amount, tax_total_amount,
                 customer_entity_id, billing_address_snapshot
          FROM sales_quotes
-         WHERE id = ?
-           AND (tenant_id = ? OR ? IS NULL)
-           AND (organization_id = ? OR ? IS NULL)
+         WHERE id = ? AND tenant_id = ? AND organization_id = ?
          LIMIT 1`,
-        [id, tenantId, tenantId, organizationId, organizationId]
+        [id, tenantId, organizationId]
       )
       if (!quote) return data
 

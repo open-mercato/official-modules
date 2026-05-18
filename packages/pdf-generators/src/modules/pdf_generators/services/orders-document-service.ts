@@ -75,6 +75,7 @@ export class OrdersDocumentService extends BaseDocumentService {
   override async fetchData({ data }: { data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const { id } = data as { id: string }
     if (!id) return data
+    if (!auth?.tenantId || !auth?.orgId) return data
 
     try {
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
@@ -82,8 +83,8 @@ export class OrdersDocumentService extends BaseDocumentService {
 
       const order = await findOneWithDecryption(em, SalesOrder, {
         id,
-        ...(auth?.tenantId ? { tenantId: auth.tenantId } : {}),
-        ...(auth?.orgId ? { organizationId: auth.orgId } : {}),
+        tenantId: auth.tenantId,
+        organizationId: auth.orgId,
       } as any, { populate: ['lines'] } as any) as any
       if (!order) return data
 
