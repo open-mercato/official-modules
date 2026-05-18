@@ -74,6 +74,7 @@ export class QuotesDocumentService extends BaseDocumentService {
    */
   override async fetchData({ data }: { data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const { id } = data as { id: string }
+
     if (!id) return data
     if (!auth?.tenantId || !auth?.orgId) throw new Error('[QuotesDocumentService] Missing auth context — tenantId and orgId are required to fetch quote data.')
 
