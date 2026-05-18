@@ -1,11 +1,5 @@
 # Installation
 
-## Requirements
-
-- `react` `^19.0.0` (peer dependency — provided by the host application)
-
----
-
 ## Step-by-step
 
 **1. Add the package** to your Open Mercato application:
