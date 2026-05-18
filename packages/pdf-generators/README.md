@@ -1,6 +1,5 @@
 # @open-mercato/pdf-generators
 
-[![npm](https://img.shields.io/npm/v/@open-mercato/pdf-generators)](https://www.npmjs.com/package/@open-mercato/pdf-generators)
 
 A framework for generating and previewing PDF documents from any Open Mercato module. It provides the rendering infrastructure, a global template registry, a preview/download UI, and an extension API — any module can register its own templates without touching this package.
 
