@@ -57,12 +57,12 @@
     }
   },
   "dependencies": {
-    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
+    "@open-mercato/ui": "0.6.2-develop.3330.1.8ad2b3b84c",
     "@react-pdf/renderer": "4.3.0"
   },
   "peerDependencies": {
-    "@open-mercato/shared": "0.4.9-develop.1013.aa3a9dea92",
-    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
+    "@open-mercato/shared": "^0.6.2",
+    "@open-mercato/ui": "^0.6.2",
     "react": "^19.0.0"
   },
   "devDependencies": {
