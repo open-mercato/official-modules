@@ -10,10 +10,13 @@ module.exports = {
   },
   transform: {
     '^.+\\.(t|j)sx?$': [
-      'ts-jest',
+      '<rootDir>/../../scripts/jest-mikroorm-transformer.cjs',
       {
         tsconfig: {
           jsx: 'react-jsx',
+          module: 'commonjs',
+          target: 'es2022',
+          esModuleInterop: true,
           allowJs: true,
           experimentalDecorators: true,
           emitDecoratorMetadata: true,
@@ -21,7 +24,7 @@ module.exports = {
       },
     ],
   },
-  transformIgnorePatterns: ['node_modules/(?!(@mikro-orm)/)'],
+  transformIgnorePatterns: ['node_modules/(?!(@mikro-orm|@open-mercato)/)'],
   testMatch: ['<rootDir>/src/**/__tests__/**/*.test.(ts|tsx)'],
   passWithNoTests: true,
 }

@@ -13,6 +13,7 @@ describe('FieldTypeRegistry — v1 core types', () => {
     'integer',
     'boolean',
     'yes_no',
+    'yes_no_buttons',
     'date',
     'datetime',
     'select_one',
