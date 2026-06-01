@@ -125,9 +125,9 @@ export default function FormAnalyticsPage({ params }: { params?: { id?: string }
           </div>
 
           {isLoading ? (
-            <LoadingMessage message={t('forms.analytics.loading', { fallback: 'Loading analytics…' })} />
+            <LoadingMessage label={t('forms.analytics.loading', { fallback: 'Loading analytics…' })} />
           ) : error ? (
-            <ErrorMessage message={error} />
+            <ErrorMessage label={error} />
           ) : analytics ? (
             <>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

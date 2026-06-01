@@ -12,6 +12,7 @@
   "platformPackages": [
     "@open-mercato/ai-assistant",
     "@open-mercato/cache",
+    "@open-mercato/checkout",
     "@open-mercato/cli",
     "@open-mercato/content",
     "@open-mercato/core",
@@ -23,7 +24,8 @@
     "@open-mercato/search",
     "@open-mercato/shared",
     "@open-mercato/sync-akeneo",
-    "@open-mercato/ui"
+    "@open-mercato/ui",
+    "@open-mercato/webhooks"
   ],
   "sandboxManifest": "apps/sandbox/package.json",
   "workspaceGlob": "packages/*/package.json"

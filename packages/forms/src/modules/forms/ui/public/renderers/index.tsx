@@ -40,6 +40,7 @@ import {
   type RunnerFieldNode,
   type RunnerFieldRendererProps,
   type RunnerFileAttachmentRef,
+  type RunnerLocaleMap,
   type RunnerOption,
 } from '../types'
 

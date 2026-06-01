@@ -147,6 +147,7 @@ export class AttachmentService {
       filename: args.filename,
       sizeBytes,
       uploadedBy: args.uploadedBy ?? null,
+      uploadedAt: new Date(),
     })
     em.persist(attachment)
     await em.flush()
