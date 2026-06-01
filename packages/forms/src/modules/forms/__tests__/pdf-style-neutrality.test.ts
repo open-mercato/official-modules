@@ -244,11 +244,41 @@ describe('PDF/export neutrality (R-CS-5 / D9)', () => {
   })
 
   it('renders byte-identical PDF content for themed vs stripped schema (modulo pdf-lib timestamps)', async () => {
-    const themedDoc = buildSnapshotDocument(argsFor(buildThemedVersion()))
-    const plainDoc = buildSnapshotDocument(argsFor(buildPlainVersion()))
-    const themedPdf = await renderDocumentToPdf(themedDoc)
-    const plainPdf = await renderDocumentToPdf(plainDoc)
-    expect(normalizePdf(themedPdf)).toEqual(normalizePdf(plainPdf))
+    // pdf-lib stamps CreationDate/ModDate via `new Date()` and writes them into
+    // a flate-compressed object stream, so normalizePdf's regex cannot reach
+    // them. If the two renders straddle a clock tick the compressed bytes
+    // differ and the comparison flakes. Freeze the clock (timers/microtasks
+    // stay real so pdf-lib's async font embedding still resolves) so both
+    // renders capture an identical timestamp — real theme leakage would still
+    // surface as a content-byte difference.
+    jest.useFakeTimers({
+      now: new Date('2026-05-21T10:30:00.000Z'),
+      doNotFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'setImmediate',
+        'clearImmediate',
+        'nextTick',
+        'queueMicrotask',
+        'requestAnimationFrame',
+        'cancelAnimationFrame',
+        'requestIdleCallback',
+        'cancelIdleCallback',
+        'hrtime',
+        'performance',
+      ],
+    })
+    try {
+      const themedDoc = buildSnapshotDocument(argsFor(buildThemedVersion()))
+      const plainDoc = buildSnapshotDocument(argsFor(buildPlainVersion()))
+      const themedPdf = await renderDocumentToPdf(themedDoc)
+      const plainPdf = await renderDocumentToPdf(plainDoc)
+      expect(normalizePdf(themedPdf)).toEqual(normalizePdf(plainPdf))
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('the snapshot service source never references the styling keyword constants', () => {
