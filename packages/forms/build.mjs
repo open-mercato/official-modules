@@ -78,4 +78,22 @@ await esbuild.build({
   plugins: [addJsExtension],
 })
 
-console.log('forms built successfully')
+// Pack-time guard: the exports map points the runtime `default` condition at
+// dist/*.js while the `types` condition resolves against src/*.ts, so tsc can
+// pass even when dist is empty/stale. Refuse to ship unless the build actually
+// mirrored the source tree — otherwise consumers hit ERR_MODULE_NOT_FOUND on
+// every deep import the Open Mercato bootstrap generates.
+const builtFiles = await glob('dist/**/*.js', { cwd: __dirname, absolute: true })
+const canonicalDeepPath = join(__dirname, 'dist/modules/forms/data/entities.js')
+if (!existsSync(canonicalDeepPath)) {
+  console.error('[forms] build incomplete — missing dist/modules/forms/data/entities.js; refusing to publish')
+  process.exit(1)
+}
+if (builtFiles.length < entryPoints.length) {
+  console.error(
+    `[forms] build incomplete — emitted ${builtFiles.length} JS files for ${entryPoints.length} source entry points; refusing to publish`,
+  )
+  process.exit(1)
+}
+
+console.log(`forms built successfully (${builtFiles.length} files)`)
