@@ -36,6 +36,69 @@ export interface QuoteLineItem {
   currencyCode: string
 }
 
+type EntityCtor<T extends object> = new (...args: unknown[]) => T
+
+interface SqlConnection {
+  execute<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
+interface QuoteRow {
+  id: string
+  quote_number: string
+  currency_code: string
+  valid_from: string | null
+  valid_until: string | null
+  comments: string | null
+  grand_total_net_amount: string
+  grand_total_gross_amount: string
+  tax_total_amount: string
+  customer_entity_id: string | null
+  billing_address_snapshot: string | null
+}
+
+interface QuoteLineRow {
+  id: string
+  name: string | null
+  description: string | null
+  quantity: string
+  unit_price_net: string
+  unit_price_gross: string
+  total_net_amount: string
+  total_gross_amount: string
+  tax_rate: string
+  currency_code: string
+}
+
+interface PersonProfileRow {
+  firstName: string | null
+  lastName: string | null
+}
+
+interface CompanyProfileRow {
+  legalName: string | null
+  brandName: string | null
+}
+
+interface CustomerEntityRow {
+  id: string
+  kind: string
+  displayName: string
+  primaryEmail: string | null
+  personProfile: PersonProfileRow | null
+  companyProfile: CompanyProfileRow | null
+}
+
+interface CustomerAddressRow {
+  entity: string
+  isPrimary: boolean
+  addressLine1: string
+  addressLine2: string | null
+  city: string | null
+  region: string | null
+  postalCode: string | null
+  country: string | null
+}
+
 /**
  * Document service for the Quotes module.
  *
@@ -82,12 +145,12 @@ export class QuotesDocumentService extends BaseDocumentService {
       // SalesQuote is not in DI — use raw SQL, but skip encrypted columns (customerSnapshot, billingAddressSnapshot)
       // and resolve customer data separately via CustomerEntity which is in DI
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
-      const conn = (em as any).getConnection() as { execute: (sql: string, params?: unknown[]) => Promise<any[]> }
+      const conn = em.getConnection() as unknown as SqlConnection
 
       const tenantId = auth.tenantId
       const organizationId = auth.orgId
 
-      const [quote] = await conn.execute(
+      const [quote] = await conn.execute<QuoteRow>(
         `SELECT id, quote_number, currency_code, valid_from, valid_until, comments,
                 grand_total_net_amount, grand_total_gross_amount, tax_total_amount,
                 customer_entity_id, billing_address_snapshot
@@ -98,7 +161,7 @@ export class QuotesDocumentService extends BaseDocumentService {
       )
       if (!quote) return data
 
-      const rows = await conn.execute(
+      const rows = await conn.execute<QuoteLineRow>(
         `SELECT id, name, description, quantity, unit_price_net, unit_price_gross,
                 total_net_amount, total_gross_amount, tax_rate, currency_code
          FROM sales_quote_lines WHERE quote_id = ? ORDER BY line_number ASC`,
@@ -123,10 +186,10 @@ export class QuotesDocumentService extends BaseDocumentService {
       let billingAddressSnapshot: Record<string, unknown> | null = null
 
       if (quote.customer_entity_id) {
-        const CustomerEntity = container.resolve('CustomerEntity')
-        const CustomerAddress = container.resolve('CustomerAddress')
+        const CustomerEntity = container.resolve('CustomerEntity') as unknown as EntityCtor<CustomerEntityRow>
+        const CustomerAddress = container.resolve('CustomerAddress') as unknown as EntityCtor<CustomerAddressRow>
 
-        const customer = await findOneWithDecryption(em, CustomerEntity, { id: quote.customer_entity_id } as any, { populate: ['personProfile', 'companyProfile'] } as any) as any
+        const customer = await findOneWithDecryption<CustomerEntityRow>(em, CustomerEntity, { id: quote.customer_entity_id }, { populate: ['personProfile', 'companyProfile'] })
         if (customer) {
           customerSnapshot = {
             customer: {
@@ -144,7 +207,7 @@ export class QuotesDocumentService extends BaseDocumentService {
             contact: null,
           }
 
-          const address = await findOneWithDecryption(em, CustomerAddress, { entity: customer.id, isPrimary: true } as any) as any
+          const address = await findOneWithDecryption<CustomerAddressRow>(em, CustomerAddress, { entity: customer.id, isPrimary: true })
           if (address) {
             billingAddressSnapshot = {
               addressLine1: address.addressLine1,

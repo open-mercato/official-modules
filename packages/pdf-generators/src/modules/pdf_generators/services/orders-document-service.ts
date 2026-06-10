@@ -36,6 +36,50 @@ export interface OrderLineItem {
   currencyCode: string
 }
 
+type EntityCtor<T extends object> = new (...args: unknown[]) => T
+
+interface SalesOrderRow {
+  id: string
+  tenantId: string
+  organizationId: string
+  orderNumber: string
+  currencyCode: string
+  placedAt: Date | null
+  expectedDeliveryAt: Date | null
+  comments: string | null
+  grandTotalNetAmount: string
+  grandTotalGrossAmount: string
+  taxTotalAmount: string
+  customerSnapshot: Record<string, unknown> | null
+  billingAddressSnapshot: Record<string, unknown> | null
+  customerEntityId: string | null
+  lines: { getItems(): SalesOrderLineRow[] }
+}
+
+interface SalesOrderLineRow {
+  id: string
+  name: string | null
+  description: string | null
+  quantity: string
+  unitPriceNet: string
+  unitPriceGross: string
+  totalNetAmount: string
+  totalGrossAmount: string
+  taxRate: string
+  currencyCode: string
+}
+
+interface CustomerAddressRow {
+  entity: string
+  isPrimary: boolean
+  addressLine1: string
+  addressLine2: string | null
+  city: string | null
+  region: string | null
+  postalCode: string | null
+  country: string | null
+}
+
 /**
  * Document service for the Orders module.
  *
@@ -80,16 +124,16 @@ export class OrdersDocumentService extends BaseDocumentService {
 
     try {
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
-      const SalesOrder = container.resolve('SalesOrder')
+      const SalesOrder = container.resolve('SalesOrder') as unknown as EntityCtor<SalesOrderRow>
 
-      const order = await findOneWithDecryption(em, SalesOrder, {
+      const order = await findOneWithDecryption<SalesOrderRow>(em, SalesOrder, {
         id,
         tenantId: auth.tenantId,
         organizationId: auth.orgId,
-      } as any, { populate: ['lines'] } as any) as any
+      }, { populate: ['lines'] })
       if (!order) return data
 
-      const lines: OrderLineItem[] = (order.lines?.getItems?.() ?? []).map((line: any) => ({
+      const lines: OrderLineItem[] = (order.lines?.getItems?.() ?? []).map((line) => ({
         id: line.id,
         name: line.name ?? null,
         description: line.description ?? null,
@@ -106,8 +150,8 @@ export class OrdersDocumentService extends BaseDocumentService {
 
       // fall back to the customer's primary address when the order has no billing address snapshot
       if (!billingAddressSnapshot && order.customerEntityId) {
-        const CustomerAddress = container.resolve('CustomerAddress')
-        const address = await findOneWithDecryption(em, CustomerAddress, { entity: order.customerEntityId, isPrimary: true } as any) as any
+        const CustomerAddress = container.resolve('CustomerAddress') as unknown as EntityCtor<CustomerAddressRow>
+        const address = await findOneWithDecryption<CustomerAddressRow>(em, CustomerAddress, { entity: order.customerEntityId, isPrimary: true })
         if (address) {
           billingAddressSnapshot = {
             addressLine1: address.addressLine1,
