@@ -472,8 +472,9 @@ No changes to existing services or templates required.
 
 ### Tenant & Data Isolation
 
-- No database entities — no tenant isolation risk in this phase.
-- Templates are code-defined — no cross-tenant data leakage.
+- **Risk exists and is mitigated.** Both built-in document services (`QuotesDocumentService`, `OrdersDocumentService`) query tenant-scoped records: `sales_quotes`, `sales_quote_lines`, `sales_orders`, `CustomerEntity`, `CustomerAddress`. A user with `pdf_generators.view` could otherwise retrieve data from a different tenant by submitting an arbitrary UUID.
+- **Mitigation:** `getAuthFromRequest` is called in both route handlers (`/generate`, `/preview`). The resulting `AuthContext` is propagated through `renderPdf → templateRegistry.load → fetchData` via `ctx.auth`. Every query filters by `tenant_id` and `organization_id` derived from that context. Both services throw explicitly if either value is missing — no silent fallback to unscoped data.
+- **Custom `DocumentService` contract:** any external module implementing `BaseDocumentService` **must** apply the same tenant scoping in `fetchData`. The `ctx.auth` argument is available for exactly this purpose. Implementations that ignore it are considered a security defect.
 
 ### Font Loading
 
