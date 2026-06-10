@@ -1,13 +1,12 @@
 import type { ModuleInjectionTable } from '@open-mercato/shared/modules/widgets/injection'
 
-// Declares which injection slots receive this module's widgets.
-// The key is the slot ID defined by the host module.
-// Common slot IDs for PDF tabs:
-//   'sales.document.detail.order:tabs'    — order detail page
-//   'sales.document.detail.quote:tabs'    — quote detail page
-//   'sales.document.detail.shipment:tabs' — shipment detail page
+// Use this pattern when you want to embed TemplatesList in a custom slot —
+// for example a shipment detail page or any resource that is NOT sales orders
+// or quotes. Those two are already handled by the built-in pdf-generators
+// widgets; adding a second widget for the same slot would produce duplicate tabs.
+// Replace the slot key below with the one defined by the target host module.
 export const injectionTable: ModuleInjectionTable = {
-  'sales.document.detail.order:tabs': [
+  'my-module.custom.resource:tabs': [
     {
       widgetId: 'example.injection.order_pdf_tab',
       kind: 'tab',
