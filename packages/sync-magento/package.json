@@ -1,17 +1,10 @@
 {
-  "name": "@open-mercato/test-package",
-  "version": "0.1.0",
+  "name": "@open-mercato/sync-magento",
+  "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
-  "files": [
-    "dist",
-    "src",
-    "README.md"
-  ],
   "scripts": {
     "build": "node build.mjs",
-    "prepack": "node build.mjs",
-    "watch": "node watch.mjs",
     "test": "jest --config jest.config.cjs",
     "typecheck": "tsc --noEmit"
   },
@@ -44,33 +37,53 @@
     "./*/*/*.json": "./src/*/*/*.json",
     "./*/*/*": {
       "types": [
-        "./src/*/*/*.ts",
-        "./src/*/*/*.tsx"
+        "./src/*/*.ts",
+        "./src/*/*.tsx"
       ],
       "default": "./dist/*/*/*.js"
     },
     "./*/*/*/*.json": "./src/*/*/*/*.json",
     "./*/*/*/*": {
       "types": [
+        "./src/*/*/*.ts",
+        "./src/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*.js"
+    },
+    "./*/*/*/*/*.json": "./src/*/*/*/*/*.json",
+    "./*/*/*/*/*": {
+      "types": [
         "./src/*/*/*/*.ts",
         "./src/*/*/*/*.tsx"
       ],
-      "default": "./dist/*/*/*/*.js"
+      "default": "./dist/*/*/*/*/*.js"
     }
   },
+  "dependencies": {
+    "p-limit": "^6.0.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.0"
+  },
   "peerDependencies": {
-    "@open-mercato/shared": ">=0.4.8 <0.5.0",
-    "@open-mercato/ui": ">=0.4.8 <0.5.0",
+    "@mikro-orm/postgresql": "^7.0.0",
+    "@open-mercato/core": ">=0.6.0",
+    "@open-mercato/shared": ">=0.6.0",
+    "@open-mercato/ui": ">=0.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@open-mercato/core": "0.6.4",
     "@open-mercato/shared": "0.6.4",
     "@open-mercato/ui": "0.6.4",
+    "@types/chance": "^1.1.7",
     "@types/jest": "^30.0.0",
+    "chance": "^1.1.13",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "jest": "^30.2.0",
+    "jest-environment-jsdom": "^30.4.1",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "ts-jest": "^29.4.6",

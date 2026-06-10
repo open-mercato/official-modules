@@ -1,0 +1,132 @@
+{
+  "sync_magento": {
+    "tabs": {
+      "settings": "Magento sync settings"
+    },
+    "errors": {
+      "unauthorized": "Unauthorized",
+      "organization_required": "Organization context is required",
+      "no_credentials": "No Magento credentials configured",
+      "invalid_payload": "Invalid payload",
+      "lookup_failed": "Failed to load Magento sync settings",
+      "save_failed": "Failed to save Magento sync settings",
+      "validate_failed": "Failed to validate Magento connection"
+    },
+    "settings": {
+      "loading": "Loading Magento sync settings…",
+      "save": "Save settings",
+      "errors": {
+        "load": "Failed to load Magento sync settings.",
+        "save": "Failed to save Magento sync settings.",
+        "channelsLoad": "Failed to load sales channels.",
+        "channelRequired": "Select a sales channel.",
+        "stockSourceRequired": "Enter a Magento stock source code.",
+        "storeViewCodeRequired": "Enter a Magento store view code.",
+        "currencyCodeLength": "Currency code must be 3 letters (ISO 4217).",
+        "omFieldNameRequired": "Enter an Open Mercato field name.",
+        "attributeCodeFormat": "Use lowercase letters, numbers, and underscores, starting with a letter."
+      },
+      "success": {
+        "saved": "Magento sync settings saved."
+      },
+      "sections": {
+        "general": {
+          "title": "Order & customer sync",
+          "description": "Controls how orders and customers are imported from Magento."
+        },
+        "images": {
+          "title": "Export performance & images",
+          "description": "Controls export throughput and product image handling."
+        },
+        "channelStockMappings": {
+          "title": "Channel → stock source mapping",
+          "description": "Maps Open Mercato sales channels to Magento MSI stock sources for inventory sync."
+        },
+        "channelStoreMappings": {
+          "title": "Channel → store view mapping",
+          "description": "Maps Open Mercato sales channels to Magento store views and currencies for price/catalog sync."
+        },
+        "attributeCodeOverrides": {
+          "title": "Attribute code overrides",
+          "description": "Overrides the generated Magento attribute code for specific Open Mercato product fields."
+        }
+      },
+      "fields": {
+        "customerStrategy": {
+          "label": "Customer matching strategy",
+          "description": "How imported orders are linked to Open Mercato customers.",
+          "options": {
+            "createOrLink": "Create or link existing customer",
+            "createOnly": "Always create a new customer",
+            "skip": "Skip customer linking"
+          }
+        },
+        "attributeSetPrefix": {
+          "label": "Attribute set / code prefix",
+          "description": "Prefix applied to generated Magento attribute sets and codes. Leave empty to use native attribute names (risk of collisions)."
+        },
+        "defaultOrderChannelId": {
+          "label": "Default sales channel for imported orders",
+          "placeholder": "Select channel…",
+          "description": "Sales channel assigned to orders imported from Magento."
+        },
+        "orderImportStatuses": {
+          "label": "Magento order statuses to import",
+          "placeholder": "e.g. processing",
+          "description": "Only orders with these Magento statuses are imported. Leave empty to import all statuses."
+        },
+        "imageSyncEnabled": {
+          "label": "Sync product images",
+          "description": "Upload Open Mercato product images to Magento during product export."
+        },
+        "productExportConcurrency": {
+          "label": "Product export concurrency",
+          "description": "Number of products exported in parallel (1-10)."
+        },
+        "imageUploadConcurrency": {
+          "label": "Image upload concurrency",
+          "description": "Number of images uploaded in parallel (1-10)."
+        },
+        "imageMaxDimension": {
+          "label": "Max image dimension (px)",
+          "description": "Images larger than this are resized before upload (0 disables resizing)."
+        },
+        "channelStockMappings": {
+          "add": "Add mapping",
+          "remove": "Remove mapping",
+          "empty": "No channel → stock source mappings configured yet.",
+          "columns": {
+            "channel": "Sales channel",
+            "channelPlaceholder": "Select channel…",
+            "stockSource": "Magento stock source code",
+            "stockSourcePlaceholder": "e.g. default"
+          }
+        },
+        "channelStoreMappings": {
+          "add": "Add mapping",
+          "remove": "Remove mapping",
+          "empty": "No channel → store view mappings configured yet.",
+          "columns": {
+            "channel": "Sales channel",
+            "channelPlaceholder": "Select channel…",
+            "storeView": "Magento store view code",
+            "storeViewPlaceholder": "e.g. default",
+            "currency": "Currency code",
+            "currencyPlaceholder": "e.g. EUR"
+          }
+        },
+        "attributeCodeOverrides": {
+          "add": "Add override",
+          "remove": "Remove override",
+          "empty": "No attribute code overrides configured yet.",
+          "columns": {
+            "omField": "Open Mercato field",
+            "omFieldPlaceholder": "e.g. season",
+            "magentoCode": "Magento attribute code",
+            "magentoCodePlaceholder": "e.g. om_season"
+          }
+        }
+      }
+    }
+  }
+}
