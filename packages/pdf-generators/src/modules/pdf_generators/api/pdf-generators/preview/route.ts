@@ -36,6 +36,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing template_id or data' }, { status: 400 })
   }
 
+  if (!auth?.tenantId || !auth?.orgId) {
+    return NextResponse.json(
+      { error: 'organization_required', message: 'Select an organization to generate this document.' },
+      { status: 409 },
+    )
+  }
+
   return renderPdf({ template_id, data }, { container, auth }, 'preview')
 }
 

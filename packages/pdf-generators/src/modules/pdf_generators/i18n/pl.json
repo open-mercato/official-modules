@@ -1,4 +1,5 @@
 {
+  "pdf_generators.errors.organization_required": "Wybierz organizację, aby wygenerować ten dokument.",
   "pdf_generators.generate.button": "Pobierz PDF",
   "pdf_generators.generate.generating": "Generowanie...",
   "pdf_generators.generate.open": "Generuj PDF",

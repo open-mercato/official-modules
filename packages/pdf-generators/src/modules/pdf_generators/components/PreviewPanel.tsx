@@ -17,6 +17,7 @@ import { Preview } from './Preview'
 import { Loader } from './Loader'
 import { downloadBlob } from '../utils/downloadBlob'
 import { getFilenameFromResponse } from '../utils/getFilenameFromResponse'
+import { resolveErrorMessage } from '../utils/resolveErrorMessage'
 
 export interface PdfResource {
   kind: string
@@ -50,7 +51,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
     let cancelled = false
 
     const run = async () => {
-      const { ok, result } = await apiCall('/api/pdf-generators/preview', {
+      const { ok, result, response } = await apiCall('/api/pdf-generators/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template_id: template.id, data: record }),
@@ -60,7 +61,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
 
       if (cancelled) return
       if (!ok || !result) {
-        setError(t('pdf_generators.preview.error', 'Failed to generate document.'))
+        setError(await resolveErrorMessage(response, t))
         return
       }
       objectUrl = URL.createObjectURL(result)
@@ -79,7 +80,7 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
 
   const handleDownload = async () => {
     setDownloading(true)
-    const { result, response } = await apiCall('/api/pdf-generators/generate', {
+    const { ok, result, response } = await apiCall('/api/pdf-generators/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -93,7 +94,10 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
       parse: (res) => res.blob(),
     })
     setDownloading(false)
-    if (!result) return
+    if (!ok || !result) {
+      setError(await resolveErrorMessage(response, t))
+      return
+    }
     const filename = getFilenameFromResponse(response, `${template.id}.pdf`)
     const url = URL.createObjectURL(result)
     downloadBlob(url, filename)

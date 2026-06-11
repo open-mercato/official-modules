@@ -42,6 +42,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing template_id or data' }, { status: 400 })
   }
 
+  if (!auth?.tenantId || !auth?.orgId) {
+    return NextResponse.json(
+      { error: 'organization_required', message: 'Select an organization to generate this document.' },
+      { status: 409 },
+    )
+  }
+
   // TODO Phase 5: persist PdfGeneratedDocument + emit pdf_generators.document.generated event
   // const { resource_kind, resource_id, resource_label } = body
 
