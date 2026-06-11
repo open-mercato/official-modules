@@ -38,54 +38,35 @@ export interface QuoteLineItem {
 
 type EntityCtor<T extends object> = new (...args: unknown[]) => T
 
-interface SqlConnection {
-  execute<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>
-}
-
-interface QuoteRow {
+interface SalesQuoteRow {
   id: string
-  quote_number: string
-  currency_code: string
-  valid_from: string | null
-  valid_until: string | null
+  tenantId: string
+  organizationId: string
+  quoteNumber: string
+  currencyCode: string
+  validFrom: Date | null
+  validUntil: Date | null
   comments: string | null
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  tax_total_amount: string
-  customer_entity_id: string | null
-  billing_address_snapshot: string | null
+  grandTotalNetAmount: string
+  grandTotalGrossAmount: string
+  taxTotalAmount: string
+  customerSnapshot: Record<string, unknown> | null
+  billingAddressSnapshot: Record<string, unknown> | null
+  customerEntityId: string | null
+  lines: { getItems(): SalesQuoteLineRow[] }
 }
 
-interface QuoteLineRow {
+interface SalesQuoteLineRow {
   id: string
   name: string | null
   description: string | null
   quantity: string
-  unit_price_net: string
-  unit_price_gross: string
-  total_net_amount: string
-  total_gross_amount: string
-  tax_rate: string
-  currency_code: string
-}
-
-interface PersonProfileRow {
-  firstName: string | null
-  lastName: string | null
-}
-
-interface CompanyProfileRow {
-  legalName: string | null
-  brandName: string | null
-}
-
-interface CustomerEntityRow {
-  id: string
-  kind: string
-  displayName: string
-  primaryEmail: string | null
-  personProfile: PersonProfileRow | null
-  companyProfile: CompanyProfileRow | null
+  unitPriceNet: string
+  unitPriceGross: string
+  totalNetAmount: string
+  totalGrossAmount: string
+  taxRate: string
+  currencyCode: string
 }
 
 interface CustomerAddressRow {
@@ -142,96 +123,58 @@ export class QuotesDocumentService extends BaseDocumentService {
     if (!auth?.tenantId || !auth?.orgId) throw new Error('[QuotesDocumentService] Missing auth context — tenantId and orgId are required to fetch quote data.')
 
     try {
-      // SalesQuote is not in DI — use raw SQL, but skip encrypted columns (customerSnapshot, billingAddressSnapshot)
-      // and resolve customer data separately via CustomerEntity which is in DI
       const em = container.resolve('em') as Parameters<typeof findOneWithDecryption>[0]
-      const conn = em.getConnection() as unknown as SqlConnection
+      const SalesQuote = container.resolve('SalesQuote') as unknown as EntityCtor<SalesQuoteRow>
 
-      const tenantId = auth.tenantId
-      const organizationId = auth.orgId
-
-      const [quote] = await conn.execute<QuoteRow>(
-        `SELECT id, quote_number, currency_code, valid_from, valid_until, comments,
-                grand_total_net_amount, grand_total_gross_amount, tax_total_amount,
-                customer_entity_id, billing_address_snapshot
-         FROM sales_quotes
-         WHERE id = ? AND tenant_id = ? AND organization_id = ?
-         LIMIT 1`,
-        [id, tenantId, organizationId]
-      )
+      const quote = await findOneWithDecryption<SalesQuoteRow>(em, SalesQuote, {
+        id,
+        tenantId: auth.tenantId,
+        organizationId: auth.orgId,
+      }, { populate: ['lines'] })
       if (!quote) return data
 
-      const rows = await conn.execute<QuoteLineRow>(
-        `SELECT id, name, description, quantity, unit_price_net, unit_price_gross,
-                total_net_amount, total_gross_amount, tax_rate, currency_code
-         FROM sales_quote_lines WHERE quote_id = ? ORDER BY line_number ASC`,
-        [quote.id]
-      )
-
-      const lines: QuoteLineItem[] = rows.map((row) => ({
-        id: row.id,
-        name: row.name ?? null,
-        description: row.description ?? null,
-        quantity: row.quantity ?? '0',
-        unitPriceNet: row.unit_price_net ?? '0',
-        unitPriceGross: row.unit_price_gross ?? '0',
-        totalNetAmount: row.total_net_amount ?? '0',
-        totalGrossAmount: row.total_gross_amount ?? '0',
-        taxRate: row.tax_rate ?? '0',
-        currencyCode: row.currency_code,
+      const lines: QuoteLineItem[] = (quote.lines?.getItems?.() ?? []).map((line) => ({
+        id: line.id,
+        name: line.name ?? null,
+        description: line.description ?? null,
+        quantity: line.quantity ?? '0',
+        unitPriceNet: line.unitPriceNet ?? '0',
+        unitPriceGross: line.unitPriceGross ?? '0',
+        totalNetAmount: line.totalNetAmount ?? '0',
+        totalGrossAmount: line.totalGrossAmount ?? '0',
+        taxRate: line.taxRate ?? '0',
+        currencyCode: line.currencyCode,
       }))
 
-      // resolve customer via DI entity (avoids encrypted customerSnapshot from raw SQL)
-      let customerSnapshot: Record<string, unknown> | null = null
-      let billingAddressSnapshot: Record<string, unknown> | null = null
+      let billingAddressSnapshot = quote.billingAddressSnapshot ?? null
 
-      if (quote.customer_entity_id) {
-        const CustomerEntity = container.resolve('CustomerEntity') as unknown as EntityCtor<CustomerEntityRow>
+      // fall back to the customer's primary address when the quote has no billing address snapshot
+      if (!billingAddressSnapshot && quote.customerEntityId) {
         const CustomerAddress = container.resolve('CustomerAddress') as unknown as EntityCtor<CustomerAddressRow>
-
-        const customer = await findOneWithDecryption<CustomerEntityRow>(em, CustomerEntity, { id: quote.customer_entity_id }, { populate: ['personProfile', 'companyProfile'] })
-        if (customer) {
-          customerSnapshot = {
-            customer: {
-              id: customer.id,
-              kind: customer.kind,
-              displayName: customer.displayName,
-              primaryEmail: customer.primaryEmail ?? null,
-              personProfile: customer.personProfile
-                ? { firstName: customer.personProfile.firstName ?? null, lastName: customer.personProfile.lastName ?? null }
-                : null,
-              companyProfile: customer.companyProfile
-                ? { legalName: customer.companyProfile.legalName ?? null, brandName: customer.companyProfile.brandName ?? null }
-                : null,
-            },
-            contact: null,
-          }
-
-          const address = await findOneWithDecryption<CustomerAddressRow>(em, CustomerAddress, { entity: customer.id, isPrimary: true })
-          if (address) {
-            billingAddressSnapshot = {
-              addressLine1: address.addressLine1,
-              addressLine2: address.addressLine2 ?? null,
-              city: address.city ?? null,
-              region: address.region ?? null,
-              postalCode: address.postalCode ?? null,
-              country: address.country ?? null,
-            }
+        const address = await findOneWithDecryption<CustomerAddressRow>(em, CustomerAddress, { entity: quote.customerEntityId, isPrimary: true })
+        if (address) {
+          billingAddressSnapshot = {
+            addressLine1: address.addressLine1,
+            addressLine2: address.addressLine2 ?? null,
+            city: address.city ?? null,
+            region: address.region ?? null,
+            postalCode: address.postalCode ?? null,
+            country: address.country ?? null,
           }
         }
       }
 
       return {
         id: quote.id,
-        quoteNumber: quote.quote_number,
-        currencyCode: quote.currency_code,
-        validFrom: quote.valid_from ? new Date(quote.valid_from) : null,
-        validUntil: quote.valid_until ? new Date(quote.valid_until) : null,
+        quoteNumber: quote.quoteNumber,
+        currencyCode: quote.currencyCode,
+        validFrom: quote.validFrom ?? null,
+        validUntil: quote.validUntil ?? null,
         comments: quote.comments ?? null,
-        grandTotalNetAmount: quote.grand_total_net_amount,
-        grandTotalGrossAmount: quote.grand_total_gross_amount,
-        taxTotalAmount: quote.tax_total_amount,
-        customerSnapshot,
+        grandTotalNetAmount: quote.grandTotalNetAmount,
+        grandTotalGrossAmount: quote.grandTotalGrossAmount,
+        taxTotalAmount: quote.taxTotalAmount,
+        customerSnapshot: quote.customerSnapshot ?? null,
         billingAddressSnapshot,
         lines,
       } satisfies QuoteRecord
