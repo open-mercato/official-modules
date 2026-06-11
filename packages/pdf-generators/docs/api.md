@@ -1,0 +1,177 @@
+# API Reference
+
+## REST Endpoints
+
+All endpoints require authentication (`pdf_generators.view` feature). Both rendering endpoints follow the same two-step flow internally: `fetchData` is called server-side first (to load the full record via DI), then `toTemplateData` normalizes it, and finally the React-PDF component renders the binary stream.
+
+---
+
+### `GET /api/pdf-generators/templates`
+
+Returns all registered templates grouped by origin — internal (built-in) and external (registered by other modules via `pdf-generators.ts`).
+
+```jsonc
+// Response
+{
+  "internal": [
+    {
+      "id": "order-invoice",
+      "label": "Order Invoice",
+      "description": "Standard invoice for sales orders.",
+      "module": "sales",
+      "resourceKind": "sales.order",
+      "documentType": "invoice",
+      "tags": ["invoice", "order"]
+    }
+  ],
+  "external": [
+    // templates registered via pdf-generators.ts in other modules
+  ]
+}
+```
+
+Use this endpoint to build custom template pickers or to verify that your registered templates are visible to the registry.
+
+---
+
+### `POST /api/pdf-generators/preview`
+
+Renders a PDF for display inside a dialog iframe. Called automatically by `PreviewPanel` when the user clicks a template card in the PDF tab.
+
+**No side effects** — no logging, no events, no persistence. Safe to call repeatedly as the user switches between templates.
+
+```jsonc
+// Request body
+{
+  "template_id": "order-invoice",
+  "data": { "id": "order_01JXYZ..." }
+}
+```
+
+```
+// Response
+Content-Type: application/pdf
+<binary stream>
+```
+
+---
+
+### `POST /api/pdf-generators/generate`
+
+Renders a PDF and streams it to the browser as a file download. Called automatically by `PreviewPanel` when the user clicks **Download PDF**.
+
+**Has side effects** — intended for production use. Future phases will add logging, event emission (`pdf_generators.document.generated`), and PDF history persistence.
+
+```jsonc
+// Request body
+{
+  "template_id": "order-invoice",
+  "data": { "id": "order_01JXYZ..." },
+  "resource_kind": "sales.order",
+  "resource_id": "order_01JXYZ...",
+  "resource_label": "Order #1042"
+}
+```
+
+```
+// Response
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="invoice-1042.pdf"
+<binary stream>
+```
+
+**Typical client-side usage:**
+
+```ts
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { downloadBlob } from '@open-mercato/pdf-generators/modules/pdf_generators/utils/downloadBlob'
+
+const { result, error } = await apiCall(
+  '/api/pdf-generators/generate',
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      template_id: template.id,
+      data: record,
+      resource_kind: resource?.kind,
+      resource_id: resource?.id,
+      resource_label: resource?.label,
+    }),
+  },
+  { parse: (res) => res.blob() },
+)
+
+if (!error && result) {
+  const url = URL.createObjectURL(result)
+  downloadBlob(url, template.id)
+  URL.revokeObjectURL(url)
+}
+```
+
+---
+
+### Preview vs generate — decision guide
+
+| | `/preview` | `/generate` |
+|---|---|---|
+| Purpose | Display in iframe | File download |
+| Side effects | None | Logging, events, future history |
+| When to call | On template card click | On "Download PDF" button click |
+| `resource_*` fields | Not needed | Recommended |
+| Safe to call repeatedly | Yes | Avoid |
+
+---
+
+## TypeScript Exports
+
+Everything below is exported from `@open-mercato/pdf-generators`.
+
+### `BaseDocumentService`
+
+Abstract base class. Extend once per category of documents in your module.
+
+| Member | Description |
+|--------|-------------|
+| `id` (abstract) | Globally unique service identifier. Convention: `<module>-<category>s` |
+| `label` (abstract) | Human-readable name shown in the admin page |
+| `module` (abstract) | Top-level module name — used for grouping (`'sales'`, `'my_module'`) |
+| `resourceKind` (abstract) | Framework resource kind matching the detail page (`'sales.order'`, `'sales.quote'`) |
+| `registerTemplate(entry)` | Registers a template with this service |
+| `getEntries()` | Returns all registered templates ready for the global registry |
+| `toTemplateData(input)` (abstract) | Maps the enriched server record to the flat data shape expected by template components |
+| `fetchData(input, ctx)` | Server-side hook called before `toTemplateData`. Override to load related data via DI. Default: passes data through unchanged |
+| `filename(input)` | Derives the download filename from normalized data. Default: `'document.pdf'` |
+
+### `formatDate(isoString)`
+
+Formats an ISO 8601 string to a locale-friendly display string. Use inside `toTemplateData`.
+
+### `TemplatesList`
+
+React component that renders the template list for a given resource. Normally rendered automatically by the core sales module.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `record` | `{ id: string }` | Minimal record — full data is fetched server-side |
+| `filter` | `TemplateFilter` | Scopes the list by `resourceKind`, `documentType`, or `tags` |
+| `resource` | `{ kind: string; id: string }` | Passed to `/generate` for logging and future history |
+
+### `OpenMercatoLogo`
+
+Pre-built React-PDF component rendering the Open Mercato brand mark. Use directly inside template components.
+
+### `sharedColors`, `borders`, `spacing`
+
+Design tokens from the shared theme. Import the theme file as a side-effect first, then destructure what you need.
+
+### Types
+
+| Type | Description |
+|------|-------------|
+| `TemplateMeta` | UI-facing descriptor: id, label, module, resourceKind, documentType, tags |
+| `TemplateEntry` | Full descriptor — `TemplateMeta` plus runtime handlers |
+| `TemplateRegistryEntry` | Runtime handlers only: `fromRecord`, `load`, `fetchData`, `filename` |
+| `TemplateFilter` | Filter shape: `{ resourceKind?, documentType?, tags? }` |
+| `DocumentTemplateEntry` | Shape passed to `registerTemplate()` |
+| `templateRegistry` | Global singleton registry — use only for custom rendering pipelines outside the standard endpoints |

@@ -1,0 +1,18 @@
+{
+  "pdf_generators.errors.organization_required": "Selecciona una organización para generar este documento.",
+  "pdf_generators.generate.button": "Descargar PDF",
+  "pdf_generators.generate.generating": "Generando...",
+  "pdf_generators.generate.open": "Generar PDF",
+  "pdf_generators.page.cardTitle": "El módulo está correctamente conectado",
+  "pdf_generators.page.description": "Plantillas PDF registradas disponibles en esta aplicación.",
+  "pdf_generators.page.error": "No se pudieron cargar las plantillas.",
+  "pdf_generators.page.external": "Externas",
+  "pdf_generators.page.external_empty": "No hay plantillas externas registradas.",
+  "pdf_generators.page.internal": "Internas",
+  "pdf_generators.page.title": "Plantillas disponibles",
+  "pdf_generators.preview.error": "No se pudo generar el documento.",
+  "pdf_generators.preview.title": "Vista previa del documento",
+  "pdf_generators.template.select": "Seleccionar plantilla",
+  "pdf_generators.templates.loading": "Cargando datos...",
+  "pdf_generators.templates.title": "Plantillas PDF disponibles"
+}

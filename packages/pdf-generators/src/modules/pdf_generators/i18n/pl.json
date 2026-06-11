@@ -1,0 +1,18 @@
+{
+  "pdf_generators.errors.organization_required": "Wybierz organizację, aby wygenerować ten dokument.",
+  "pdf_generators.generate.button": "Pobierz PDF",
+  "pdf_generators.generate.generating": "Generowanie...",
+  "pdf_generators.generate.open": "Generuj PDF",
+  "pdf_generators.page.cardTitle": "Moduł jest poprawnie podłączony",
+  "pdf_generators.page.description": "Zarejestrowane szablony PDF dostępne w tej aplikacji.",
+  "pdf_generators.page.error": "Nie udało się załadować szablonów.",
+  "pdf_generators.page.external": "Zewnętrzne",
+  "pdf_generators.page.external_empty": "Brak zarejestrowanych zewnętrznych szablonów.",
+  "pdf_generators.page.internal": "Wbudowane",
+  "pdf_generators.page.title": "Dostępne szablony",
+  "pdf_generators.preview.error": "Nie udało się wygenerować dokumentu.",
+  "pdf_generators.preview.title": "Podgląd dokumentu",
+  "pdf_generators.template.select": "Wybierz szablon",
+  "pdf_generators.templates.loading": "Ładowanie danych...",
+  "pdf_generators.templates.title": "Dostępne szablony PDF"
+}
