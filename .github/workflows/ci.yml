@@ -232,7 +232,7 @@ jobs:
           exit 1
   
       - name: Scaffold standalone app
-        run: npx "create-mercato-app@${CREATE_APP_TAG}" /tmp/standalone-app --registry https://registry.npmjs.org
+        run: npx --yes "create-mercato-app@${CREATE_APP_TAG}" /tmp/standalone-app --preset classic --skip-agentic-setup --no-init-git --registry https://registry.npmjs.org
   
       - name: Configure standalone app environment
         working-directory: /tmp/standalone-app
