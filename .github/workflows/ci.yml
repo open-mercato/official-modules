@@ -117,8 +117,8 @@ jobs:
         package: ${{ fromJson(needs.detect-changes.outputs.changed_packages) }}
       fail-fast: false
     outputs:
-      # Last matrix job wins — all packages share the same PREVIEW_VERSION_ID so
-      # versions are identical in structure; consumers use published_packages for full detail.
+      # Last matrix job wins, but every matrix leg computes the same deterministic
+      # PREVIEW_VERSION_ID from the workflow run attempt and commit SHA.
       canary_version_id: ${{ steps.publish.outputs.canary_version_id }}
     steps:
       - name: Checkout repository
@@ -140,14 +140,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PUBLISH_PACKAGE_FILTER: ${{ matrix.package }}
-          PREVIEW_VERSION_ID: >-
-            ${{ format('{0}.{1}',
-              github.run_id,
-              github.sha) }}
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
-          export PREVIEW_VERSION_ID="${TIMESTAMP}.${SHORT_SHA}"
+          export PREVIEW_VERSION_ID="${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.${SHORT_SHA}"
 
           echo "canary_version_id=${PREVIEW_VERSION_ID}" >> "$GITHUB_OUTPUT"
 
@@ -221,7 +216,7 @@ jobs:
           VERSION="${{ steps.version.outputs.canary_version }}"
           echo "Waiting for ${PKG}@${VERSION} on npm..."
           for i in $(seq 1 30); do
-            if npm view "${PKG}@${VERSION}" version 2>/dev/null; then
+            if npm view "${PKG}@${VERSION}" version --registry https://registry.npmjs.org 2>/dev/null; then
               echo "Available after attempt ${i}"
               exit 0
             fi
