@@ -271,7 +271,10 @@ jobs:
 
       - name: Build standalone app
         working-directory: /tmp/standalone-app
-        run: yarn build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NODE_OPTIONS: "--max-old-space-size=6144"
+        run: yarn exec next build
 
       - name: Start standalone app
         working-directory: /tmp/standalone-app
