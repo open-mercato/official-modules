@@ -249,10 +249,14 @@ jobs:
 
       - name: Install standalone app dependencies
         working-directory: /tmp/standalone-app
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
         run: yarn install
 
       - name: Install canary module
         working-directory: /tmp/standalone-app
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
         run: |
           yarn mercato module add \
             "${{ steps.version.outputs.pkg_name }}@${{ steps.version.outputs.canary_version }}"
