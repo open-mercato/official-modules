@@ -7,7 +7,7 @@ async function loginAsSuperadmin(page: Page) {
   await page.goto('/login?role=superadmin')
   await expect(page.getByRole('heading', { name: 'Open Mercato' })).toBeVisible()
   await page.getByLabel('Email').fill(SUPERADMIN_EMAIL)
-  const passwordField = page.getByLabel('Password')
+  const passwordField = page.getByRole('textbox', { name: 'Password' })
   await passwordField.fill(DEFAULT_PASSWORD)
   await passwordField.press('Enter')
   await page.waitForURL(/\/backend(?:\?.*)?$/)
