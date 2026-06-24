@@ -181,7 +181,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Node 24.16+ can hang indefinitely while Playwright 1.58 extracts browsers.
+          node-version: 24.15.0
   
       - name: Enable Corepack
         run: corepack enable
@@ -293,7 +294,8 @@ jobs:
 
         # --- Run integration tests ---
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 20
+        run: yarn exec playwright install --with-deps --only-shell chromium
 
       - name: Run integration tests
         run: BASE_URL=http://localhost:3001 yarn test:integration
