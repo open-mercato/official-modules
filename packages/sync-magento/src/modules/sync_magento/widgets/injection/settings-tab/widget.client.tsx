@@ -148,10 +148,24 @@ function MappingTable<TRow extends Record<string, string>>({
   )
 }
 
+// Each Magento integration (products/prices/inventory/orders) shares one
+// MagentoSyncSettings record and renders this widget at the same widget spot,
+// but only the settings sections relevant to that integration's adapter are shown.
+const PROVIDER_GROUP_VISIBILITY: Record<string, string[]> = {
+  magento_products: ['images', 'channelStoreMappings', 'attributeCodeOverrides'],
+  magento_prices: ['channelStoreMappings'],
+  magento_inventory: ['channelStockMappings'],
+  magento_orders: ['general', 'channelStoreMappings'],
+}
+
 export default function SyncMagentoSettingsWidget(
-  _props: InjectionWidgetComponentProps<{ state?: { isEnabled?: boolean } | null }, { hasCredentials?: boolean }>,
+  props?: InjectionWidgetComponentProps<
+    { state?: { isEnabled?: boolean } | null },
+    { hasCredentials?: boolean; integration?: { providerKey?: string | null } }
+  >,
 ) {
   const t = useT()
+  const providerKey = props?.data?.integration?.providerKey ?? null
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [settings, setSettings] = React.useState<SettingsResponse | null>(null)
@@ -346,7 +360,7 @@ export default function SyncMagentoSettingsWidget(
       id: 'general',
       title: t('sync_magento.settings.sections.general.title', 'Order & customer sync'),
       description: t('sync_magento.settings.sections.general.description', 'Controls how orders and customers are imported from Magento.'),
-      fields: ['customerStrategy', 'attributeSetPrefix', 'defaultOrderChannelId', 'orderImportStatuses'],
+      fields: ['customerStrategy', 'defaultOrderChannelId', 'orderImportStatuses'],
     },
     {
       id: 'images',
@@ -388,8 +402,9 @@ export default function SyncMagentoSettingsWidget(
     },
     {
       id: 'attributeCodeOverrides',
-      title: t('sync_magento.settings.sections.attributeCodeOverrides.title', 'Attribute code overrides'),
-      description: t('sync_magento.settings.sections.attributeCodeOverrides.description', 'Overrides the generated Magento attribute code for specific Open Mercato product fields.'),
+      title: t('sync_magento.settings.sections.attributeCodeOverrides.title', 'Attribute provisioning'),
+      description: t('sync_magento.settings.sections.attributeCodeOverrides.description', 'Controls how Open Mercato custom fields are provisioned as Magento attributes, including the naming prefix and per-field code overrides.'),
+      fields: ['attributeSetPrefix'],
       component: ({ values, setValue }) => (
         <MappingTable<AttributeCodeOverride>
           rows={(values.attributeCodeOverrides as AttributeCodeOverride[] | undefined) ?? []}
@@ -403,6 +418,12 @@ export default function SyncMagentoSettingsWidget(
       ),
     },
   ], [attributeOverrideColumns, stockMappingColumns, storeMappingColumns, t])
+
+  const visibleGroups = React.useMemo(() => {
+    const allowedGroupIds = providerKey ? PROVIDER_GROUP_VISIBILITY[providerKey] : null
+    if (!allowedGroupIds) return groups
+    return groups.filter((group) => allowedGroupIds.includes(group.id))
+  }, [groups, providerKey])
 
   const schema = React.useMemo(() => z.object({
     channelStockMappings: z.array(z.object({
@@ -473,7 +494,7 @@ export default function SyncMagentoSettingsWidget(
       formId={formId}
       schema={schema}
       fields={fields}
-      groups={groups}
+      groups={visibleGroups}
       initialValues={toFormValues(settings)}
       submitLabel={t('sync_magento.settings.save', 'Save settings')}
       onSubmit={handleSubmit}

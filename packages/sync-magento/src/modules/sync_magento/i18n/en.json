@@ -47,8 +47,8 @@
           "description": "Maps Open Mercato sales channels to Magento store views and currencies for price/catalog sync."
         },
         "attributeCodeOverrides": {
-          "title": "Attribute code overrides",
-          "description": "Overrides the generated Magento attribute code for specific Open Mercato product fields."
+          "title": "Attribute provisioning",
+          "description": "Controls how Open Mercato custom fields are provisioned as Magento attributes, including the naming prefix and per-field code overrides."
         }
       },
       "fields": {

@@ -57,6 +57,7 @@
     "@open-mercato/search": "0.6.4",
     "@open-mercato/shared": "0.6.4",
     "@open-mercato/sync-akeneo": "0.6.4",
+    "@open-mercato/sync-magento": "workspace:^",
     "@open-mercato/ui": "0.6.4",
     "@open-mercato/webhooks": "0.6.0",
     "@radix-ui/react-checkbox": "^1.3.3",

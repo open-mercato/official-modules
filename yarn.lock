@@ -6771,19 +6771,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mikro-orm/core@npm:^7.0.13, @mikro-orm/core@npm:^7.0.14":
-  version: 7.0.14
-  resolution: "@mikro-orm/core@npm:7.0.14"
-  peerDependencies:
-    dataloader: 2.2.3
-  peerDependenciesMeta:
-    dataloader:
-      optional: true
-  checksum: 10/286d4f79f474eae6e12db957080622d9ab74acb91c687c0f5bd6672b94db8893e9f4cb244b64ba2b060e65ae9c01254ebb3f456ab810c4dc669025a8d777aea8
-  languageName: node
-  linkType: hard
-
-"@mikro-orm/core@npm:^7.1.4":
+"@mikro-orm/core@npm:7.1.4":
   version: 7.1.4
   resolution: "@mikro-orm/core@npm:7.1.4"
   peerDependencies:
@@ -6795,20 +6783,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mikro-orm/decorators@npm:^7.0.13, @mikro-orm/decorators@npm:^7.0.14":
-  version: 7.0.14
-  resolution: "@mikro-orm/decorators@npm:7.0.14"
-  peerDependencies:
-    "@mikro-orm/core": 7.0.14
-    reflect-metadata: ^0.1.0 || ^0.2.0
-  peerDependenciesMeta:
-    reflect-metadata:
-      optional: true
-  checksum: 10/617064cb40b2afdae72547b2a162b9b8a0a1254a4435ffbf255cd67b5ad1eada8ed772391cbae0ce143cda33d9c0479e4c2b2cd9ebcd046bb526470dae0c852c
-  languageName: node
-  linkType: hard
-
-"@mikro-orm/decorators@npm:^7.1.4":
+"@mikro-orm/decorators@npm:7.1.4":
   version: 7.1.4
   resolution: "@mikro-orm/decorators@npm:7.1.4"
   peerDependencies:
@@ -6821,18 +6796,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mikro-orm/migrations@npm:^7.0.13":
-  version: 7.0.14
-  resolution: "@mikro-orm/migrations@npm:7.0.14"
-  dependencies:
-    "@mikro-orm/sql": "npm:7.0.14"
-  peerDependencies:
-    "@mikro-orm/core": 7.0.14
-  checksum: 10/dd633fe39ac4b10627905e7be6ccb930fa07521eea6cda94bc3f29318a3733c883aa22526ebeea73e14304a2965ceb08e1f26e460f36471fd60382f1f779a0b3
-  languageName: node
-  linkType: hard
-
-"@mikro-orm/migrations@npm:^7.1.4":
+"@mikro-orm/migrations@npm:7.1.4":
   version: 7.1.4
   resolution: "@mikro-orm/migrations@npm:7.1.4"
   dependencies:
@@ -6843,24 +6807,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mikro-orm/postgresql@npm:^7.0.13, @mikro-orm/postgresql@npm:^7.0.14":
-  version: 7.0.14
-  resolution: "@mikro-orm/postgresql@npm:7.0.14"
-  dependencies:
-    "@mikro-orm/sql": "npm:7.0.14"
-    kysely: "npm:0.28.17"
-    pg: "npm:8.20.0"
-    pg-cursor: "npm:2.19.0"
-    postgres-array: "npm:3.0.4"
-    postgres-date: "npm:2.1.0"
-    postgres-interval: "npm:4.0.2"
-  peerDependencies:
-    "@mikro-orm/core": 7.0.14
-  checksum: 10/a372e7dc47d4a703fcf8255a46b75a64e8dea5a0e423a0715be15655ebe320931ca1dfe76ff36a6f4c0107d999366e9364097455fbe0e641210cbeaf61af70e7
-  languageName: node
-  linkType: hard
-
-"@mikro-orm/postgresql@npm:^7.1.4":
+"@mikro-orm/postgresql@npm:7.1.4":
   version: 7.1.4
   resolution: "@mikro-orm/postgresql@npm:7.1.4"
   dependencies:
@@ -6874,17 +6821,6 @@ __metadata:
   peerDependencies:
     "@mikro-orm/core": 7.1.4
   checksum: 10/997ab7353765bbfebcdcffdb0446745c7f64f931ce3844bb27e5eb480407a4136f0556b6594f03dacb7f39153f87464917b2f3fe609396bb925f35ce49ba6f77
-  languageName: node
-  linkType: hard
-
-"@mikro-orm/sql@npm:7.0.14":
-  version: 7.0.14
-  resolution: "@mikro-orm/sql@npm:7.0.14"
-  dependencies:
-    kysely: "npm:0.28.17"
-  peerDependencies:
-    "@mikro-orm/core": 7.0.14
-  checksum: 10/796a16ee389164a826b354c3fc7a643e2b64968415a136fe50befe9696509104f7491d70fb94b80fd81f70b4b1a93dbc29d591c15eb2dbea148873aef609975b
   languageName: node
   linkType: hard
 
@@ -7970,7 +7906,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@open-mercato/sync-magento@workspace:packages/sync-magento":
+"@open-mercato/sync-magento@workspace:^, @open-mercato/sync-magento@workspace:packages/sync-magento":
   version: 0.0.0-use.local
   resolution: "@open-mercato/sync-magento@workspace:packages/sync-magento"
   dependencies:
@@ -21230,13 +21166,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"kysely@npm:0.28.17":
-  version: 0.28.17
-  resolution: "kysely@npm:0.28.17"
-  checksum: 10/50690d745016d25f09574fe58c7e31f84427845497f30c84280131bc1f9f60d118c53640a184e225708a1f54f2b54ac12fdf3a0dfc6405527487ad96ff594f42
-  languageName: node
-  linkType: hard
-
 "kysely@npm:0.29.2":
   version: 0.29.2
   resolution: "kysely@npm:0.29.2"
@@ -24301,15 +24230,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-cursor@npm:2.19.0":
-  version: 2.19.0
-  resolution: "pg-cursor@npm:2.19.0"
-  peerDependencies:
-    pg: ^8
-  checksum: 10/7bcfb1f7823e7bf84a8346de9af4808d8379379ba04204cbeb35481b140f0b02f23f69ea0f2abce29ceb367244fc33b2a345a67c72b786ba0dce96a82cb06098
-  languageName: node
-  linkType: hard
-
 "pg-cursor@npm:2.20.0":
   version: 2.20.0
   resolution: "pg-cursor@npm:2.20.0"
@@ -27276,6 +27196,7 @@ __metadata:
     "@open-mercato/search": "npm:0.6.4"
     "@open-mercato/shared": "npm:0.6.4"
     "@open-mercato/sync-akeneo": "npm:0.6.4"
+    "@open-mercato/sync-magento": "workspace:^"
     "@open-mercato/ui": "npm:0.6.4"
     "@open-mercato/webhooks": "npm:0.6.0"
     "@playwright/test": "npm:^1.58.2"
@@ -30861,14 +30782,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:4.3.6, zod@npm:^3.25 || ^4.0, zod@npm:^3.25.0 || ^4.0.0":
-  version: 4.3.6
-  resolution: "zod@npm:4.3.6"
-  checksum: 10/25fc0f62e01b557b4644bf0b393bbaf47542ab30877c37837ea8caf314a8713d220c7d7fe51f68ffa72f0e1018ddfa34d96f1973d23033f5a2a5a9b6b9d9da01
-  languageName: node
-  linkType: hard
-
-"zod@npm:^4.4.3":
+"zod@npm:4.4.3":
   version: 4.4.3
   resolution: "zod@npm:4.4.3"
   checksum: 10/804b9a42aa8f35f2b3c5a8dff906291cb749115f83ee2afe3576d70b5b5c53c965365c7f4967690647a9c54af9838ff232a85ff9577a0a36c44b68bc6cdefe36

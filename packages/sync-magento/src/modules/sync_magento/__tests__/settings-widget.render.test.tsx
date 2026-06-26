@@ -116,6 +116,54 @@ describe('SyncMagentoSettingsWidget', () => {
     expect(screen.getByText('No attribute code overrides configured yet.')).toBeInTheDocument()
   })
 
+  it('shows only the inventory-relevant section on the magento_inventory integration page', async () => {
+    mockApiCall.mockResolvedValue({ ok: true, result: sampleSettings() })
+
+    render(<SyncMagentoSettingsWidget data={{ integration: { providerKey: 'magento_inventory' } }} />)
+
+    await waitFor(() => expect(screen.getByTestId('group-channelStockMappings')).toBeInTheDocument())
+    expect(screen.queryByTestId('group-general')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-images')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-channelStoreMappings')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-attributeCodeOverrides')).not.toBeInTheDocument()
+  })
+
+  it('shows only the order/customer and store-mapping sections on the magento_orders integration page', async () => {
+    mockApiCall.mockResolvedValue({ ok: true, result: sampleSettings() })
+
+    render(<SyncMagentoSettingsWidget data={{ integration: { providerKey: 'magento_orders' } }} />)
+
+    await waitFor(() => expect(screen.getByTestId('group-general')).toBeInTheDocument())
+    expect(screen.getByTestId('group-channelStoreMappings')).toBeInTheDocument()
+    expect(screen.queryByTestId('group-images')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-channelStockMappings')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-attributeCodeOverrides')).not.toBeInTheDocument()
+  })
+
+  it('shows only the products-relevant sections on the magento_products integration page', async () => {
+    mockApiCall.mockResolvedValue({ ok: true, result: sampleSettings() })
+
+    render(<SyncMagentoSettingsWidget data={{ integration: { providerKey: 'magento_products' } }} />)
+
+    await waitFor(() => expect(screen.getByTestId('group-images')).toBeInTheDocument())
+    expect(screen.getByTestId('group-channelStoreMappings')).toBeInTheDocument()
+    expect(screen.getByTestId('group-attributeCodeOverrides')).toBeInTheDocument()
+    expect(screen.queryByTestId('group-general')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-channelStockMappings')).not.toBeInTheDocument()
+  })
+
+  it('shows only the store-mapping section on the magento_prices integration page', async () => {
+    mockApiCall.mockResolvedValue({ ok: true, result: sampleSettings() })
+
+    render(<SyncMagentoSettingsWidget data={{ integration: { providerKey: 'magento_prices' } }} />)
+
+    await waitFor(() => expect(screen.getByTestId('group-channelStoreMappings')).toBeInTheDocument())
+    expect(screen.queryByTestId('group-general')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-images')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-channelStockMappings')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-attributeCodeOverrides')).not.toBeInTheDocument()
+  })
+
   it('adds a row to the channel→stock mapping table when "Add mapping" is clicked', async () => {
     mockApiCall.mockResolvedValue({ ok: true, result: sampleSettings() })
 
