@@ -40,9 +40,12 @@ Files like `AGENTS.md` and `CLAUDE.md` use UPPERCASE names and are not numberedâ
 
 | SPEC | Date | Title | Description |
 | --- | --- | --- | --- |
-| [SPEC-001](SPEC-001-2026-01-21-ui-reusable-components.md) | 2026-01-21 | UI Reusable Components | Library of reusable UI components and patterns |
-| [SPEC-002](SPEC-002-2026-01-23-messages-module.md) | 2026-01-23 | Messages Module | Internal messaging and communication system |
-| [SPEC-003](SPEC-003-2026-01-23-notifications-module.md) | 2026-01-23 | Notifications Module | User notification system with multiple channels |
+| [SPEC-001](SPEC-001-2026-03-13-official-modules-development-monorepo.md) | 2026-03-13 | Official Modules Development Monorepo | Workspace/monorepo setup for publishing official modules |
+| [SPEC-002](SPEC-002-2026-03-13-official-modules-verdaccio-prototyping.md) | 2026-03-13 | Verdaccio Prototyping | Local registry flow for previewing module packages |
+| [SPEC-003](SPEC-003-2026-03-15-open-mercato-dual-layout-support.md) | 2026-03-15 | Dual Layout Support | Open Mercato dual layout support |
+| [SPEC-004](SPEC-004-2026-03-25-carrier-dhl-parcel.md) | 2026-03-25 | Carrier DHL Parcel | DHL Parcel carrier integration module |
+| [SPEC-004](SPEC-004-2026-05-06-pdf-generators.md) | 2026-05-06 | PDF Generators | PDF generators module (duplicate number â€” predates SPEC-005) |
+| [SPEC-007](SPEC-007-2026-06-12-staff-module-extraction.md) | 2026-06-12 | Staff Module Extraction (Phase 2) | Extract `staff` from `@open-mercato/core` into standalone `@open-mercato/staff` package (005/006 reserved by open PRs #21/#22) |
 
 ## Specification Structure
 
