@@ -50,6 +50,20 @@ const addJsExtension = {
             return `import("${path}.js")`
           }
         )
+        // Side-effect imports (`import "./x"` with no `from`) — also need an explicit
+        // file/`/index.js` so strict node ESM (e.g. queue workers) can resolve them.
+        content = content.replace(
+          /^(\s*)import\s+(["'])(\.[^"']+)\2/gm,
+          (match, ws, quote, path) => {
+            if (path.endsWith('.js') || path.endsWith('.json')) return match
+            const resolvedPath = join(fileDir, path)
+            const suffix =
+              existsSync(resolvedPath) && existsSync(join(resolvedPath, 'index.js'))
+                ? `${path}/index.js`
+                : `${path}.js`
+            return `${ws}import ${quote}${suffix}${quote}`
+          }
+        )
         writeFileSync(file, content)
       }
     })
