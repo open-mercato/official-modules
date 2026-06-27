@@ -43,6 +43,7 @@ export async function GET(req: Request) {
             salesInvoiceId: record.salesInvoiceId,
             contextNip: record.contextNip ?? null,
             mppRequired: record.mppRequired,
+            issuedOutsideKsef: record.issuedOutsideKsef,
             vatExemptionBasis: record.vatExemptionBasis ?? null,
             ksefStatus: record.ksefStatus,
             ksefNumber: record.ksefNumber ?? null,
@@ -65,6 +66,8 @@ const invoiceMetaPutSchema = z.object({
     .nullish(),
   mppRequired: z.boolean().optional(),
   vatExemptionBasis: z.string().max(500).nullish(),
+  /** Mark the invoice as lawfully issued outside KSeF (drives the JPK_VAT `BFK` marking). */
+  issuedOutsideKsef: z.boolean().optional(),
 })
 
 export async function PUT(req: Request) {
@@ -123,12 +126,14 @@ export async function PUT(req: Request) {
         salesInvoiceId: parsed.salesInvoiceId,
         ksefStatus: 'not_applicable',
         mppRequired: false,
+        issuedOutsideKsef: false,
         createdAt: now,
         updatedAt: now,
       })
     if (parsed.contextNip !== undefined) record.contextNip = parsed.contextNip ?? null
     if (parsed.mppRequired !== undefined) record.mppRequired = parsed.mppRequired
     if (parsed.vatExemptionBasis !== undefined) record.vatExemptionBasis = parsed.vatExemptionBasis ?? null
+    if (parsed.issuedOutsideKsef !== undefined) record.issuedOutsideKsef = parsed.issuedOutsideKsef
     record.updatedAt = now
     if (!existing) em.persist(record)
     await em.flush()
@@ -154,6 +159,7 @@ export async function PUT(req: Request) {
         salesInvoiceId: record.salesInvoiceId,
         contextNip: record.contextNip ?? null,
         mppRequired: record.mppRequired,
+        issuedOutsideKsef: record.issuedOutsideKsef,
         vatExemptionBasis: record.vatExemptionBasis ?? null,
         ksefStatus: record.ksefStatus,
         ksefNumber: record.ksefNumber ?? null,

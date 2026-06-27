@@ -11,6 +11,8 @@ export type KsefSubmissionStatusColumn =
 
 export type KsefSubmissionMode = 'online' | 'batch' | 'offline24' | 'awaryjny'
 export type KsefEnvironmentColumn = 'test' | 'demo' | 'prod'
+/** Which sales document this submission carries: a standard invoice or a correction (credit memo → FA(3) KOR). */
+export type KsefSubmissionDocumentKind = 'invoice' | 'credit_memo'
 
 /**
  * Tracks one KSeF submission attempt for a sales invoice. Links to the invoice
@@ -21,15 +23,25 @@ export type KsefEnvironmentColumn = 'test' | 'demo' | 'prod'
 @Entity({ tableName: 'financial_pl_ksef_submissions' })
 @Index({ name: 'financial_pl_ksef_submissions_scope_idx', properties: ['organizationId', 'tenantId'] })
 @Index({ name: 'financial_pl_ksef_submissions_invoice_idx', properties: ['organizationId', 'tenantId', 'salesInvoiceId'] })
-// At most one ACTIVE (queued/processing/accepted) submission per invoice at a time,
+// At most one ACTIVE (queued/processing/accepted) submission per INVOICE at a time,
 // enforced at the DB level so two concurrent sends can't both create a row and
-// double-send. A `rejected` (or soft-deleted) submission does not block a fresh
-// re-submission. The send command catches the resulting 23505 and returns the
+// double-send. Scoped to document_kind='invoice' so a CORRECTION submission (whose
+// sales_invoice_id is the corrected original) does not collide with the original
+// invoice's own submission. A `rejected` (or soft-deleted) submission does not block
+// a fresh re-submission. The send command catches the resulting 23505 and returns the
 // winner of the race.
 @Index({
   name: 'financial_pl_ksef_submissions_active_unique',
   expression:
-    `create unique index "financial_pl_ksef_submissions_active_unique" on "financial_pl_ksef_submissions" ("organization_id", "tenant_id", "sales_invoice_id") where "status" in ('queued', 'processing', 'accepted') and "deleted_at" is null`,
+    `create unique index "financial_pl_ksef_submissions_active_unique" on "financial_pl_ksef_submissions" ("organization_id", "tenant_id", "sales_invoice_id") where "status" in ('queued', 'processing', 'accepted') and "deleted_at" is null and "document_kind" = 'invoice'`,
+})
+// At most one ACTIVE correction submission per CREDIT MEMO, the correction-side twin
+// of the active-unique index above (corrections are keyed by credit_memo_id, not the
+// corrected invoice id, since one invoice can be corrected by many credit memos).
+@Index({
+  name: 'financial_pl_ksef_submissions_credit_memo_active_unique',
+  expression:
+    `create unique index "financial_pl_ksef_submissions_credit_memo_active_unique" on "financial_pl_ksef_submissions" ("organization_id", "tenant_id", "credit_memo_id") where "credit_memo_id" is not null and "status" in ('queued', 'processing', 'accepted') and "deleted_at" is null`,
 })
 export class KsefSubmission {
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
@@ -41,8 +53,18 @@ export class KsefSubmission {
   @Property({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string
 
+  // For an invoice submission: the invoice id. For a correction submission: the
+  // CORRECTED original invoice id (so the original can surface its corrections);
+  // invoice-facing reads filter document_kind='invoice' to avoid mixing the two.
   @Property({ name: 'sales_invoice_id', type: 'uuid' })
   salesInvoiceId!: string
+
+  @Property({ name: 'document_kind', type: 'text' })
+  documentKind: KsefSubmissionDocumentKind = 'invoice'
+
+  /** Set only for a correction submission (document_kind='credit_memo'): the credit memo id. */
+  @Property({ name: 'credit_memo_id', type: 'uuid', nullable: true })
+  creditMemoId?: string | null
 
   @Property({ name: 'environment', type: 'text' })
   environment: KsefEnvironmentColumn = 'test'
@@ -137,6 +159,12 @@ export class SalesInvoicePlMeta {
 
   @Property({ name: 'vat_exemption_basis', type: 'text', nullable: true })
   vatExemptionBasis?: string | null
+
+  // Explicit operator signal that this invoice was lawfully issued OUTSIDE KSeF
+  // (consumer/legacy/pre-obligation). Drives the JPK_VAT `BFK` marking — the JPK
+  // derivation never infers `BFK` from a merely-absent KSeF number.
+  @Property({ name: 'issued_outside_ksef', type: 'boolean' })
+  issuedOutsideKsef = false
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

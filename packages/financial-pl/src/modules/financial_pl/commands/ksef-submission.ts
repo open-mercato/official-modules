@@ -5,21 +5,24 @@ import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/opti
 import { CrudHttpError, isUniqueViolation } from '@open-mercato/shared/lib/crud/errors'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
-import type { EntityManager } from '@mikro-orm/postgresql'
-import { KsefSubmission } from '../data/entities'
+import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
+import { KsefSubmission, type KsefSubmissionStatusColumn } from '../data/entities'
 import {
   ksefSubmissionSendSchema,
   ksefSubmissionRetrySchema,
   sendFromInvoiceSchema,
+  sendFromCreditMemoSchema,
   type KsefSubmissionSendInput,
   type KsefSubmissionRetryInput,
   type SendFromInvoiceInput,
+  type SendFromCreditMemoInput,
 } from '../data/validators'
 import { buildFa3XmlFromInput } from '../lib/build-submission'
 import {
   resolveFa3FromSalesInvoice,
   type ResolveFa3QueryEngine,
 } from '../lib/resolve-fa3-from-invoice'
+import { resolveFa3FromCreditMemo } from '../lib/resolve-fa3-from-credit-memo'
 import { emitFinancialPlEvent } from '../events'
 import { resolveKsefEnvironment } from '../config'
 
@@ -112,19 +115,54 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
       })
     }
 
+    const documentKind = parsed.documentKind ?? 'invoice'
+    if (documentKind === 'credit_memo' && !parsed.creditMemoId) {
+      throw new CrudHttpError(400, {
+        error: '[internal] creditMemoId is required for a credit_memo submission',
+        code: 'credit_memo_id_required',
+      })
+    }
+    // document_kind and the FA(3) RodzajFaktury must agree BOTH ways:
+    //  - A KOR payload must be a credit_memo submission — else it stores document_kind='invoice'
+    //    for the corrected invoice id, dedupes against the original, and bleeds onto invoice reads.
+    //  - A credit_memo submission must be a KOR payload — else a normal VAT invoice could set
+    //    document_kind='credit_memo' with fresh creditMemoIds and bypass the invoice-scoped
+    //    active-unique dedupe, queuing multiple active submissions for the same invoice.
+    const isKorPayload = parsed.invoice.invoiceKind === 'KOR'
+    if (isKorPayload !== (documentKind === 'credit_memo')) {
+      throw new CrudHttpError(422, {
+        error: '[internal] document_kind=credit_memo and FA(3) RodzajFaktury=KOR must be used together',
+        code: 'correction_kind_mismatch',
+      })
+    }
+
     const em = (ctx.container.resolve('em') as EntityManager).fork()
 
-    // Idempotent per invoice: if a submission for this invoice is already in
-    // flight (queued/processing) or already accepted, return it instead of
-    // queuing a second live send. A prior `rejected` submission does NOT block a
-    // fresh attempt (re-submission after fixing the invoice is allowed).
-    const existing = await em.findOne(KsefSubmission, {
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      salesInvoiceId: parsed.salesInvoiceId,
-      status: { $in: ['queued', 'processing', 'accepted'] },
-      deletedAt: null,
-    })
+    // Idempotent per SOURCE document — keyed on the credit memo for a correction, else
+    // the invoice — and always scoped to document_kind so a correction never matches the
+    // corrected invoice's own submission (or vice versa). If one is already in flight
+    // (queued/processing) or accepted, return it instead of queuing a second live send.
+    // A prior `rejected` submission does NOT block a fresh attempt.
+    const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted']
+    const dedupeWhere: FilterQuery<KsefSubmission> =
+      documentKind === 'credit_memo'
+        ? {
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            documentKind: 'credit_memo',
+            creditMemoId: parsed.creditMemoId,
+            status: { $in: activeStatuses },
+            deletedAt: null,
+          }
+        : {
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            documentKind: 'invoice',
+            salesInvoiceId: parsed.salesInvoiceId,
+            status: { $in: activeStatuses },
+            deletedAt: null,
+          }
+    const existing = await em.findOne(KsefSubmission, dedupeWhere)
     if (existing) return { submissionId: existing.id }
 
     const invoiceXml = buildFa3XmlFromInput(parsed.invoice)
@@ -133,6 +171,8 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       salesInvoiceId: parsed.salesInvoiceId,
+      documentKind,
+      creditMemoId: documentKind === 'credit_memo' ? parsed.creditMemoId ?? null : null,
       environment: parsed.environment ?? resolveKsefEnvironment().environment,
       mode: 'online',
       status: 'queued',
@@ -145,18 +185,15 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
     try {
       await em.persist(submission).flush()
     } catch (err) {
-      // Lost a concurrent insert race: the partial unique index
-      // (financial_pl_ksef_submissions_active_unique) rejected this row because a
-      // simultaneous request already created an active submission for this invoice.
-      // Return the winner rather than queuing a second live send.
-      if (isUniqueViolation(err, 'financial_pl_ksef_submissions_active_unique')) {
-        const winner = await em.findOne(KsefSubmission, {
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-          salesInvoiceId: parsed.salesInvoiceId,
-          status: { $in: ['queued', 'processing', 'accepted'] },
-          deletedAt: null,
-        })
+      // Lost a concurrent insert race: the matching partial unique index (per invoice or
+      // per credit memo) rejected this row because a simultaneous request already created
+      // an active submission for the same source document. Return the winner.
+      const indexName =
+        documentKind === 'credit_memo'
+          ? 'financial_pl_ksef_submissions_credit_memo_active_unique'
+          : 'financial_pl_ksef_submissions_active_unique'
+      if (isUniqueViolation(err, indexName)) {
+        const winner = await em.findOne(KsefSubmission, dedupeWhere)
         if (winner) return { submissionId: winner.id }
       }
       throw err
@@ -269,6 +306,65 @@ export const sendFromInvoiceCommand: CommandHandler<SendFromInvoiceInput, { subm
   },
 }
 
+export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, { submissionId: string }> = {
+  id: 'financial_pl.ksef_submission.send_from_credit_memo',
+  async execute(input, ctx) {
+    const parsed = sendFromCreditMemoSchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
+
+    const { translate } = await resolveTranslations()
+    const queryEngine = ctx.container.resolve('queryEngine') as ResolveFa3QueryEngine
+
+    // Existence check BEFORE the credentials check (mirrors send_from_invoice): an unknown
+    // credit memo must return 404, not a 409 credentials_missing, in an org without creds.
+    const creditMemoExists = await queryEngine.query<Record<string, unknown>>(E.sales.sales_credit_memo, {
+      tenantId: scope.tenantId,
+      organizationIds: [scope.organizationId],
+      filters: { id: { $eq: parsed.creditMemoId }, deleted_at: { $eq: null } },
+      page: { page: 1, pageSize: 1 },
+    })
+    if (!creditMemoExists.items?.[0]) {
+      throw new CrudHttpError(404, { error: '[internal] credit memo not found' })
+    }
+
+    const credentials = await readKsefCredentials(ctx, scope)
+    const contextNip = credentials.contextNip
+    if (!contextNip) {
+      throw new CrudHttpError(409, {
+        error: translate('financial_pl.errors.credentials_missing', 'KSeF credentials are not configured for this organization.'),
+      })
+    }
+
+    const { invoice, correctedInvoiceId } = await resolveFa3FromCreditMemo(
+      { queryEngine, contextNip, translate, seller: credentials.seller },
+      {
+        creditMemoId: parsed.creditMemoId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        originalOutsideKsef: parsed.originalOutsideKsef,
+      },
+    )
+
+    return sendCommand.execute(
+      {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        // The CORRECTED original invoice id; dedup keys on creditMemoId for corrections.
+        salesInvoiceId: correctedInvoiceId,
+        documentKind: 'credit_memo',
+        creditMemoId: parsed.creditMemoId,
+        contextNip,
+        environment: resolveKsefEnvironment(credentials.environment).environment,
+        invoice,
+      },
+      ctx,
+    )
+  },
+}
+
 registerCommand(sendCommand)
 registerCommand(retryCommand)
 registerCommand(sendFromInvoiceCommand)
+registerCommand(sendFromCreditMemoCommand)

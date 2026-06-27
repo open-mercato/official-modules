@@ -76,6 +76,23 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "issued_outside_ksef": {
+          "name": "issued_outside_ksef",
+          "type": "boolean",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
         "ksef_number": {
           "name": "ksef_number",
           "type": "text",
@@ -647,6 +664,40 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "text"
+        },
+        "document_kind": {
+          "name": "document_kind",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'invoice'",
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "credit_memo_id": {
+          "name": "credit_memo_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "indexes": [
@@ -690,7 +741,16 @@
           "keyName": "financial_pl_ksef_submissions_active_unique",
           "primary": false,
           "unique": false,
-          "expression": "create unique index \"financial_pl_ksef_submissions_active_unique\" on \"financial_pl_ksef_submissions\" (\"organization_id\", \"tenant_id\", \"sales_invoice_id\") where \"status\" in ('queued', 'processing', 'accepted') and \"deleted_at\" is null"
+          "expression": "create unique index \"financial_pl_ksef_submissions_active_unique\" on \"financial_pl_ksef_submissions\" (\"organization_id\", \"tenant_id\", \"sales_invoice_id\") where \"status\" in ('queued', 'processing', 'accepted') and \"deleted_at\" is null and \"document_kind\" = 'invoice'"
+        },
+        {
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "keyName": "financial_pl_ksef_submissions_credit_memo_active_unique",
+          "primary": false,
+          "unique": false,
+          "expression": "create unique index \"financial_pl_ksef_submissions_credit_memo_active_unique\" on \"financial_pl_ksef_submissions\" (\"organization_id\", \"tenant_id\", \"credit_memo_id\") where \"credit_memo_id\" is not null and \"status\" in ('queued', 'processing', 'accepted') and \"deleted_at\" is null"
         }
       ],
       "checks": [],

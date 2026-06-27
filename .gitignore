@@ -41,3 +41,17 @@ published-app/
 
 apps/sandbox/data
 apps/sandbox/storage/attachments
+
+# Local-only open-mercato design-system + code-review skills (borrowed for module
+# development; not part of this repo). Copied from the open-mercato repo's .ai/.
+/.ai/skills/om-ds-guardian/
+/.ai/skills/om-code-review/
+/.ai/skills/om-backend-ui-design/
+/.ai/ds-rules.md
+/.ai/ui-components.md
+
+# Local-only agentic harness infra (machine-specific paths / borrowed core docs;
+# not part of this repo). MCP server config + the open-mercato core ARCHITECTURE.md
+# rules reference used by the dev-harness skills.
+/.mcp.json
+/ARCHITECTURE.md

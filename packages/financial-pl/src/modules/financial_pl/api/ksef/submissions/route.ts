@@ -22,6 +22,10 @@ function toRow(submission: KsefSubmission) {
   return {
     id: submission.id,
     salesInvoiceId: submission.salesInvoiceId,
+    // Expose the discriminator: a correction (credit_memo) row stores salesInvoiceId = the
+    // CORRECTED original, so a ?salesInvoiceId= query returns both — clients must distinguish.
+    documentKind: submission.documentKind,
+    creditMemoId: submission.creditMemoId ?? null,
     status: submission.status,
     environment: submission.environment,
     ksefNumber: submission.ksefNumber ?? null,
@@ -53,6 +57,17 @@ export async function GET(req: Request) {
     if (salesInvoiceId) filter.salesInvoiceId = salesInvoiceId
     const status = url.searchParams.get('status')
     if (status) filter.status = status as KsefSubmission['status']
+    // Discriminator filter. DEFAULTS to 'invoice' so a ?salesInvoiceId= query keeps its
+    // pre-correction meaning (invoice submissions only) — a correction stores salesInvoiceId =
+    // the corrected original, so without this default an existing invoice-facing client would
+    // see a correction's status/number as the original invoice's state (a BC break). Pass
+    // documentKind=credit_memo for corrections, or documentKind=all for both.
+    const documentKind = url.searchParams.get('documentKind')
+    if (documentKind === 'invoice' || documentKind === 'credit_memo') {
+      filter.documentKind = documentKind
+    } else if (documentKind !== 'all') {
+      filter.documentKind = 'invoice'
+    }
 
     const em = (container.resolve('em') as EntityManager).fork()
     const [rows, total] = await em.findAndCount(KsefSubmission, filter, {
@@ -139,7 +154,7 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     GET: {
       summary: 'List KSeF submissions',
-      description: 'Returns KSeF submission status rows for the current org/tenant. Supports ?ids=, ?salesInvoiceId=, ?status=.',
+      description: 'Returns KSeF submission status rows for the current org/tenant. Supports ?ids=, ?salesInvoiceId=, ?status=, ?documentKind=invoice|credit_memo|all. DEFAULTS to documentKind=invoice (corrections store salesInvoiceId = the corrected original, so the default preserves an invoice-only view); pass documentKind=credit_memo for corrections or documentKind=all for both. Rows expose documentKind/creditMemoId.',
       responses: [{ status: 200, description: 'Submission list', schema: listResponseSchema }],
     },
     POST: {

@@ -20,6 +20,7 @@ export function buildFa3XmlFromInput(input: Fa3InvoiceInput, opts: { systemInfo?
       vatBreakdown: input.vatBreakdown,
       totalGross: input.totalGross,
       annotations: input.annotations,
+      correction: input.correction,
     },
     lines: input.lines,
   }

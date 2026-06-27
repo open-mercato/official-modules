@@ -15,6 +15,7 @@ import type { ResponseEnricher, EnricherContext } from '@open-mercato/shared/lib
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { KsefSubmission, SalesInvoicePlMeta } from './entities'
+import { deriveJpkVatMarking, type JpkVatMarking } from '../lib/jpk-vat-marking'
 
 type InvoiceRecord = Record<string, unknown> & { id: string }
 type EnricherScope = EnricherContext & { em: EntityManager }
@@ -27,6 +28,8 @@ type FinancialPlEnrichment = {
     submissionId: string | null
     /** Whether the latest submission holds a stored UPO receipt (download available). */
     upoAvailable: boolean
+    /** JPK_VAT KSeF marking for this invoice (null while undetermined/in-flight). */
+    jpkVatMarking: JpkVatMarking | null
   }
 }
 
@@ -35,6 +38,7 @@ const EMPTY: FinancialPlEnrichment['_financial_pl'] = {
   ksefNumber: null,
   submissionId: null,
   upoAvailable: false,
+  jpkVatMarking: null,
 }
 
 async function enrichInvoices(
@@ -53,15 +57,19 @@ async function enrichInvoices(
   // subscriber never decrypts the (potentially large) receipt just to enrich a list.
   // UPO availability is derived from the accepted status (the flow stores the receipt
   // before flipping to 'accepted'), so no encrypted column is read at all.
+  // Only the invoice's OWN submissions (document_kind='invoice'): a correction
+  // submission stores sales_invoice_id = the CORRECTED original, so without this filter
+  // an accepted correction would bleed its status/number/marking onto the original.
   const submissions = await em.find(
     KsefSubmission,
     {
       salesInvoiceId: { $in: invoiceIds },
+      documentKind: 'invoice',
       organizationId: context.organizationId,
       tenantId: context.tenantId,
       deletedAt: null,
     },
-    { orderBy: { createdAt: 'desc' }, fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'createdAt'] },
+    { orderBy: { createdAt: 'desc' }, fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'mode', 'createdAt'] },
   )
   const submissionByInvoice = new Map<string, (typeof submissions)[number]>()
   for (const submission of submissions) {
@@ -83,15 +91,24 @@ async function enrichInvoices(
   return records.map((record) => {
     const submission = submissionByInvoice.get(record.id)
     const meta = metaByInvoice.get(record.id)
+    const ksefStatus = submission?.status ?? meta?.ksefStatus ?? null
+    const ksefNumber = submission?.ksefNumber ?? meta?.ksefNumber ?? null
+    const marking = deriveJpkVatMarking({
+      ksefStatus,
+      ksefNumber,
+      mode: submission?.mode ?? null,
+      issuedOutsideKsef: meta?.issuedOutsideKsef ?? false,
+    })
     return {
       ...record,
       _financial_pl: {
-        ksefStatus: submission?.status ?? meta?.ksefStatus ?? null,
-        ksefNumber: submission?.ksefNumber ?? meta?.ksefNumber ?? null,
+        ksefStatus,
+        ksefNumber,
         submissionId: submission?.id ?? null,
         // Accepted ⟺ a stored UPO (finalizeAccepted only flips to 'accepted' after the
         // receipt is persisted), so this is an accurate, decryption-free availability flag.
         upoAvailable: submission?.status === 'accepted',
+        jpkVatMarking: marking.marking,
       },
     }
   })

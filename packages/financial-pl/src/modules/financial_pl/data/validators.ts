@@ -43,6 +43,23 @@ export const fa3AnnotationsSchema = z.object({
   vatExemptionBasis: z.string().min(1).optional(),
 })
 
+/** One corrected-invoice reference → FA(3) `DaneFaKorygowanej`. */
+export const fa3CorrectionReferenceSchema = z.object({
+  correctedIssueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  correctedInvoiceNumber: z.string().min(1).max(256),
+  /** The corrected invoice's KSeF number; absent ⇒ original issued outside KSeF (NrKSeFN). */
+  correctedKsefNumber: z.string().min(1).max(64).optional(),
+})
+
+/** FA(3) correction block, required when `invoiceKind === 'KOR'`. */
+export const fa3CorrectionSchema = z.object({
+  reason: z.string().min(1).max(1000).optional(),
+  /** TypKorekty: 1 = original-date effect, 2 = correction-date effect, 3 = other/mixed. */
+  correctionType: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  correctedInvoices: z.array(fa3CorrectionReferenceSchema).min(1),
+  period: z.string().min(1).max(256).optional(),
+})
+
 export const fa3LineSchema = z.object({
   lineNumber: z.number().int().positive(),
   name: z.string().min(1).max(256),
@@ -59,25 +76,46 @@ export const fa3InvoiceSchema = z
     issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     saleDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     currencyCode: z.string().length(3).default('PLN').transform((value) => value.toUpperCase()),
-    invoiceKind: z.enum(['VAT', 'KOR', 'ZAL', 'ROZ', 'UPR']).optional(),
+    invoiceKind: z.enum(['VAT', 'KOR', 'ZAL', 'ROZ', 'UPR', 'KOR_ZAL', 'KOR_ROZ']).optional(),
     seller: fa3PartySchema,
     buyer: fa3PartySchema,
     vatBreakdown: z.array(fa3VatEntrySchema).min(1),
     totalGross: moneySchema,
     lines: z.array(fa3LineSchema).min(1),
     annotations: fa3AnnotationsSchema.optional(),
+    /** Required iff invoiceKind === 'KOR' (correction). Forbidden otherwise. */
+    correction: fa3CorrectionSchema.optional(),
   })
-  // E1 send scope, enforced on the schema so BOTH the direct `POST /ksef/submissions`
-  // (explicit FA(3) payload) path and the resolver's final parse reject anything the
-  // structurally-minimal serializer cannot faithfully emit: a non-VAT kind
-  // (KOR/ZAL/ROZ/UPR need correction/advance/settlement blocks), a non-PLN currency
-  // (needs KursWaluty + PLN VAT), or a VAT rate with no FA(3) `P_13_x` mapping.
+  // Send scope, enforced on the schema so BOTH the direct `POST /ksef/submissions`
+  // (explicit FA(3) payload) path and the resolvers' final parse reject anything the
+  // serializer cannot faithfully emit. Supported kinds: VAT (standard) and KOR
+  // (correction). ZAL/ROZ/UPR and the advance/settlement-correction variants
+  // (KOR_ZAL/KOR_ROZ) still need advance/settlement blocks that do not exist yet; a
+  // non-PLN currency needs KursWaluty + PLN VAT; a VAT rate must map to an FA(3) `P_13_x`.
   .superRefine((invoice, ctx) => {
-    if (invoice.invoiceKind && invoice.invoiceKind !== 'VAT') {
+    const kind = invoice.invoiceKind ?? 'VAT'
+    if (kind !== 'VAT' && kind !== 'KOR') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['invoiceKind'],
-        message: 'Only standard VAT invoices can be submitted to KSeF yet (KOR/ZAL/ROZ/UPR unsupported).',
+        message: 'Only standard VAT invoices and corrections (KOR) can be submitted to KSeF yet (ZAL/ROZ/UPR/KOR_ZAL/KOR_ROZ unsupported).',
+      })
+    }
+    // The correction block is required for a KOR and forbidden for a non-correction,
+    // so the serializer never emits a DaneFaKorygowanej without a RodzajFaktury=KOR
+    // (or a KOR without its mandatory corrected-invoice reference).
+    if (kind === 'KOR' && !invoice.correction) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['correction'],
+        message: 'A correction (KOR) invoice requires the correction block referencing the corrected invoice.',
+      })
+    }
+    if (kind !== 'KOR' && invoice.correction) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['correction'],
+        message: 'The correction block is only valid for a KOR (correction) invoice.',
       })
     }
     if (invoice.currencyCode.toUpperCase() !== 'PLN') {
@@ -109,10 +147,17 @@ export const fa3InvoiceSchema = z
 
 export const ksefEnvironmentSchema = z.enum(['test', 'demo', 'prod'])
 
+export const ksefSubmissionDocumentKindSchema = z.enum(['invoice', 'credit_memo'])
+
 export const ksefSubmissionSendSchema = z.object({
   organizationId: z.string().uuid().optional(),
   tenantId: z.string().uuid().optional(),
+  // For an invoice submission: the invoice id. For a correction: the CORRECTED original invoice id.
   salesInvoiceId: z.string().uuid(),
+  // Discriminates a standard invoice from a correction (credit memo → FA(3) KOR). Default 'invoice'.
+  documentKind: ksefSubmissionDocumentKindSchema.optional(),
+  // The credit memo id; required (and only set) when documentKind === 'credit_memo'.
+  creditMemoId: z.string().uuid().optional(),
   contextNip: nipSchema,
   environment: ksefEnvironmentSchema.optional(),
   invoice: fa3InvoiceSchema,
@@ -126,6 +171,12 @@ export const sendFromInvoiceSchema = z.object({
   salesInvoiceId: z.string().uuid(),
 })
 
+export const sendFromCreditMemoSchema = z.object({
+  creditMemoId: z.string().uuid(),
+  /** Confirm the corrected ORIGINAL invoice was lawfully issued outside KSeF (→ NrKSeFN). */
+  originalOutsideKsef: z.boolean().optional(),
+})
+
 export const ksefSubmissionListQuerySchema = z.object({
   ids: z.string().optional(),
   salesInvoiceId: z.string().uuid().optional(),
@@ -136,8 +187,10 @@ export const ksefSubmissionListQuerySchema = z.object({
 
 export type Fa3PartyInput = z.infer<typeof fa3PartySchema>
 export type Fa3AnnotationsInput = z.infer<typeof fa3AnnotationsSchema>
+export type Fa3CorrectionInput = z.infer<typeof fa3CorrectionSchema>
 export type Fa3InvoiceInput = z.infer<typeof fa3InvoiceSchema>
 export type KsefSubmissionSendInput = z.infer<typeof ksefSubmissionSendSchema>
 export type KsefSubmissionRetryInput = z.infer<typeof ksefSubmissionRetrySchema>
 export type SendFromInvoiceInput = z.infer<typeof sendFromInvoiceSchema>
+export type SendFromCreditMemoInput = z.infer<typeof sendFromCreditMemoSchema>
 export type KsefSubmissionListQuery = z.infer<typeof ksefSubmissionListQuerySchema>

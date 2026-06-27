@@ -53,6 +53,39 @@ export type Fa3Line = {
   vatRate: Fa3VatRate
 }
 
+/** A single corrected-invoice reference inside FA(3) `DaneFaKorygowanej`. */
+export type Fa3CorrectionReference = {
+  /** DataWystFaKorygowanej — issue date of the corrected (original) invoice (YYYY-MM-DD). */
+  correctedIssueDate: string
+  /** NrFaKorygowanej — invoice number of the corrected (original) invoice. */
+  correctedInvoiceNumber: string
+  /**
+   * NrKSeFFaKorygowanej — the corrected invoice's KSeF number when it was issued in
+   * KSeF (emits the `NrKSeF=1` choice branch). When absent, the corrected invoice was
+   * issued outside KSeF (legacy/offline) and the `NrKSeFN=1` marker is emitted instead.
+   */
+  correctedKsefNumber?: string
+}
+
+/**
+ * FA(3) correction block (emitted after `RodzajFaktury` for `RodzajFaktury=KOR`).
+ * Child order matches schemat_FA(3)_v1-0E.xsd:
+ *   PrzyczynaKorekty? → TypKorekty? → DaneFaKorygowanej[] → OkresFaKorygowanej?
+ */
+export type Fa3Correction = {
+  /** PrzyczynaKorekty — free-text reason for the correction (optional in FA(3)). */
+  reason?: string
+  /**
+   * TypKorekty — VAT-ledger effect: 1 = effective on the original-invoice date,
+   * 2 = effective on the correction-invoice date, 3 = other/mixed (optional).
+   */
+  correctionType?: 1 | 2 | 3
+  /** DaneFaKorygowanej — at least one corrected-invoice reference (FA(3) allows many). */
+  correctedInvoices: Fa3CorrectionReference[]
+  /** OkresFaKorygowanej — period for a collective rebate correction (optional). */
+  period?: string
+}
+
 export type Fa3InvoiceModel = {
   createdAt: string
   systemInfo?: string
@@ -62,10 +95,12 @@ export type Fa3InvoiceModel = {
   issueDate: string
   saleDate?: string
   currencyCode: string
-  invoiceKind?: 'VAT' | 'KOR' | 'ZAL' | 'ROZ' | 'UPR'
+  invoiceKind?: 'VAT' | 'KOR' | 'ZAL' | 'ROZ' | 'UPR' | 'KOR_ZAL' | 'KOR_ROZ'
   vatBreakdown: Fa3VatBreakdownEntry[]
   totalGross: string
   annotations?: Fa3Annotations
+  /** Present only for correction invoices (RodzajFaktury=KOR family). */
+  correction?: Fa3Correction
 }
 
 export type Fa3Document = {
@@ -261,6 +296,40 @@ function renderAnnotations(annotations?: Fa3Annotations): string {
   ].join('')
 }
 
+/**
+ * Correction block for a `RodzajFaktury=KOR` invoice. Emitted immediately AFTER
+ * `RodzajFaktury` and BEFORE the lines, in the exact FA(3) XSD child order:
+ *   PrzyczynaKorekty? → TypKorekty? → DaneFaKorygowanej[] → OkresFaKorygowanej?
+ * `DaneFaKorygowanej` = DataWystFaKorygowanej, NrFaKorygowanej, then the required
+ * choice: the corrected invoice's KSeF number (`<NrKSeF>1</NrKSeF>` +
+ * `<NrKSeFFaKorygowanej>`) when known, else the outside-KSeF marker `<NrKSeFN>1</NrKSeFN>`.
+ */
+function renderCorrection(correction: Fa3Correction): string {
+  if (correction.correctedInvoices.length === 0) {
+    throw new Error('[internal] FA(3) correction must reference at least one corrected invoice')
+  }
+  const parts: string[] = []
+  const reason = correction.reason?.trim()
+  if (reason) parts.push(el('PrzyczynaKorekty', reason))
+  if (correction.correctionType) parts.push(el('TypKorekty', String(correction.correctionType)))
+  for (const ref of correction.correctedInvoices) {
+    const ksefNumber = ref.correctedKsefNumber?.trim()
+    const choice = ksefNumber
+      ? el('NrKSeF', '1') + el('NrKSeFFaKorygowanej', ksefNumber)
+      : el('NrKSeFN', '1')
+    parts.push(
+      '<DaneFaKorygowanej>',
+      el('DataWystFaKorygowanej', ref.correctedIssueDate),
+      el('NrFaKorygowanej', ref.correctedInvoiceNumber),
+      choice,
+      '</DaneFaKorygowanej>',
+    )
+  }
+  const period = correction.period?.trim()
+  if (period) parts.push(el('OkresFaKorygowanej', period))
+  return parts.join('')
+}
+
 export function buildFa3Xml(doc: Fa3Document): string {
   const { model, lines } = doc
   if (lines.length === 0) {
@@ -290,6 +359,8 @@ export function buildFa3Xml(doc: Fa3Document): string {
     el('P_15', model.totalGross),
     renderAnnotations(model.annotations),
     el('RodzajFaktury', model.invoiceKind ?? 'VAT'),
+    // Correction block (KOR family) sits between RodzajFaktury and FaWiersz per the XSD.
+    model.correction ? renderCorrection(model.correction) : '',
     ...lines.map(renderLine),
     '</Fa>',
   ].join('')
