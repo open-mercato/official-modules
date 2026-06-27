@@ -26,7 +26,10 @@ const widget: InjectionFieldWidget = {
   fields: [
     {
       id: 'financial_pl.plVatMeta',
-      label: 'financial_pl.fields.plVatMeta',
+      // Human-readable default: the host CrudForm (the country-agnostic sales form)
+      // renders this label without the financial_pl i18n bundle, so a bare key would
+      // show raw. `labelKey` still lets a host that CAN resolve it localize.
+      label: 'Polish VAT metadata',
       labelKey: 'financial_pl.fields.plVatMeta',
       type: 'custom',
       group: 'details',
