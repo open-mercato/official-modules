@@ -468,6 +468,21 @@ export const ksefSubmissionListQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).optional(),
 })
 
+/**
+ * Query schema for the self-contained invoices-with-KSeF-status list endpoint
+ * (`GET /api/financial_pl/ksef/invoices`, SPEC-013). `search` matches the invoice number
+ * (free text); `status` filters on the joined KSeF submission status (validated against the
+ * KsefSubmission status union at the route, not here, to keep the schema decoupled from the
+ * entity column type). `page`/`pageSize` are coerced from the query string with safe defaults
+ * (1 / 25) and a 100-row ceiling (the DataTable `pageSize ≤ 100` rule).
+ */
+export const ksefInvoiceListQuerySchema = z.object({
+  search: z.string().trim().min(1).max(256).optional(),
+  status: z.string().trim().min(1).max(64).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(25),
+})
+
 // JPK-VAT (V7M/V7K) record + filing persistence boundary (SPEC-006). Monetary fields are carried
 // as decimal strings (mirroring `moneySchema`) so they round-trip the JPK exporter's fixed-point
 // amounts without float drift. The optional-monetary helper additionally accepts an empty string
@@ -696,6 +711,7 @@ export type KsefRecomputeOfflineDeadlineInput = z.infer<typeof ksefRecomputeOffl
 export type SendFromInvoiceInput = z.infer<typeof sendFromInvoiceSchema>
 export type SendFromCreditMemoInput = z.infer<typeof sendFromCreditMemoSchema>
 export type KsefSubmissionListQuery = z.infer<typeof ksefSubmissionListQuerySchema>
+export type KsefInvoiceListQuery = z.infer<typeof ksefInvoiceListQuerySchema>
 export type JpkPurchaseRecordUpsertInput = z.infer<typeof jpkPurchaseRecordUpsertSchema>
 export type JpkPurchaseRecordDeleteInput = z.infer<typeof jpkPurchaseRecordDeleteSchema>
 export type JpkFilingUpsertInput = z.infer<typeof jpkFilingUpsertSchema>

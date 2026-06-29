@@ -1,34 +1,17 @@
 import type { ModuleInjectionTable } from '@open-mercato/shared/modules/widgets/injection'
 
 /**
- * financial_pl → sales-invoice host wiring. The sales-invoices UI host exposes
- * the DataTable id `sales.invoices` and the CrudForm entity id
- * `sales.sales_invoice`; financial_pl mounts its KSeF column, send action, and
- * PL VAT meta fields at those spots without the sales module knowing about KSeF.
+ * financial_pl owns its invoice + KSeF operator UI directly (the module's own
+ * backend pages under `backend/financial/*`, composed from `components/*`).
+ *
+ * It intentionally injects NOTHING into the core `sales` module: released
+ * `@open-mercato/core` ships no invoice UI host (no `sales.invoices` DataTable and
+ * no `sales.sales_invoice` CrudForm — invoices are data + API only), so injecting
+ * into those spots would be dead wiring coupled to a non-existent host (SPEC-013,
+ * spec-stage cross-model jury). The cross-module immutability guard lives in
+ * `api/interceptors.ts`; the per-invoice KSeF status is exposed via the response
+ * enricher in `data/enrichers.ts`.
  */
-export const injectionTable: ModuleInjectionTable = {
-  'data-table:sales.invoices:columns': [
-    {
-      widgetId: 'financial_pl.injection.ksef-status-column',
-      priority: 100,
-    },
-  ],
-  'data-table:sales.invoices:row-actions': [
-    {
-      widgetId: 'financial_pl.injection.ksef-send-action',
-      priority: 100,
-    },
-    {
-      widgetId: 'financial_pl.injection.ksef-invoice-pdf',
-      priority: 90,
-    },
-  ],
-  'crud-form:sales.sales_invoice:fields': [
-    {
-      widgetId: 'financial_pl.injection.pl-vat-meta-fields',
-      priority: 100,
-    },
-  ],
-}
+export const injectionTable: ModuleInjectionTable = {}
 
 export default injectionTable
