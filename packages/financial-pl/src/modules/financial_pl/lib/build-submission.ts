@@ -21,6 +21,14 @@ export function buildFa3XmlFromInput(input: Fa3InvoiceInput, opts: { systemInfo?
       totalGross: input.totalGross,
       annotations: input.annotations,
       correction: input.correction,
+      // Advanced document-type blocks (SPEC-009) — MUST be threaded through or ZAL files with
+      // no Zamowienie (and throws "must have at least one line"), ROZ files with no
+      // FakturaZaliczkowa, and KOR_ZAL drops its corrected order. The serializer emits each only
+      // when present, so a plain VAT/KOR document is byte-identical.
+      advancePayments: input.advancePayments,
+      advanceInvoiceRefs: input.advanceInvoiceRefs,
+      order: input.order,
+      selfBilling: input.selfBilling,
     },
     lines: input.lines,
   }

@@ -7,15 +7,20 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { KsefSubmission, type KsefSubmissionStatusColumn } from '../data/entities'
+import { createPrivateKey } from 'node:crypto'
 import {
   ksefSubmissionSendSchema,
   ksefSubmissionRetrySchema,
   sendFromInvoiceSchema,
   sendFromCreditMemoSchema,
+  ksefIssueOfflineSchema,
+  ksefRecomputeOfflineDeadlineSchema,
   type KsefSubmissionSendInput,
   type KsefSubmissionRetryInput,
   type SendFromInvoiceInput,
   type SendFromCreditMemoInput,
+  type KsefIssueOfflineInput,
+  type KsefRecomputeOfflineDeadlineInput,
 } from '../data/validators'
 import { buildFa3XmlFromInput } from '../lib/build-submission'
 import {
@@ -25,6 +30,11 @@ import {
 import { resolveFa3FromCreditMemo } from '../lib/resolve-fa3-from-credit-memo'
 import { emitFinancialPlEvent } from '../events'
 import { resolveKsefEnvironment } from '../config'
+import { readKsefCredentials as readKsefCredentialsFull } from '../lib/credentials'
+import { assertCertificateValidNow, CertificateValidityError } from '../lib/cert-enrollment'
+import { buildKodIUrl } from '../lib/ksef-qr'
+import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
+import { computeOfflineSendDeadline } from '../lib/offline-deadline'
 
 type CredentialsService = {
   getRaw: (
@@ -128,7 +138,13 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
     //  - A credit_memo submission must be a KOR payload — else a normal VAT invoice could set
     //    document_kind='credit_memo' with fresh creditMemoIds and bypass the invoice-scoped
     //    active-unique dedupe, queuing multiple active submissions for the same invoice.
-    const isKorPayload = parsed.invoice.invoiceKind === 'KOR'
+    // Any correction RodzajFaktury (KOR / KOR_ZAL / KOR_ROZ) is a credit-memo payload — gating only
+    // on 'KOR' would reject advance/settlement corrections (correction_kind_mismatch) and block
+    // them from ever being sent.
+    const isKorPayload =
+      parsed.invoice.invoiceKind === 'KOR' ||
+      parsed.invoice.invoiceKind === 'KOR_ZAL' ||
+      parsed.invoice.invoiceKind === 'KOR_ROZ'
     if (isKorPayload !== (documentKind === 'credit_memo')) {
       throw new CrudHttpError(422, {
         error: '[internal] document_kind=credit_memo and FA(3) RodzajFaktury=KOR must be used together',
@@ -364,7 +380,215 @@ export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, 
   },
 }
 
+/** Detect the Offline cert key algorithm (RSA-PSS vs ECDSA-P256) from the stored PEM. */
+function detectKodIIAlgorithm(privateKeyPem: string): KsefKodIIAlgorithm {
+  const type = createPrivateKey(privateKeyPem).asymmetricKeyType
+  return type === 'ec' ? 'EC' : 'RSA'
+}
+
+/**
+ * Issue an invoice OFFLINE (offline24 / awaryjny) — SPEC-010. Builds the byte-stable FA(3)
+ * XML now, computes KOD I (labelled OFFLINE) + the cert-signed KOD II, computes the statutory
+ * send-to-KSeF deadline, and persists a `KsefSubmission` with `status='offline_issued'` and NO
+ * KSeF number yet (the worker sends it within the deadline and reconciles the retroactive
+ * number). Requires an enrolled Offline certificate (409 `offline_certificate_required`) that is
+ * valid now (409 `offline_certificate_invalid`, jury delta #3). The extended active-unique index
+ * prevents a duplicate active row for the same invoice (jury delta #2).
+ */
+export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submissionId: string; status: 'offline_issued'; deadline: string }> = {
+  id: 'financial_pl.ksef_submission.issue_offline',
+  async execute(input, ctx) {
+    const parsed = ksefIssueOfflineSchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
+
+    const { translate } = await resolveTranslations()
+    const queryEngine = ctx.container.resolve('queryEngine') as ResolveFa3QueryEngine
+
+    // The full credential read surfaces the Offline cert triple (separate from the
+    // Authentication credential) + the context NIP + the resolved environment.
+    const creds = await readKsefCredentialsFull(
+      { resolve: (name) => ctx.container.resolve(name) },
+      scope,
+    )
+    const details = await readKsefCredentials(ctx, scope)
+    const contextNip = details.contextNip
+    if (!contextNip) {
+      throw new CrudHttpError(409, {
+        error: translate('financial_pl.errors.credentials_missing', 'KSeF credentials are not configured for this organization.'),
+      })
+    }
+
+    // An Offline cert (PEM + private key) is mandatory: KOD II is signed by it. Without it the
+    // invoice cannot carry a verifiable certificate QR, so issuance is refused up front.
+    if (!creds.offlineCertificatePem || !creds.offlineCertificatePrivateKeyPem) {
+      throw new CrudHttpError(409, {
+        error: translate('financial_pl.errors.offline_certificate_required', 'An Offline KSeF certificate must be enrolled before issuing an invoice offline.'),
+        code: 'offline_certificate_required',
+      })
+    }
+
+    // Jury delta #3: refuse issuance with an expired / not-yet-valid Offline cert — its KOD II
+    // signature would fail KSeF verification and be legally non-compliant.
+    try {
+      await assertCertificateValidNow(creds.offlineCertificatePem)
+    } catch (err) {
+      if (err instanceof CertificateValidityError) {
+        throw new CrudHttpError(409, {
+          error: translate('financial_pl.errors.offline_certificate_invalid', 'The Offline KSeF certificate is expired or not yet valid.'),
+          code: 'offline_certificate_invalid',
+        })
+      }
+      throw err
+    }
+
+    // Build the byte-stable FA(3) XML from sales (same resolver/builder as the online path).
+    const invoicePayload = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip, translate, seller: details.seller },
+      {
+        salesInvoiceId: parsed.salesInvoiceId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+      },
+    )
+    const invoiceXml = buildFa3XmlFromInput(invoicePayload)
+
+    const environment = resolveKsefEnvironment(creds.environment ?? details.environment).environment
+    const sellerNip = invoicePayload.seller.nip ?? contextNip
+
+    // KOD I (label OFFLINE — the QR carries no KSeF number yet) + the cert-signed KOD II.
+    const kodIUrl = buildKodIUrl({
+      environment,
+      sellerNip,
+      issueDate: invoicePayload.issueDate,
+      invoiceXml,
+    })
+    const algorithm = detectKodIIAlgorithm(creds.offlineCertificatePrivateKeyPem)
+    const kodIiUrl = await buildKodIIUrl({
+      environment,
+      contextType: 'Nip',
+      contextValue: contextNip,
+      sellerNip,
+      certSerial: creds.offlineCertificateSerialNumber ?? '',
+      invoiceXml,
+      offlineCertificatePrivateKeyPem: creds.offlineCertificatePrivateKeyPem,
+      algorithm,
+    })
+
+    const now = new Date()
+    const deadline = computeOfflineSendDeadline({
+      issuedAt: now,
+      mode: parsed.mode,
+      failureEndsAt: parsed.failureEndsAt ? new Date(parsed.failureEndsAt) : null,
+    })
+
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+
+    // The active-unique index (status in queued/processing/accepted/offline_issued) already
+    // blocks a second active row for the same invoice; pre-check so a duplicate returns the
+    // existing offline-issued row rather than racing the unique violation.
+    const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted', 'offline_issued']
+    const dedupeWhere: FilterQuery<KsefSubmission> = {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      documentKind: 'invoice',
+      salesInvoiceId: parsed.salesInvoiceId,
+      status: { $in: activeStatuses },
+      deletedAt: null,
+    }
+    const existing = await em.findOne(KsefSubmission, dedupeWhere)
+    if (existing) {
+      return {
+        submissionId: existing.id,
+        status: 'offline_issued',
+        deadline: (existing.offlineSendDeadlineAt ?? deadline).toISOString(),
+      }
+    }
+
+    const submission = em.create(KsefSubmission, {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      salesInvoiceId: parsed.salesInvoiceId,
+      documentKind: 'invoice',
+      creditMemoId: null,
+      environment,
+      mode: parsed.mode,
+      status: 'offline_issued',
+      contextNip,
+      invoiceXml,
+      kodIUrl,
+      kodIiUrl,
+      offlineCertificateSerial: creds.offlineCertificateSerialNumber ?? null,
+      offlineIssuedAt: now,
+      offlineSendDeadlineAt: deadline,
+      attemptCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    try {
+      await em.persist(submission).flush()
+    } catch (err) {
+      if (isUniqueViolation(err, 'financial_pl_ksef_submissions_active_unique')) {
+        const winner = await em.findOne(KsefSubmission, dedupeWhere)
+        if (winner) {
+          return {
+            submissionId: winner.id,
+            status: 'offline_issued',
+            deadline: (winner.offlineSendDeadlineAt ?? deadline).toISOString(),
+          }
+        }
+      }
+      throw err
+    }
+
+    return { submissionId: submission.id, status: 'offline_issued', deadline: deadline.toISOString() }
+  },
+}
+
+/**
+ * Recompute the offline send deadline for the affected `offline_issued` rows when an MF failure
+ * is announced (jury delta #1). The operator supplies the failure-end window; every active
+ * offline-issued row in scope (optionally narrowed to one invoice) switches to the awaryjny
+ * +7-business-day rule. Never touches a row that already left the offline_issued state.
+ */
+export const recomputeOfflineDeadlineCommand: CommandHandler<KsefRecomputeOfflineDeadlineInput, { updated: number; deadline: string }> = {
+  id: 'financial_pl.ksef_submission.recompute_offline_deadline',
+  async execute(input, ctx) {
+    const parsed = ksefRecomputeOfflineDeadlineSchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
+
+    const failureEndsAt = new Date(parsed.failureEndsAt)
+    // The deadline anchors on the failure end + 7 business days for every affected row, so it is
+    // identical across them (issuedAt no longer governs once a failure overtakes offline24).
+    const deadline = computeOfflineSendDeadline({
+      issuedAt: failureEndsAt,
+      mode: 'awaryjny',
+      failureEndsAt,
+    })
+
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const where: FilterQuery<KsefSubmission> = {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      status: 'offline_issued',
+      deletedAt: null,
+      ...(parsed.salesInvoiceId ? { salesInvoiceId: parsed.salesInvoiceId } : {}),
+    }
+    const updated = await em.nativeUpdate(KsefSubmission, where, {
+      offlineSendDeadlineAt: deadline,
+      updatedAt: new Date(),
+    })
+
+    return { updated, deadline: deadline.toISOString() }
+  },
+}
+
 registerCommand(sendCommand)
 registerCommand(retryCommand)
 registerCommand(sendFromInvoiceCommand)
 registerCommand(sendFromCreditMemoCommand)
+registerCommand(issueOfflineCommand)
+registerCommand(recomputeOfflineDeadlineCommand)

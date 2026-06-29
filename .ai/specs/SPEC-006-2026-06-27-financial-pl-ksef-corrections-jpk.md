@@ -178,7 +178,7 @@ Additive migration (new columns default-valued; index predicate tightened + one 
 ## Risks & Impact Review
 
 ### Data Integrity Failures
-- **Mid-flight crash:** identical to SPEC-005 — the correction is one `KsefSubmission` row driven by the persistent subscriber; the atomic `queued→processing` claim + reconciliation sweep + KSeF 440-duplicate net apply unchanged (440 dedup key = seller NIP + `RodzajFaktury` + number, so a KOR never collides with the corrected VAT invoice).
+- **Mid-flight crash:** identical to SPEC-005 — the correction is one `KsefSubmission` row driven by the persistent subscriber; the atomic `queued→processing` claim + reconciliation sweep + KSeF 440-duplicate net apply unchanged. KSeF de-duplicates on the **SHA-256 content hash** of the invoice file (`invoiceHash`), not on seller NIP + `RodzajFaktury` + number; a byte-stable resend of the stored `invoice_xml` is what makes retries safe (a 440 returns the original `ksefNumber`/`sessionReference`). A KOR has a distinct content hash from the corrected VAT invoice, so it never collides with it.
 - **Concurrent double-send of a correction:** the new `credit_memo_active_unique` partial index + the unique-violation recovery prevent two active submissions per credit memo.
 
 ### Cascading Failures & Side Effects
@@ -273,6 +273,9 @@ OM_KSEF_TEST_NIP=2481632647 OM_KSEF_TEST_TOKEN=<token> OM_KSEF_TEST_STRICT=1 yar
 ```
 
 ## Changelog
+### 2026-06-28 — dedup-key correction
+- Corrected the Risks → Data Integrity Failures note: the KSeF 440 dedup key is the invoice **content hash** (SHA-256 `invoiceHash`), not seller NIP + number + `RodzajFaktury`. Byte-stable resend of the stored `invoice_xml` is what makes retries safe.
+
 ### 2026-06-27 — SPEC-006 initial
 - Correction (KOR) send path resolved from `sales.credit_memo`; FA(3) `DaneFaKorygowanej` (KSeF-number or `NrKSeFN`); `document_kind`/`credit_memo_id` on `KsefSubmission` with correction-aware idempotency; `send_from_credit_memo` command + `POST …/from-credit-memo`. JPK_VAT marking derivation (`NrKSeF`/`OFF`/`BFK`/`DI`) + `GET …/jpk-markings` + enricher field. Serializer validated against the official FA(3) `1-0E` XSD; live correction round-trip env-gated. Cross-org delegation dropped.
 - **Post cross-model-review hardening:** correction amounts emitted as the negation of the (non-negative) credit-memo amounts; `DataWystFaKorygowanej` taken from the **original** invoice's issue date (422 if absent, never the credit-memo date); `resolveCorrectedKsefNumber` filters `document_kind='invoice'` in the DB query (not just JS) so an accepted correction can't hide the original's submission nor a pending original be mislabeled; a direct-POST `KOR` payload must be a `credit_memo` submission (no bleed onto the corrected invoice); `GET …/jpk-markings` requires a resolved org scope (no tenant-wide read) + validates UUIDs; `send_from_credit_memo` returns 404 (unknown credit memo) before 409 (credentials).

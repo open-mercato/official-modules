@@ -8,8 +8,16 @@
  */
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
-import type { Fa3AnnotationsInput, Fa3InvoiceInput, Fa3PartyInput } from '../data/validators'
-import { isMappedFa3VatRate, type Fa3VatRate } from './fa3'
+import type {
+  Fa3AdvancePaymentInput,
+  Fa3AdvanceRefInput,
+  Fa3AnnotationsInput,
+  Fa3InvoiceInput,
+  Fa3OrderInput,
+  Fa3OrderLineInput,
+  Fa3PartyInput,
+} from '../data/validators'
+import { isMappedFa3VatRate, type Fa3VatBucketKey, type Fa3VatRate } from './fa3'
 
 export type Fa3MappingDeps = {
   /** Seller NIP from the ksef_pl integration credential `contextNip`. */
@@ -93,7 +101,7 @@ export function roundMoneyTo2dp(value: unknown): string {
   return `${negative ? '-' : ''}${whole.toString()}.${centsText}`
 }
 
-export function rateKey(rate: Fa3VatRate): string {
+export function rateKey(rate: Fa3VatBucketKey): string {
   return typeof rate === 'number' ? String(rate) : rate
 }
 
@@ -141,7 +149,7 @@ export function readInvoiceBuyerSnapshot(invoice: InvoiceRow): Record<string, un
  * 422 when no name + address can be resolved. The buyer NIP is optional (FA(3)
  * emits `<BrakID>1</BrakID>` for a buyer without an identifier).
  */
-export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps): Fa3PartyInput {
+export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps, opts: { uprNipOnly?: boolean } = {}): Fa3PartyInput {
   const snapshot = readInvoiceBuyerSnapshot(invoice)
 
   const name = asString(snapshot.companyName) ?? asString(snapshot.company_name) ?? asString(snapshot.name)
@@ -154,6 +162,27 @@ export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps): Fa3PartyI
     ? asString(snapshot.addressLine2) ?? asString(snapshot.address_line2) ?? cityLine ?? undefined
     : asString(snapshot.addressLine2) ?? asString(snapshot.address_line2) ?? undefined
 
+  const countryCode = normalizeCountryCode(snapshot.countryCode, snapshot.country, snapshot.country_code)
+
+  // UPR (simplified invoice, art. 106e ust. 5 pkt 3): the buyer may carry a NIP only — no Nazwa
+  // and no Adres. When full identity is unavailable, fall back to a NIP-only party (requires a
+  // NIP) instead of throwing `buyer_required`. A UPR buyer WITH a full name/address still emits
+  // the complete party (the serializer's NIP-only branch is gated on missing name/address).
+  if (opts.uprNipOnly && (!name || !addressLine1)) {
+    if (!nip) {
+      const message =
+        deps.translate?.('financial_pl.errors.buyer_required', BUYER_REQUIRED_DEFAULT) ?? BUYER_REQUIRED_DEFAULT
+      throw new CrudHttpError(422, { error: message, code: 'buyer_required' })
+    }
+    return {
+      nip,
+      countryCode,
+      ...(name ? { name } : {}),
+      ...(addressLine1 ? { addressLine1 } : {}),
+      ...(addressLine2 ? { addressLine2 } : {}),
+    }
+  }
+
   if (!name || !addressLine1) {
     const message =
       deps.translate?.('financial_pl.errors.buyer_required', BUYER_REQUIRED_DEFAULT) ?? BUYER_REQUIRED_DEFAULT
@@ -163,7 +192,7 @@ export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps): Fa3PartyI
   return {
     nip,
     name,
-    countryCode: normalizeCountryCode(snapshot.countryCode, snapshot.country, snapshot.country_code),
+    countryCode,
     addressLine1,
     addressLine2,
   }
@@ -235,6 +264,13 @@ export function buildLines(lineRows: InvoiceLineRow[]): Fa3InvoiceInput['lines']
   return lineRows.map((row, index) => {
     const lineNumber =
       typeof row.line_number === 'number' && row.line_number > 0 ? row.line_number : index + 1
+    // OSS / WSTO_EE line markers carried on the (resolver-annotated) row: the destination-country
+    // rate (`oss_rate`), the procedure marker, and the per-line FX rate to PLN (`fx_rate`). When
+    // `oss_rate` is set the serializer omits `P_12` and emits `P_12_XII` + `Procedura=WSTO_EE`.
+    const ossRate = asString(row.oss_rate)
+    const procedureText = asString(row.procedure)
+    const procedure = procedureText === 'WSTO_EE' ? ('WSTO_EE' as const) : undefined
+    const fxRate = asString(row.fx_rate)
     return {
       lineNumber,
       name: asString(row.name) ?? asString(row.description) ?? `Pozycja ${lineNumber}`,
@@ -243,6 +279,9 @@ export function buildLines(lineRows: InvoiceLineRow[]): Fa3InvoiceInput['lines']
       unitNetPrice: roundMoneyTo2dp(row.unit_price_net),
       netValue: roundMoneyTo2dp(row.total_net_amount),
       vatRate: normalizeVatRate(row.tax_rate),
+      ...(ossRate ? { ossRate } : {}),
+      ...(procedure ? { procedure } : {}),
+      ...(fxRate ? { fxRate } : {}),
     }
   })
 }
@@ -307,10 +346,15 @@ export function buildVatBreakdown(
   lineRows: InvoiceLineRow[],
   headerNetField: unknown,
   headerVatField: unknown,
+  opts: { fxRate?: string } = {},
 ): Fa3InvoiceInput['vatBreakdown'] {
-  const buckets = new Map<string, { rate: Fa3VatRate; netScaled: bigint; vatScaled: bigint }>()
+  // The OSS / WSTO_EE bucket is keyed by the synthetic `'oss'` rate so consumer-country lines
+  // NEVER merge into a Polish-rate bucket and roll up into a SINGLE P_13_5/P_14_5 summary
+  // regardless of how many distinct destination rates appear (no `W` PLN-converted variant).
+  const buckets = new Map<string, { rate: Fa3VatBucketKey; netScaled: bigint; vatScaled: bigint }>()
   for (const row of lineRows) {
-    const rate = normalizeVatRate(row.tax_rate)
+    const isOss = asString(row.oss_rate) !== null
+    const rate: Fa3VatBucketKey = isOss ? 'oss' : normalizeVatRate(row.tax_rate)
     const key = rateKey(rate)
     const existing = buckets.get(key) ?? { rate, netScaled: 0n, vatScaled: 0n }
     existing.netScaled += toScaled4(row.total_net_amount)
@@ -328,11 +372,26 @@ export function buildVatBreakdown(
       },
     ]
   }
-  return Array.from(buckets.values()).map((bucket) => ({
-    rate: bucket.rate,
-    net: scaled4ToMoney2dp(bucket.netScaled),
-    vat: scaled4ToMoney2dp(bucket.vatScaled),
-  }))
+  // FX: for a Polish-rate bucket on a foreign-currency invoice, emit the PLN-converted output
+  // VAT (`P_14_xW`, art. 106e ust. 11) = round(vat × rate) with EXACT BigInt math. The OSS
+  // bucket has no `W` variant, so `vatPln` is never set for it.
+  const fxScaled = opts.fxRate ? toScaled4(opts.fxRate) : 0n
+  const hasFx = fxScaled > 0n
+  return Array.from(buckets.values()).map((bucket) => {
+    const entry: Fa3InvoiceInput['vatBreakdown'][number] = {
+      rate: bucket.rate,
+      net: scaled4ToMoney2dp(bucket.netScaled),
+      vat: scaled4ToMoney2dp(bucket.vatScaled),
+    }
+    if (hasFx && bucket.rate !== 'oss') {
+      // vatScaled (4dp) × fxScaled (4dp) = an 8dp-scaled product; divide by 1e4 back to 4dp,
+      // then round to 2dp money via the shared helper.
+      const productScaled8 = bucket.vatScaled * fxScaled
+      const vatPlnScaled4 = productScaled8 / 10000n
+      entry.vatPln = scaled4ToMoney2dp(vatPlnScaled4)
+    }
+    return entry
+  })
 }
 
 /** Assert every VAT bucket maps to an FA(3) `P_13_x` field, else throw a localized 422. */
@@ -350,16 +409,106 @@ export function assertMappedVatRates(
   }
 }
 
-/** Derive the FA(3) `Adnotacje` flags (MPP + VAT-exemption basis) from PL VAT metadata. */
+/**
+ * Derive the FA(3) `Adnotacje` flags from the PL VAT metadata extension:
+ *   - `mpp_required`     → split payment (P_18A)
+ *   - `vat_exemption_basis` → VAT-exemption basis (Zwolnienie / P_19 + P_19C)
+ *   - `self_billing`     → self-billing / samofakturowanie, art. 106d (P_17)
+ *   - `reverse_charge`   → reverse charge / odwrotne obciążenie (P_18)
+ * Booleans accept either a real boolean or a stored string ('true'/'1') via the shared parser.
+ */
 export function buildAnnotations(meta: Record<string, unknown> | undefined): Fa3AnnotationsInput | undefined {
-  const splitPayment =
-    typeof meta?.mpp_required === 'boolean'
-      ? meta.mpp_required
-      : parseBooleanWithDefault(asString(meta?.mpp_required), false)
+  const flag = (value: unknown): boolean =>
+    typeof value === 'boolean' ? value : parseBooleanWithDefault(asString(value), false)
+  const splitPayment = flag(meta?.mpp_required)
+  const selfBilling = flag(meta?.self_billing)
+  const reverseCharge = flag(meta?.reverse_charge)
   const vatExemptionBasis = asString(meta?.vat_exemption_basis) ?? undefined
-  if (!splitPayment && !vatExemptionBasis) return undefined
+  if (!splitPayment && !selfBilling && !reverseCharge && !vatExemptionBasis) return undefined
   return {
     ...(splitPayment ? { splitPayment: true } : {}),
+    ...(reverseCharge ? { reverseCharge: true } : {}),
+    ...(selfBilling ? { selfBilling: true } : {}),
     ...(vatExemptionBasis ? { vatExemptionBasis } : {}),
   }
+}
+
+/**
+ * Map the PL-meta `order_snapshot` JSON into the FA(3) `Zamowienie` (order) input carried by an
+ * advance (ZAL / KOR_ZAL). Money is rounded to 2dp via the shared BigInt helper; the order-line
+ * VAT rate reuses `normalizeVatRate` (only a KSeF-mappable rate is then accepted at parse time).
+ * Returns `undefined` when no usable order snapshot is present.
+ */
+export function buildZamowienie(orderSnapshot: unknown): Fa3OrderInput | undefined {
+  const snapshot = asRecord(orderSnapshot)
+  const rawLines = Array.isArray(snapshot.lines) ? snapshot.lines : []
+  if (rawLines.length === 0) return undefined
+  const lines: Fa3OrderLineInput[] = rawLines.map((raw, index) => {
+    const row = asRecord(raw)
+    const name = asString(row.name) ?? asString(row.description) ?? undefined
+    const unit = asString(row.unit) ?? asString(row.quantity_unit) ?? undefined
+    const quantity = asString(row.quantity) ?? undefined
+    const unitPrice = row.unitPrice ?? row.unit_price ?? row.unitNetPrice
+    const netValue = row.netValue ?? row.total_net_amount
+    const vatValue = row.vatValue ?? row.tax_amount
+    const rateSource = row.vatRate ?? row.tax_rate
+    const line: Fa3OrderLineInput = { lineNumber: index + 1 }
+    if (name) line.name = name
+    if (unit) line.unit = unit
+    if (quantity) line.quantity = quantity
+    if (unitPrice !== undefined && unitPrice !== null) line.unitNetPrice = roundMoneyTo2dp(unitPrice)
+    if (netValue !== undefined && netValue !== null) line.netValue = roundMoneyTo2dp(netValue)
+    if (vatValue !== undefined && vatValue !== null) line.vatValue = roundMoneyTo2dp(vatValue)
+    if (rateSource !== undefined && rateSource !== null) line.vatRate = normalizeVatRate(rateSource)
+    const gtu = asString(row.gtu) ?? undefined
+    if (gtu) line.gtu = gtu
+    if (row.stanPrzed === true) line.stanPrzed = true
+    return line
+  })
+  const totalValue = roundMoneyTo2dp(
+    snapshot.totalValue ?? snapshot.total_value ?? snapshot.totalGross ?? snapshot.total_gross,
+  )
+  return { totalValue, lines }
+}
+
+/**
+ * Map the PL-meta `advance_payments` JSON into the FA(3) `ZaliczkaCzesciowa` inputs documented by
+ * a ZAL invoice. Each row carries the received date (P_6Z), the advance amount (P_15Z, rounded to
+ * 2dp), and an optional FX rate (KursWalutyZW). Malformed/empty rows are skipped.
+ */
+export function buildAdvancePayments(snapshot: unknown): Fa3AdvancePaymentInput[] {
+  const rows = Array.isArray(snapshot) ? snapshot : []
+  const payments: Fa3AdvancePaymentInput[] = []
+  for (const raw of rows) {
+    const row = asRecord(raw)
+    const receivedDate = toIsoDate(row.receivedDate ?? row.received_date ?? row.date)
+    const amountSource = row.amount ?? row.value
+    if (!receivedDate || amountSource === undefined || amountSource === null) continue
+    const payment: Fa3AdvancePaymentInput = { receivedDate, amount: roundMoneyTo2dp(amountSource) }
+    const fxRate = asString(row.fxRate ?? row.fx_rate)
+    if (fxRate) payment.fxRate = fxRate
+    payments.push(payment)
+  }
+  return payments
+}
+
+/**
+ * Map the PL-meta `advance_refs` JSON into the FA(3) `FakturaZaliczkowa` references netted by a ROZ
+ * settlement. A KSeF-issued advance carries `ksefNumber`; an outside-KSeF advance carries
+ * `invoiceNumber`. Rows with neither identifier are skipped (the parse would reject them anyway).
+ */
+export function buildAdvanceRefs(snapshot: unknown): Fa3AdvanceRefInput[] {
+  const rows = Array.isArray(snapshot) ? snapshot : []
+  const refs: Fa3AdvanceRefInput[] = []
+  for (const raw of rows) {
+    const row = asRecord(raw)
+    const ksefNumber = asString(row.ksefNumber ?? row.ksef_number) ?? undefined
+    const invoiceNumber = asString(row.invoiceNumber ?? row.invoice_number) ?? undefined
+    if (!ksefNumber && !invoiceNumber) continue
+    refs.push({
+      ...(ksefNumber ? { ksefNumber } : {}),
+      ...(invoiceNumber ? { invoiceNumber } : {}),
+    })
+  }
+  return refs
 }

@@ -15,15 +15,27 @@
  * Add OM_KSEF_TEST_STRICT=1 to turn the second test into a hard readiness gate
  * that requires an `accepted` status with a KSeF number and a non-empty UPO
  * (proving the full submit -> status -> UPO path), not merely a terminal status.
+ *
+ * Certificate-auth round-trip (SPEC-007): gated SEPARATELY on
+ *   OM_KSEF_TEST_CERT_PEM=<KSeF Authentication certificate, PEM> \
+ *   OM_KSEF_TEST_CERT_KEY=<the certificate's private key, PEM>
+ * (plus OM_KSEF_TEST_NIP). When those are set, the cert-auth block submits a sample
+ * FA(3) invoice via the XAdES (certificate) auth path instead of the token path.
  */
 import { resolveKsefEnvironment } from '../../config'
 import { KsefClient } from '../ksef-client'
-import { buildFa3Xml, type Fa3Document } from '../fa3'
+import { buildFa3Xml, type Fa3Document, type Fa3Party } from '../fa3'
 import { submitInvoiceToKsef } from '../submission-flow'
+import type { KsefAuthConfig } from '../ksef-auth'
 
 const TEST_TOKEN = process.env.OM_KSEF_TEST_TOKEN
 const TEST_NIP = process.env.OM_KSEF_TEST_NIP
+const TEST_CERT_PEM = process.env.OM_KSEF_TEST_CERT_PEM
+const TEST_CERT_KEY = process.env.OM_KSEF_TEST_CERT_KEY
 const liveDescribe = TEST_TOKEN && TEST_NIP ? describe : describe.skip
+// The certificate-auth path needs a NIP + an enrolled cert + its key. It is gated
+// independently of the token path so a token-only run still exercises the rest.
+const certDescribe = TEST_NIP && TEST_CERT_PEM && TEST_CERT_KEY ? describe : describe.skip
 
 function sampleInvoiceXml(sellerNip: string): string {
   const doc: Fa3Document = {
@@ -44,6 +56,43 @@ function sampleInvoiceXml(sellerNip: string): string {
   return buildFa3Xml(doc)
 }
 
+/**
+ * A sample FA(3) KOR correction (RodzajFaktury=KOR) referencing a corrected original
+ * by its KSeF number. Amounts are filed as negative differences (a credit memo is a
+ * reduction). When `correctedKsefNumber` is omitted the NrKSeFN legacy marker is used;
+ * here we pass a placeholder so the in-KSeF NrKSeF branch is exercised structurally.
+ */
+function sampleCorrectionXml(sellerNip: string, correctedKsefNumber: string): string {
+  const today = new Date().toISOString().slice(0, 10)
+  const doc: Fa3Document = {
+    model: {
+      createdAt: new Date().toISOString(),
+      seller: { nip: sellerNip, name: 'Open Mercato Test Seller', countryCode: 'PL', addressLine1: 'ul. Testowa 1, 00-001 Warszawa' },
+      buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+      invoiceNumber: `OM-KOR-${Date.now()}`,
+      issueDate: today,
+      currencyCode: 'PLN',
+      invoiceKind: 'KOR',
+      vatBreakdown: [{ rate: 23, net: '-100.00', vat: '-23.00' }],
+      totalGross: '-123.00',
+      correction: {
+        reason: 'Korekta ilości — test integracyjny',
+        correctedInvoices: [
+          {
+            correctedIssueDate: today,
+            correctedInvoiceNumber: 'OM-SMOKE-ORIGINAL',
+            correctedKsefNumber,
+          },
+        ],
+      },
+    },
+    lines: [
+      { lineNumber: 1, name: 'Usługa testowa', unit: 'szt', quantity: '-1', unitNetPrice: '100.00', netValue: '-100.00', vatRate: 23 },
+    ],
+  }
+  return buildFa3Xml(doc)
+}
+
 liveDescribe('KSeF TEST live smoke', () => {
   jest.setTimeout(120000)
   const env = resolveKsefEnvironment(process.env.OM_KSEF_ENVIRONMENT ?? 'test')
@@ -56,9 +105,9 @@ liveDescribe('KSeF TEST live smoke', () => {
 
   it('submits a sample FA(3) invoice and resolves to a terminal status', async () => {
     const client = new KsefClient(env)
+    const auth: KsefAuthConfig = { method: 'token', ksefToken: TEST_TOKEN as string, contextNip: TEST_NIP as string }
     const result = await submitInvoiceToKsef(client, {
-      ksefToken: TEST_TOKEN as string,
-      contextNip: TEST_NIP as string,
+      auth,
       invoiceXml: sampleInvoiceXml(TEST_NIP as string),
     })
     // eslint-disable-next-line no-console
@@ -80,6 +129,235 @@ liveDescribe('KSeF TEST live smoke', () => {
     // invoice WITH its signed receipt, rather than merely reaching a terminal
     // status. The default run stays lenient because a structurally-faithful FA(3)
     // subset can legitimately be rejected by KSeF on a residual schema gap.
+    if (process.env.OM_KSEF_TEST_STRICT === '1') {
+      expect(result.status).toBe('accepted')
+      expect(result.ksefNumber).toBeTruthy()
+      expect(result.upoXml && result.upoXml.length > 0).toBe(true)
+    }
+  })
+
+  it('submits a sample FA(3) KOR correction and resolves to a terminal status', async () => {
+    const client = new KsefClient(env)
+    const auth: KsefAuthConfig = { method: 'token', ksefToken: TEST_TOKEN as string, contextNip: TEST_NIP as string }
+    // The corrected original's KSeF number is supplied via env when available; otherwise
+    // a placeholder exercises the NrKSeF structural branch (KSeF may reject an unknown
+    // reference — a real correction round-trip uses an actually-accepted original number).
+    const correctedKsefNumber = process.env.OM_KSEF_TEST_CORRECTED_KSEF_NUMBER ?? `${TEST_NIP}-20260101-PLACEHOLDER`
+    const result = await submitInvoiceToKsef(client, {
+      auth,
+      invoiceXml: sampleCorrectionXml(TEST_NIP as string, correctedKsefNumber),
+    })
+    // eslint-disable-next-line no-console
+    console.log('[ksef-live] correction result', {
+      status: result.status,
+      ksefNumber: result.ksefNumber,
+      lastStatusCode: result.lastStatusCode,
+      error: result.errorMessage,
+      upoBytes: result.upoXml?.length,
+    })
+    // The auth must succeed and the correction must reach a terminal/processing
+    // outcome (not stuck pre-auth). Acceptance of a correction depends on a real
+    // accepted original being referenced, so by default we only require the send
+    // pipeline to run; OM_KSEF_TEST_STRICT=1 with a real corrected number tightens it.
+    expect(['accepted', 'processing', 'rejected']).toContain(result.status)
+    expect(result.sessionReference).toBeTruthy()
+    if (process.env.OM_KSEF_TEST_STRICT === '1' && process.env.OM_KSEF_TEST_CORRECTED_KSEF_NUMBER) {
+      expect(result.status).toBe('accepted')
+      expect(result.ksefNumber).toBeTruthy()
+      expect(result.upoXml && result.upoXml.length > 0).toBe(true)
+    }
+  })
+})
+
+/**
+ * SPEC-009 document-type live coverage. Each `it` builds one of the NEW FA(3)
+ * document types via `buildFa3Xml` (mirroring the known-good serializer-snapshot
+ * shapes in fa3.test.ts) and submits it via the token auth path, exactly like the
+ * baseline VAT/KOR smoke tests above. The seller NIP is always the context NIP so
+ * the document authenticates against the credential the token was issued for.
+ *
+ * Gated identically to `liveDescribe` (OM_KSEF_TEST_TOKEN + OM_KSEF_TEST_NIP). Each
+ * test asserts only that a TERMINAL outcome is reached (accepted OR a logged
+ * rejection) and logs the resolved status + KSeF number + the exact KSeF error, so a
+ * 450 schema/semantic rejection surfaces as a clear, diagnosable finding rather than
+ * a hang. A standalone advance/settlement (ZAL referencing nothing yet, or an OSS
+ * EUR sale) can legitimately be rejected by KSeF on a business rule the minimal
+ * sample does not satisfy — that is recorded, not masked.
+ */
+liveDescribe('KSeF TEST live smoke — SPEC-009 document types', () => {
+  jest.setTimeout(180000)
+  const env = resolveKsefEnvironment(process.env.OM_KSEF_ENVIRONMENT ?? 'test')
+  const auth = (): KsefAuthConfig => ({ method: 'token', ksefToken: TEST_TOKEN as string, contextNip: TEST_NIP as string })
+  const seller = (): Fa3Party => ({
+    nip: TEST_NIP as string,
+    name: 'Open Mercato Test Seller',
+    countryCode: 'PL',
+    addressLine1: 'ul. Testowa 1, 00-001 Warszawa',
+  })
+
+  async function submitAndLog(label: string, xml: string): Promise<void> {
+    const client = new KsefClient(env)
+    const result = await submitInvoiceToKsef(client, { auth: auth(), invoiceXml: xml })
+    // eslint-disable-next-line no-console
+    console.log(`[ksef-live] ${label} result`, {
+      status: result.status,
+      ksefNumber: result.ksefNumber,
+      lastStatusCode: result.lastStatusCode,
+      error: result.errorMessage,
+      upoBytes: result.upoXml?.length,
+    })
+    // Auth + send must run end-to-end (sessionReference proves we got past auth and
+    // opened a session); the outcome must be terminal/processing — a KSeF rejection
+    // (450) is an accepted, logged finding for these new types, not a test failure.
+    expect(['accepted', 'processing', 'rejected']).toContain(result.status)
+    expect(result.sessionReference).toBeTruthy()
+  }
+
+  it('(a) ZAL — advance invoice (ZaliczkaCzesciowa + Zamowienie, no FaWiersz)', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+        invoiceNumber: `OM-ZAL-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'ZAL',
+        vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+        totalGross: '123.00',
+        advancePayments: [{ receivedDate: today, amount: '123.00' }],
+        order: {
+          totalValue: '123.00',
+          lines: [
+            {
+              lineNumber: 1,
+              name: 'Zamówiona usługa',
+              unit: 'szt',
+              quantity: '1',
+              unitNetPrice: '100.00',
+              netValue: '100.00',
+              vatValue: '23.00',
+              vatRate: 23,
+            },
+          ],
+        },
+      },
+      lines: [],
+    }
+    await submitAndLog('ZAL advance', buildFa3Xml(doc))
+  })
+
+  it('(b) UPR — simplified invoice (NIP-only buyer, no Nazwa/Adres)', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        // UPR: a NIP-only Podmiot2 — Nazwa/Adres are omitted, only the NIP identity
+        // (+ the mandatory trailing JST/GV flags the serializer adds) is emitted.
+        buyer: { nip: '3755747347', countryCode: 'PL' },
+        invoiceNumber: `OM-UPR-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'UPR',
+        vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+        totalGross: '123.00',
+      },
+      lines: [
+        { lineNumber: 1, name: 'Usługa testowa', unit: 'szt', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 },
+      ],
+    }
+    await submitAndLog('UPR simplified', buildFa3Xml(doc))
+  })
+
+  it('(c) Self-billed VAT invoice (selfBilling:true → P_17=1)', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+        invoiceNumber: `OM-SELF-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'VAT',
+        // Self-billing (samofakturowanie, art. 106d) — the top-level shortcut folds into
+        // Adnotacje and drives P_17=1.
+        selfBilling: true,
+        vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+        totalGross: '123.00',
+      },
+      lines: [
+        { lineNumber: 1, name: 'Usługa testowa (samofakturowanie)', unit: 'szt', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 },
+      ],
+    }
+    await submitAndLog('self-billed VAT', buildFa3Xml(doc))
+  })
+
+  it('(d) OSS EUR — distance sale (ossRate + Procedura=WSTO_EE + KodWaluty=EUR + P_13_5/P_14_5)', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        // OSS distance sale to a German consumer (EU VAT id, no PL NIP) — the buyer is a
+        // non-PL consumer; the OSS summary rolls into the dedicated P_13_5/P_14_5 bucket.
+        buyer: { euVatId: 'DE123456789', name: 'Endkunde GmbH', countryCode: 'DE', addressLine1: 'Hauptstraße 1, 10115 Berlin' },
+        invoiceNumber: `OM-OSS-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'EUR',
+        invoiceKind: 'VAT',
+        vatBreakdown: [{ rate: 'oss', net: '100.00', vat: '19.00' }],
+        totalGross: '119.00',
+      },
+      lines: [
+        {
+          lineNumber: 1,
+          name: 'Distance sale to DE',
+          unit: 'szt',
+          quantity: '1',
+          unitNetPrice: '100.00',
+          netValue: '100.00',
+          vatRate: 23,
+          ossRate: '19',
+          procedure: 'WSTO_EE',
+          fxRate: '4.3000',
+        },
+      ],
+    }
+    await submitAndLog('OSS EUR', buildFa3Xml(doc))
+  })
+})
+
+certDescribe('KSeF TEST live smoke — certificate (XAdES) auth', () => {
+  jest.setTimeout(120000)
+  const env = resolveKsefEnvironment(process.env.OM_KSEF_ENVIRONMENT ?? 'test')
+
+  it('submits a sample FA(3) invoice authenticated with a KSeF certificate', async () => {
+    const client = new KsefClient(env)
+    const auth: KsefAuthConfig = {
+      method: 'certificate',
+      contextNip: TEST_NIP as string,
+      certificatePem: TEST_CERT_PEM as string,
+      privateKeyPem: TEST_CERT_KEY as string,
+    }
+    const result = await submitInvoiceToKsef(client, {
+      auth,
+      invoiceXml: sampleInvoiceXml(TEST_NIP as string),
+    })
+    // eslint-disable-next-line no-console
+    console.log('[ksef-live] cert-auth result', {
+      status: result.status,
+      ksefNumber: result.ksefNumber,
+      lastStatusCode: result.lastStatusCode,
+      error: result.errorMessage,
+      upoBytes: result.upoXml?.length,
+    })
+    // Certificate auth must reach the same terminal/processing outcomes as the token
+    // path (proving the XAdES challenge-signing path authenticates against the live API).
+    expect(['accepted', 'processing']).toContain(result.status)
+    expect(result.sessionReference).toBeTruthy()
     if (process.env.OM_KSEF_TEST_STRICT === '1') {
       expect(result.status).toBe('accepted')
       expect(result.ksefNumber).toBeTruthy()

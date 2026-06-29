@@ -1,5 +1,6 @@
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { getEuStandardVatRate } from '../config'
 import { fa3InvoiceSchema, type Fa3InvoiceInput } from '../data/validators'
 import {
   assertMappedVatRates,
@@ -21,6 +22,8 @@ import {
   type InvoiceLineRow,
   type InvoiceRow,
 } from './fa3-mapping'
+import { resolveFa3Advance, resolveMetaExchangeRate } from './resolve-fa3-advance'
+import { resolveFa3Settlement } from './resolve-fa3-settlement'
 
 // Re-exported for back-compat with existing importers (tests, commands).
 export { roundMoneyTo2dp }
@@ -53,17 +56,87 @@ export type ResolveFa3Args = {
   tenantId: string
 }
 
-const DOCUMENT_TYPE_UNSUPPORTED_DEFAULT =
-  'Only standard VAT invoices can be submitted to KSeF from an invoice. Corrections are submitted from a credit memo; advance/final invoices are not supported.'
-const CURRENCY_UNSUPPORTED_DEFAULT =
-  'Only PLN invoices can be submitted to KSeF yet. Foreign-currency invoices are not supported.'
 const VAT_RATE_UNSUPPORTED_DEFAULT =
   'This invoice uses a VAT rate that cannot be mapped to a KSeF FA(3) field. Use a standard Polish VAT rate.'
+const ISSUE_DATE_REQUIRED_DEFAULT = 'Invoice issue date is required before it can be submitted to KSeF.'
+const OSS_COUNTRY_REQUIRED_DEFAULT =
+  'An OSS (WSTO_EE) invoice requires the consumption-country code. Set the OSS destination country before submitting it to KSeF.'
+const OSS_RATE_REQUIRED_DEFAULT =
+  'An OSS (WSTO_EE) line requires a destination-country VAT rate. Set the consumption-country rate (or a known EU member state) before submitting it to KSeF.'
+
+/** The PL-meta `invoice_kind` text column → the FA(3) `RodzajFaktury` enum. */
+type InvoiceKindMeta = 'vat' | 'zal' | 'roz' | 'upr' | 'kor_zal' | 'kor_roz'
+const INVOICE_KIND_MAP: Record<InvoiceKindMeta, Fa3InvoiceInput['invoiceKind']> = {
+  vat: 'VAT',
+  zal: 'ZAL',
+  roz: 'ROZ',
+  upr: 'UPR',
+  kor_zal: 'KOR_ZAL',
+  kor_roz: 'KOR_ROZ',
+}
+
+function readInvoiceKind(meta: Record<string, unknown> | undefined): InvoiceKindMeta {
+  const raw = (asString(meta?.invoice_kind) ?? 'vat').toLowerCase()
+  return raw === 'zal' || raw === 'roz' || raw === 'upr' || raw === 'kor_zal' || raw === 'kor_roz'
+    ? (raw as InvoiceKindMeta)
+    : 'vat'
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  const text = asString(value)
+  return text === 'true' || text === '1'
+}
 
 /**
- * Resolve a validated FA(3) invoice payload for a standard sales invoice, reading
- * the invoice, its lines, and the PL meta extension through the platform query
- * engine. Validated with `fa3InvoiceSchema.parse(...)` before returning.
+ * Annotate the invoice line rows for an OSS (WSTO_EE) invoice: each row carries the destination
+ * VAT rate (`oss_rate` → `P_12_XII`), the procedure marker (`procedure=WSTO_EE`), and the per-line
+ * FX rate to PLN (`fx_rate` → `KursWaluty`). The OSS rate is the line's own sales rate when present
+ * (the trusted source), falling back to the consumption-country EU standard rate. A non-OSS invoice
+ * returns the rows unchanged.
+ */
+function applyOssMarkers(
+  rows: InvoiceLineRow[],
+  ossProcedure: boolean,
+  consumptionCountry: string | undefined,
+  fxRate: string | undefined,
+  deps: Fa3MappingDeps,
+): InvoiceLineRow[] {
+  if (!ossProcedure) return rows
+  if (!consumptionCountry) {
+    const message =
+      deps.translate?.('financial_pl.errors.oss_country_required', OSS_COUNTRY_REQUIRED_DEFAULT) ??
+      OSS_COUNTRY_REQUIRED_DEFAULT
+    throw new CrudHttpError(422, { error: message, code: 'oss_country_required' })
+  }
+  const tableRate = getEuStandardVatRate(consumptionCountry)
+  return rows.map((row) => {
+    const lineRate = Number(asString(row.tax_rate) ?? '')
+    const ossRate =
+      Number.isFinite(lineRate) && lineRate > 0 ? String(lineRate) : tableRate !== undefined ? String(tableRate) : null
+    if (ossRate === null) {
+      const message =
+        deps.translate?.('financial_pl.errors.oss_rate_required', OSS_RATE_REQUIRED_DEFAULT) ?? OSS_RATE_REQUIRED_DEFAULT
+      throw new CrudHttpError(422, { error: message, code: 'oss_rate_required' })
+    }
+    return {
+      ...row,
+      oss_rate: ossRate,
+      procedure: 'WSTO_EE',
+      ...(fxRate ? { fx_rate: fxRate } : {}),
+    }
+  })
+}
+
+/**
+ * Resolve a validated FA(3) invoice payload for a sales invoice, reading the invoice, its lines,
+ * and the PL meta extension through the platform query engine. SPEC-009 replaced the blanket
+ * `document_type`/PLN-only rejects with a DISPATCH on the explicit PL-meta `invoice_kind`:
+ * `vat` (default) → standard path; `zal` → advance (order + received payments, P_15 = paid amount,
+ * FaWiersz optional); `roz` → settlement (full FaWiersz + advance refs, P_15 = residual); `upr` →
+ * simplified (NIP-only buyer + threshold). OSS (WSTO_EE) lines + foreign currency are accepted when
+ * the explicit `oss_procedure` marker / a resolvable exchange rate are present. Validated with
+ * `fa3InvoiceSchema.parse(...)` before returning.
  */
 export async function resolveFa3FromSalesInvoice(
   deps: ResolveFa3Deps,
@@ -105,39 +178,42 @@ export async function resolveFa3FromSalesInvoice(
   const meta = metaResult.items?.[0]
 
   const seller = buildSeller(deps)
-  const effectiveLineRows = lineRows.length > 0 ? lineRows : metadataLinesToRows(invoice)
 
-  const issueDate =
-    toIsoDate(invoice.issue_date) ?? toIsoDate(invoice.issued_at) ?? new Date().toISOString().slice(0, 10)
-
-  // KSeF send scope from an invoice: only a standard `vat` invoice in PLN with KSeF-mappable
-  // VAT rates is faithfully serializable here. Corrections are submitted from a credit memo
-  // (resolve-fa3-from-credit-memo); advance/final and foreign currency are out of scope.
-  const documentType = asString(invoice.document_type) ?? 'vat'
-  if (documentType !== 'vat') {
+  // A fiscal document's issue date is regulation-critical — reject a missing one
+  // rather than silently defaulting to today (which would file a mis-dated invoice).
+  const issueDate = toIsoDate(invoice.issue_date) ?? toIsoDate(invoice.issued_at)
+  if (!issueDate) {
     const message =
-      deps.translate?.('financial_pl.errors.document_type_unsupported', DOCUMENT_TYPE_UNSUPPORTED_DEFAULT) ??
-      DOCUMENT_TYPE_UNSUPPORTED_DEFAULT
-    throw new CrudHttpError(422, { error: message, code: 'document_type_unsupported' })
+      deps.translate?.('financial_pl.errors.issue_date_required', ISSUE_DATE_REQUIRED_DEFAULT) ?? ISSUE_DATE_REQUIRED_DEFAULT
+    throw new CrudHttpError(422, { error: message, code: 'issue_date_required' })
   }
+
+  // SPEC-009 dispatch: the explicit PL-meta `invoice_kind` selects the FA(3) RodzajFaktury and
+  // the per-kind blocks. Defaulting to `vat` preserves every existing invoice's behavior. (KOR is
+  // not resolvable from an invoice — corrections are resolved from a credit memo.)
+  const metaKind = readInvoiceKind(meta)
+  const invoiceKind = INVOICE_KIND_MAP[metaKind]
+  const isUpr = metaKind === 'upr'
+  const ossProcedure = isTruthyFlag(meta?.oss_procedure)
+  const consumptionCountry = asString(meta?.consumption_country_code) ?? undefined
+  const exchangeRate = resolveMetaExchangeRate(meta)
 
   const currencyCode = (asString(invoice.currency_code) ?? 'PLN').toUpperCase()
-  if (currencyCode !== 'PLN') {
-    const message =
-      deps.translate?.('financial_pl.errors.currency_unsupported', CURRENCY_UNSUPPORTED_DEFAULT) ??
-      CURRENCY_UNSUPPORTED_DEFAULT
-    throw new CrudHttpError(422, { error: message, code: 'currency_unsupported' })
-  }
+
+  const baseLineRows = lineRows.length > 0 ? lineRows : metadataLinesToRows(invoice)
+  const effectiveLineRows = applyOssMarkers(baseLineRows, ossProcedure, consumptionCountry, exchangeRate, deps)
 
   const vatBreakdown = buildVatBreakdown(
     effectiveLineRows,
     invoice.grand_total_net_amount,
     invoice.tax_total_amount,
+    exchangeRate ? { fxRate: exchangeRate } : {},
   )
   assertMappedVatRates(vatBreakdown, deps.translate)
 
   // Header-only fallback reconcile guard (a rounded effective rate must reproduce the stored tax).
-  if (effectiveLineRows.length === 0) {
+  // Skipped for OSS, whose buckets carry the destination rate, not a Polish-mappable one.
+  if (effectiveLineRows.length === 0 && !ossProcedure) {
     const headerNet = toScaled4(invoice.grand_total_net_amount)
     const headerVat = toScaled4(invoice.tax_total_amount)
     if (!headerVatRateReconciles(headerNet, headerVat, deriveHeaderVatRate(headerNet, headerVat))) {
@@ -167,18 +243,43 @@ export async function resolveFa3FromSalesInvoice(
     vatRate: deriveHeaderVatRate(toScaled4(headerNet), toScaled4(headerVat)),
   }
 
+  const lines =
+    effectiveLineRows.length > 0 ? buildLines(effectiveLineRows) : metaKind === 'zal' ? [] : [fallbackLine]
+
+  // --- Per-kind blocks --------------------------------------------------------------------------
+  let order: Fa3InvoiceInput['order']
+  let advancePayments: Fa3InvoiceInput['advancePayments']
+  let advanceInvoiceRefs: Fa3InvoiceInput['advanceInvoiceRefs']
+  // P_15: a ZAL files the amount PAID (Σ received payments); a ROZ files the RESIDUAL remaining to
+  // pay (full gross − Σ advances); every other kind files the bucket-derived total gross.
+  let p15 = totalGross
+  if (metaKind === 'zal') {
+    const advance = resolveFa3Advance(meta, deps)
+    order = advance.order
+    advancePayments = advance.advancePayments
+    p15 = advance.paidGross
+  } else if (metaKind === 'roz') {
+    const settlement = resolveFa3Settlement(meta, totalGross, deps)
+    advanceInvoiceRefs = settlement.advanceInvoiceRefs
+    p15 = settlement.residualGross
+  }
+
   const fa3Invoice: Fa3InvoiceInput = {
     invoiceNumber: asString(invoice.invoice_number) ?? salesInvoiceId,
     issueDate,
     saleDate: toIsoDate(asRecord(invoice.metadata).saleDate) ?? toIsoDate(invoice.issue_date) ?? undefined,
     currencyCode,
-    invoiceKind: 'VAT',
+    invoiceKind,
     seller,
-    buyer: buildBuyer(invoice, deps),
+    buyer: buildBuyer(invoice, deps, { uprNipOnly: isUpr }),
     vatBreakdown,
-    totalGross,
-    lines: effectiveLineRows.length > 0 ? buildLines(effectiveLineRows) : [fallbackLine],
+    totalGross: p15,
+    lines,
     ...(annotations ? { annotations } : {}),
+    ...(order ? { order } : {}),
+    ...(advancePayments && advancePayments.length > 0 ? { advancePayments } : {}),
+    ...(advanceInvoiceRefs ? { advanceInvoiceRefs } : {}),
+    ...(exchangeRate ? { exchangeRate } : {}),
   }
 
   return fa3InvoiceSchema.parse(fa3Invoice)

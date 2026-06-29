@@ -39,18 +39,19 @@ export async function GET(req: Request) {
       throw new CrudHttpError(400, { error: `Too many ids (max ${MAX_IDS} per request)` })
     }
 
-    // Require a resolved organization scope (mirrors the invoice-meta route). A financial
-    // read must NEVER fall back to an org-unscoped, tenant-wide query — that would expose
-    // KSeF state across organizations within the tenant.
-    const orgIds = scope?.filterIds ?? (auth.orgId ? [auth.orgId] : null)
-    if (!orgIds || orgIds.length === 0) {
+    // Org-scope contract (mirror submissions/upo): filterIds===null ⇒ super-admin (all orgs in the
+    // tenant); filterIds===[] ⇒ no accessible orgs ⇒ deny; [ids] ⇒ restrict to those orgs. `??` is
+    // wrong here — it neither preserves the legitimate null (super-admin) case nor denies on [].
+    const orgIds = scope ? scope.filterIds : auth.orgId ? [auth.orgId] : null
+    if (Array.isArray(orgIds) && orgIds.length === 0) {
       throw new CrudHttpError(400, { error: '[internal] Organization scope is required' })
     }
     const em = (container.resolve('em') as EntityManager).fork()
     const baseScope = {
       tenantId: auth.tenantId,
       deletedAt: null,
-      organizationId: { $in: orgIds },
+      // null ⇒ super-admin: no org filter (tenant-wide). [ids] ⇒ restrict.
+      ...(Array.isArray(orgIds) && orgIds.length > 0 ? { organizationId: { $in: orgIds } } : {}),
     }
 
     // Single batched read of the latest INVOICE submission per id (no N+1; corrections

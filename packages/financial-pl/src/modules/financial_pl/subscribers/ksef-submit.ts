@@ -1,9 +1,10 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
-import { KsefSubmission, type KsefEnvironmentColumn } from '../data/entities'
+import { KsefSubmission } from '../data/entities'
 import { resolveKsefEnvironment } from '../config'
 import { KsefClient } from '../lib/ksef-client'
 import { submitInvoiceToKsef, type KsefSubmissionResult } from '../lib/submission-flow'
+import { buildKsefAuthConfig, readKsefCredentials, type ResolverContext } from '../lib/credentials'
 import { emitFinancialPlEvent } from '../events'
 
 /**
@@ -21,36 +22,6 @@ type Payload = {
   submissionId: string
   organizationId: string
   tenantId: string
-}
-
-type ResolverContext = {
-  resolve: <T = unknown>(name: string) => T
-}
-
-type CredentialsService = {
-  getRaw: (
-    integrationId: string,
-    scope: { organizationId: string; tenantId: string },
-  ) => Promise<Record<string, unknown> | null>
-}
-
-async function readKsefCredentials(
-  ctx: ResolverContext,
-  scope: { organizationId: string; tenantId: string },
-): Promise<{ token?: string; environment?: KsefEnvironmentColumn }> {
-  try {
-    const service = ctx.resolve<CredentialsService>('integrationCredentialsService')
-    const creds = await service.getRaw('ksef_pl', scope)
-    if (!creds) return {}
-    const token = typeof creds.ksefToken === 'string' ? creds.ksefToken : undefined
-    const environment =
-      creds.environment === 'test' || creds.environment === 'demo' || creds.environment === 'prod'
-        ? (creds.environment as KsefEnvironmentColumn)
-        : undefined
-    return { token, environment }
-  } catch {
-    return {}
-  }
 }
 
 export default async function handler(payload: Payload, ctx: ResolverContext): Promise<void> {
@@ -90,10 +61,11 @@ export default async function handler(payload: Payload, ctx: ResolverContext): P
   }
 
   const creds = await readKsefCredentials(ctx, scope)
+  const auth = buildKsefAuthConfig(creds, submission.contextNip)
 
-  if (!creds.token) {
+  if (!auth) {
     submission.status = 'rejected'
-    submission.lastErrorMessage = '[internal] KSeF credentials (ksefToken) not configured for this organization'
+    submission.lastErrorMessage = '[internal] KSeF credentials not configured for this organization (token or certificate)'
     submission.updatedAt = new Date()
     await em.flush()
     await emitFinancialPlEvent('financial_pl.ksef_submission.rejected', { submissionId, organizationId, tenantId }, { persistent: true })
@@ -105,8 +77,7 @@ export default async function handler(payload: Payload, ctx: ResolverContext): P
   let result: KsefSubmissionResult
   try {
     result = await submitInvoiceToKsef(client, {
-      ksefToken: creds.token,
-      contextNip: submission.contextNip,
+      auth,
       invoiceXml: submission.invoiceXml,
     })
   } catch (err) {

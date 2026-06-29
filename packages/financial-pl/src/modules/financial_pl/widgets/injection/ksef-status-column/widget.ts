@@ -26,7 +26,13 @@ const widget: InjectionColumnWidget = {
       size: 180,
       cell: ({ getValue }) => {
         const value = getValue() as
-          | { ksefStatus?: string | null; ksefNumber?: string | null; submissionId?: string | null; upoAvailable?: boolean }
+          | {
+              ksefStatus?: string | null
+              ksefNumber?: string | null
+              submissionId?: string | null
+              upoAvailable?: boolean
+              offlineSendDeadlineAt?: string | null
+            }
           | null
           | undefined
         return React.createElement(KsefStatusCell, {
@@ -34,6 +40,7 @@ const widget: InjectionColumnWidget = {
           ksefNumber: value?.ksefNumber ?? null,
           submissionId: value?.submissionId ?? null,
           upoAvailable: Boolean(value?.upoAvailable),
+          offlineSendDeadlineAt: value?.offlineSendDeadlineAt ?? null,
         })
       },
     },

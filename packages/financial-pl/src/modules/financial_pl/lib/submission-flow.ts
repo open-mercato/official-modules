@@ -12,24 +12,27 @@
  * persistent subscriber (production path) and the live-TEST smoke runner.
  */
 import {
-  encryptAuthToken,
   encryptInvoiceDocument,
   generateSymmetricKey,
   wrapSymmetricKey,
 } from './crypto'
-import type { KsefClient, KsefPublicKeyCertificate, KsefStatusResult } from './ksef-client'
-import { KsefApiError } from './ksef-client'
+import { KsefApiError, type KsefClient, type KsefPublicKeyCertificate, type KsefStatusResult } from './ksef-client'
+import { authenticate, pace, type KsefAuthConfig } from './ksef-auth'
 import { evaluateInvoiceStatus, type KsefSubmissionStatus } from './status'
 
-// HTTP statuses that mean the auth OPERATION itself is terminally gone (expired/
-// unauthorized/forbidden) — distinct from an in-body status.code. Polling past these
-// is futile: fail fast as a terminal rejection rather than cycling the queue retry.
-const TERMINAL_AUTH_HTTP_STATUSES = new Set([401, 403, 410])
+export type { KsefAuthConfig } from './ksef-auth'
 
 export type KsefSubmissionInput = {
-  ksefToken: string
-  contextNip: string
+  /** Token or certificate auth — resolved per organization by the caller. */
+  auth: KsefAuthConfig
   invoiceXml: string
+  /**
+   * Offline-issuance send flag (SPEC-010). When `true` the document was issued
+   * offline (offline24/awaryjny) and this is the deferred initial send — KSeF's
+   * `SendInvoiceRequest.offlineMode` is set so the invoice gets its KSeF number
+   * retroactively. Defaults to `false` (the byte-identical online path).
+   */
+  offlineMode?: boolean
 }
 
 export type KsefSubmissionResult = {
@@ -40,6 +43,8 @@ export type KsefSubmissionResult = {
   invoiceReference?: string
   lastStatusCode?: number
   duplicate: boolean
+  /** A re-poll found no KSeF record for the stored reference → the caller should re-send. */
+  notFound?: boolean
   errorMessage?: string
 }
 
@@ -77,50 +82,19 @@ export async function submitInvoiceToKsef(
   options: KsefPollOptions = DEFAULT_POLL_OPTIONS,
 ): Promise<KsefSubmissionResult> {
   const certs = await client.getPublicKeyCertificates()
-  const tokenCert = selectCertificate(certs, 'token')
+  // The symmetric-key wrap is required for every send regardless of auth method;
+  // the token-encryption cert is only needed for the token auth path.
   const symmetricCert = selectCertificate(certs, 'symmetric')
-  if (!tokenCert?.certificate || !symmetricCert?.certificate) {
+  const tokenCert = selectCertificate(certs, 'token')
+  if (!symmetricCert?.certificate) {
     return { status: 'rejected', duplicate: false, errorMessage: '[internal] KSeF public keys unavailable' }
   }
 
-  const challenge = await client.requestChallenge()
-  const encryptedToken = encryptAuthToken(input.ksefToken, challenge.timestampMs, tokenCert.certificate)
-  const authInit = await client.authenticateWithToken({
-    challenge: challenge.challenge,
-    contextNip: input.contextNip,
-    encryptedToken,
-    publicKeyId: tokenCert.publicKeyId || undefined,
-  })
-
-  let authenticated = false
-  for (let attempt = 0; attempt < options.authMaxAttempts; attempt += 1) {
-    let authStatus
-    try {
-      authStatus = await client.getAuthStatus(authInit.referenceNumber, authInit.authenticationToken)
-    } catch (err) {
-      // A raw HTTP 401/403/410 from GET /auth/{ref} (e.g. an expired/redeemed auth
-      // operation) means the auth is terminally gone — fail fast instead of letting the
-      // error propagate to the subscriber's catch, which would re-queue it forever.
-      if (err instanceof KsefApiError && TERMINAL_AUTH_HTTP_STATUSES.has(err.status)) {
-        return { status: 'rejected', duplicate: false, errorMessage: `KSeF auth terminated (HTTP ${err.status})` }
-      }
-      throw err
-    }
-    if (authStatus.code === 200) {
-      authenticated = true
-      break
-    }
-    if (authStatus.code >= 400) {
-      return { status: 'rejected', duplicate: false, errorMessage: `KSeF auth failed (${authStatus.code})` }
-    }
-    await options.wait(options.authDelayMs)
+  const auth = await authenticate(client, tokenCert, input.auth, options)
+  if (!auth.ok) {
+    return { status: auth.status, duplicate: false, errorMessage: auth.errorMessage }
   }
-  if (!authenticated) {
-    return { status: 'processing', duplicate: false, errorMessage: '[internal] KSeF auth not completed in time' }
-  }
-
-  const tokens = await client.redeemToken(authInit.authenticationToken)
-  const accessToken = tokens.accessToken
+  const accessToken = auth.accessToken
 
   const material = generateSymmetricKey()
   const session = await client.openOnlineSession({
@@ -131,26 +105,35 @@ export async function submitInvoiceToKsef(
   })
 
   const encrypted = encryptInvoiceDocument(input.invoiceXml, material)
-  const sent = await client.sendOnlineInvoice({
-    accessToken,
-    sessionReference: session.referenceNumber,
-    invoiceHash: encrypted.invoiceHash,
-    invoiceSize: encrypted.invoiceSize,
-    encryptedDocumentHash: encrypted.encryptedDocumentHash,
-    encryptedDocumentSize: encrypted.encryptedDocumentSize,
-    encryptedDocumentContent: encrypted.encryptedDocument.toString('base64'),
-  })
+  const sent = await pace(
+    () =>
+      client.sendOnlineInvoice({
+        accessToken,
+        sessionReference: session.referenceNumber,
+        invoiceHash: encrypted.invoiceHash,
+        invoiceSize: encrypted.invoiceSize,
+        encryptedDocumentHash: encrypted.encryptedDocumentHash,
+        encryptedDocumentSize: encrypted.encryptedDocumentSize,
+        encryptedDocumentContent: encrypted.encryptedDocument.toString('base64'),
+        offlineMode: input.offlineMode ?? false,
+      }),
+    options.wait,
+  )
 
   await client.closeOnlineSession({ accessToken, sessionReference: session.referenceNumber })
 
   let evaluation = evaluateInvoiceStatus(0)
   let lastStatus: KsefStatusResult | undefined
   for (let attempt = 0; attempt < options.statusMaxAttempts; attempt += 1) {
-    lastStatus = await client.getInvoiceStatus({
-      accessToken,
-      sessionReference: session.referenceNumber,
-      invoiceReference: sent.referenceNumber,
-    })
+    lastStatus = await pace(
+      () =>
+        client.getInvoiceStatus({
+          accessToken,
+          sessionReference: session.referenceNumber,
+          invoiceReference: sent.referenceNumber,
+        }),
+      options.wait,
+    )
     evaluation = evaluateInvoiceStatus(lastStatus.code)
     if (evaluation.terminal) break
     await options.wait(options.statusDelayMs)
@@ -230,4 +213,72 @@ async function finalizeAccepted(
     result.status = 'processing'
     result.errorMessage = err instanceof Error ? `[internal] UPO fetch failed: ${err.message}` : '[internal] UPO fetch failed'
   }
+}
+
+/**
+ * Re-poll a submission that already reached KSeF (its session + invoice reference
+ * were persisted) WITHOUT re-sending — the strongest no-duplicate recovery. It
+ * authenticates, polls the invoice status, and finalizes (KSeF number + UPO).
+ *
+ * Returns the standard result; the caller (ksef-repoll subscriber) writes a
+ * terminal `accepted`/`rejected` and, for a non-terminal outcome or `notFound`
+ * (KSeF has no record of the reference — e.g. the send never actually landed),
+ * falls back to the duplicate-safe re-send path.
+ */
+export async function repollSubmission(
+  client: KsefClient,
+  auth: KsefAuthConfig,
+  refs: { sessionReference: string; invoiceReference: string },
+  options: KsefPollOptions = DEFAULT_POLL_OPTIONS,
+): Promise<KsefSubmissionResult> {
+  const base: KsefSubmissionResult = {
+    status: 'processing',
+    duplicate: false,
+    sessionReference: refs.sessionReference,
+    invoiceReference: refs.invoiceReference,
+  }
+
+  const certs = await client.getPublicKeyCertificates()
+  const tokenCert = selectCertificate(certs, 'token')
+  const authed = await authenticate(client, tokenCert, auth, options)
+  if (!authed.ok) {
+    return { ...base, status: authed.status, errorMessage: authed.errorMessage }
+  }
+  const accessToken = authed.accessToken
+
+  let evaluation = evaluateInvoiceStatus(0)
+  let lastStatus: KsefStatusResult | undefined
+  for (let attempt = 0; attempt < options.statusMaxAttempts; attempt += 1) {
+    try {
+      lastStatus = await pace(
+        () => client.getInvoiceStatus({ accessToken, sessionReference: refs.sessionReference, invoiceReference: refs.invoiceReference }),
+        options.wait,
+      )
+    } catch (err) {
+      if (err instanceof KsefApiError && err.status === 404) {
+        // KSeF has no record of this reference — the original send never landed.
+        // Signal a re-send fallback rather than stranding the row.
+        return { ...base, notFound: true, errorMessage: '[internal] KSeF has no record of this reference; will re-send' }
+      }
+      throw err
+    }
+    evaluation = evaluateInvoiceStatus(lastStatus.code)
+    if (evaluation.terminal) break
+    await options.wait(options.statusDelayMs)
+  }
+
+  const result: KsefSubmissionResult = {
+    ...base,
+    status: evaluation.status,
+    duplicate: evaluation.duplicate,
+    lastStatusCode: lastStatus?.code ?? 0,
+  }
+  if (evaluation.status === 'accepted') {
+    await finalizeAccepted(client, accessToken, refs.sessionReference, refs.invoiceReference, lastStatus, result)
+  } else if (evaluation.status === 'rejected') {
+    const reason = lastStatus?.description ? `: ${lastStatus.description}` : ''
+    const details = lastStatus?.details?.length ? ` — ${lastStatus.details.join('; ')}` : ''
+    result.errorMessage = `KSeF rejected the invoice (status ${result.lastStatusCode})${reason}${details}`
+  }
+  return result
 }

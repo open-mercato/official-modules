@@ -65,7 +65,10 @@ function mockClient(overrides: ClientOverrides = {}): KsefClient {
   return client as unknown as KsefClient
 }
 
-const input = { ksefToken: 'KSEF-TOKEN', contextNip: '7980332920', invoiceXml: '<Faktura/>' }
+const input = {
+  auth: { method: 'token' as const, ksefToken: 'KSEF-TOKEN', contextNip: '7980332920' },
+  invoiceXml: '<Faktura/>',
+}
 
 describe('submitInvoiceToKsef', () => {
   it('runs the full happy path to acceptance with UPO + KSeF number', async () => {
@@ -205,5 +208,60 @@ describe('submitInvoiceToKsef', () => {
     const result = await submitInvoiceToKsef(client, input, noPoll)
     expect(result.status).toBe('rejected')
     expect(result.errorMessage).toContain('public keys')
+  })
+
+  // --- SPEC-010: offline-mode deferred send threading + retroactive reconcile ---
+
+  it('threads offlineMode:false to sendOnlineInvoice for an online send (byte-identical default)', async () => {
+    let sentOfflineMode: boolean | undefined
+    const base = mockClient({ invoiceKsefNumber: 'K' }) as unknown as Record<string, unknown>
+    const client = {
+      ...base,
+      sendOnlineInvoice: async (params: { offlineMode?: boolean }) => {
+        sentOfflineMode = params.offlineMode
+        return { referenceNumber: 'INV1' }
+      },
+    } as unknown as KsefClient
+    const result = await submitInvoiceToKsef(client, input, noPoll)
+    expect(result.status).toBe('accepted')
+    expect(sentOfflineMode).toBe(false)
+  })
+
+  it('threads offlineMode:true to sendOnlineInvoice for a deferred offline send', async () => {
+    let sentOfflineMode: boolean | undefined
+    const base = mockClient({ invoiceKsefNumber: 'K' }) as unknown as Record<string, unknown>
+    const client = {
+      ...base,
+      sendOnlineInvoice: async (params: { offlineMode?: boolean }) => {
+        sentOfflineMode = params.offlineMode
+        return { referenceNumber: 'INV1' }
+      },
+    } as unknown as KsefClient
+    const result = await submitInvoiceToKsef(client, { ...input, offlineMode: true }, noPoll)
+    expect(result.status).toBe('accepted')
+    expect(sentOfflineMode).toBe(true)
+  })
+
+  it('reconciles the retroactive KSeF number + UPO on a deferred offline send to acceptance', async () => {
+    const result = await submitInvoiceToKsef(
+      mockClient({ invoiceKsefNumber: 'KSEF-OFFLINE-NO' }),
+      { ...input, offlineMode: true },
+      noPoll,
+    )
+    expect(result.status).toBe('accepted')
+    expect(result.ksefNumber).toBe('KSEF-OFFLINE-NO')
+    expect(result.upoXml).toBe('<UPO/>')
+  })
+
+  it('keeps an offline send duplicate-safe: a 440 re-send heals to the original number + UPO', async () => {
+    const result = await submitInvoiceToKsef(
+      mockClient({ invoiceStatusCode: 440, originalKsefNumber: 'ORIG-OFFLINE', originalSessionReference: 'ORIG-SESSION' }),
+      { ...input, offlineMode: true },
+      noPoll,
+    )
+    expect(result.status).toBe('accepted')
+    expect(result.duplicate).toBe(true)
+    expect(result.ksefNumber).toBe('ORIG-OFFLINE')
+    expect(result.upoXml).toBe('<UPO-ORIGINAL/>')
   })
 })

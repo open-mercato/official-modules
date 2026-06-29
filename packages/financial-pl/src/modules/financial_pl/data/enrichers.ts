@@ -28,6 +28,11 @@ type FinancialPlEnrichment = {
     submissionId: string | null
     /** Whether the latest submission holds a stored UPO receipt (download available). */
     upoAvailable: boolean
+    /**
+     * For an offline-issued submission: the statutory send-to-KSeF deadline (ISO
+     * string) so the status column can surface it + flag overdue. Null otherwise.
+     */
+    offlineSendDeadlineAt: string | null
     /** JPK_VAT KSeF marking for this invoice (null while undetermined/in-flight). */
     jpkVatMarking: JpkVatMarking | null
   }
@@ -38,6 +43,7 @@ const EMPTY: FinancialPlEnrichment['_financial_pl'] = {
   ksefNumber: null,
   submissionId: null,
   upoAvailable: false,
+  offlineSendDeadlineAt: null,
   jpkVatMarking: null,
 }
 
@@ -69,7 +75,10 @@ async function enrichInvoices(
       tenantId: context.tenantId,
       deletedAt: null,
     },
-    { orderBy: { createdAt: 'desc' }, fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'mode', 'createdAt'] },
+    {
+      orderBy: { createdAt: 'desc' },
+      fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'mode', 'offlineSendDeadlineAt', 'createdAt'],
+    },
   )
   const submissionByInvoice = new Map<string, (typeof submissions)[number]>()
   for (const submission of submissions) {
@@ -108,6 +117,9 @@ async function enrichInvoices(
         // Accepted ⟺ a stored UPO (finalizeAccepted only flips to 'accepted' after the
         // receipt is persisted), so this is an accurate, decryption-free availability flag.
         upoAvailable: submission?.status === 'accepted',
+        offlineSendDeadlineAt: submission?.offlineSendDeadlineAt
+          ? submission.offlineSendDeadlineAt.toISOString()
+          : null,
         jpkVatMarking: marking.marking,
       },
     }

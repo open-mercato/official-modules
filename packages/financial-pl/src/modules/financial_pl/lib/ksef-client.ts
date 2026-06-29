@@ -40,6 +40,70 @@ export class KsefApiError extends Error {
   }
 }
 
+/**
+ * Raised on HTTP 429 so callers can pace instead of churning. `retryAfterMs` is
+ * parsed from the `Retry-After` header (delta-seconds or HTTP-date), capped to a
+ * sane default when absent/garbage so a hostile/empty header can never make a
+ * caller sleep unbounded.
+ */
+export class KsefRateLimitError extends KsefApiError {
+  readonly retryAfterMs: number
+  constructor(message: string, retryAfterMs: number, body: unknown) {
+    super(message, 429, body)
+    this.name = 'KsefRateLimitError'
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+export const DEFAULT_RETRY_AFTER_MS = 5_000
+export const MAX_RETRY_AFTER_MS = 60_000
+
+/** Parse a `Retry-After` header value to milliseconds, clamped to [0, MAX]. */
+export function parseRetryAfterMs(
+  raw: string | undefined,
+  now: number = Date.now(),
+  maxMs: number = MAX_RETRY_AFTER_MS,
+): number {
+  if (!raw) return DEFAULT_RETRY_AFTER_MS
+  const seconds = Number(raw.trim())
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, maxMs)
+  const dateMs = Date.parse(raw)
+  if (Number.isFinite(dateMs)) return Math.min(Math.max(dateMs - now, 0), maxMs)
+  return DEFAULT_RETRY_AFTER_MS
+}
+
+export type KsefCertificateEnrollmentData = {
+  /** X.500 DN attributes the CSR must mirror (verbatim), as returned by KSeF. */
+  commonName?: string
+  countryName?: string
+  organizationName?: string
+  serialNumber?: string
+  uniqueIdentifier?: string
+  organizationIdentifier?: string
+  raw: unknown
+}
+
+export type KsefCertificateEnrollmentResult = {
+  referenceNumber: string
+}
+
+export type KsefCertificateEnrollmentStatus = {
+  code: number
+  description?: string
+  certificateSerialNumber?: string
+}
+
+export type KsefCertificateInfo = {
+  certificateSerialNumber: string
+  name?: string
+  type?: string
+  status?: string
+  validFrom?: string
+  validTo?: string
+}
+
+export type KsefCertificateType = 'Authentication' | 'Offline'
+
 export type KsefPublicKeyCertificate = {
   publicKeyId: string
   certificate: string
@@ -208,17 +272,31 @@ export class KsefClient {
   private async request(
     method: KsefTransportRequest['method'],
     path: string,
-    options: { token?: string; json?: unknown; accept?: string } = {},
+    options: { token?: string; json?: unknown; xmlBody?: string; accept?: string } = {},
   ): Promise<{ status: number; headers: Record<string, string>; json: unknown; text: string }> {
     const headers: Record<string, string> = { Accept: options.accept ?? 'application/json' }
     if (options.token) headers.Authorization = `Bearer ${options.token}`
     let body: string | undefined
-    if (options.json !== undefined) {
+    if (options.xmlBody !== undefined) {
+      headers['Content-Type'] = 'application/xml'
+      body = options.xmlBody
+    } else if (options.json !== undefined) {
       headers['Content-Type'] = 'application/json'
       body = JSON.stringify(options.json)
     }
     const res = await this.transport({ method, url: `${this.baseUrl}${path}`, headers, body })
     const json = parseJson(res.text)
+    if (res.status === 429) {
+      // Rate limited — surface a typed error carrying the pacing delay so the flow
+      // can back off instead of immediately re-queuing (which would churn KSeF).
+      const maxEnv = Number(process.env.OM_KSEF_RETRY_AFTER_MAX_MS)
+      const maxMs = Number.isFinite(maxEnv) && maxEnv > 0 ? maxEnv : MAX_RETRY_AFTER_MS
+      throw new KsefRateLimitError(
+        `KSeF ${method} ${path} rate limited (429)`,
+        parseRetryAfterMs(res.headers['retry-after'], Date.now(), maxMs),
+        json ?? res.text,
+      )
+    }
     if (res.status >= 400) {
       throw new KsefApiError(`KSeF ${method} ${path} failed with ${res.status}`, res.status, json ?? res.text)
     }
@@ -272,6 +350,22 @@ export class KsefClient {
     const authenticationToken = pickToken(record, 'authenticationToken', 'token')
     if (!referenceNumber || !authenticationToken) {
       throw new KsefApiError('KSeF token-auth response missing reference/token', 502, json)
+    }
+    return { referenceNumber, authenticationToken }
+  }
+
+  /**
+   * Certificate / qualified-signature auth: submit an XAdES-signed AuthTokenRequest.
+   * The body is raw signed XML (not JSON). Returns the same {referenceNumber,
+   * authenticationToken} shape as the token path, so the poll→redeem flow is shared.
+   */
+  async authenticateWithXades(signedXml: string): Promise<KsefAuthInitResult> {
+    const { json } = await this.request('POST', '/auth/xades-signature', { xmlBody: signedXml })
+    const record = asRecord(json)
+    const referenceNumber = pickString(record, 'referenceNumber', 'authenticationReferenceNumber')
+    const authenticationToken = pickToken(record, 'authenticationToken', 'token')
+    if (!referenceNumber || !authenticationToken) {
+      throw new KsefApiError('KSeF xades-auth response missing reference/token', 502, json)
     }
     return { referenceNumber, authenticationToken }
   }
@@ -445,6 +539,107 @@ export class KsefClient {
       { token: params.accessToken, accept: 'application/xml' },
     )
     return text
+  }
+
+  // --- KSeF certificate enrollment (the durable, post-2027 credential) ---
+
+  async getCertificateLimits(accessToken: string): Promise<unknown> {
+    const { json } = await this.request('GET', '/certificates/limits', { token: accessToken })
+    return json
+  }
+
+  /**
+   * The X.500 DN attributes the CSR must carry, verbatim. KSeF only serves this to
+   * an XAdES-authenticated subject (not a token session), so the enrollment command
+   * must pre-check that the org has a certificate/qualified credential.
+   */
+  async getCertificateEnrollmentData(accessToken: string): Promise<KsefCertificateEnrollmentData> {
+    const { json } = await this.request('GET', '/certificates/enrollments/data', { token: accessToken })
+    const r = asRecord(json)
+    return {
+      commonName: pickString(r, 'commonName'),
+      countryName: pickString(r, 'countryName'),
+      organizationName: pickString(r, 'organizationName'),
+      serialNumber: pickString(r, 'serialNumber'),
+      uniqueIdentifier: pickString(r, 'uniqueIdentifier'),
+      organizationIdentifier: pickString(r, 'organizationIdentifier'),
+      raw: json,
+    }
+  }
+
+  async enrollCertificate(params: {
+    accessToken: string
+    csr: string
+    certificateType: KsefCertificateType
+    certificateName: string
+    validFrom?: string
+  }): Promise<KsefCertificateEnrollmentResult> {
+    const { json } = await this.request('POST', '/certificates/enrollments', {
+      token: params.accessToken,
+      json: {
+        certificateName: params.certificateName,
+        certificateType: params.certificateType,
+        csr: params.csr,
+        ...(params.validFrom ? { validFrom: params.validFrom } : {}),
+      },
+    })
+    const referenceNumber = pickString(asRecord(json), 'referenceNumber')
+    if (!referenceNumber) throw new KsefApiError('KSeF enroll response missing referenceNumber', 502, json)
+    return { referenceNumber }
+  }
+
+  async getCertificateEnrollmentStatus(params: {
+    accessToken: string
+    referenceNumber: string
+  }): Promise<KsefCertificateEnrollmentStatus> {
+    const { json } = await this.request(
+      'GET',
+      `/certificates/enrollments/${encodeURIComponent(params.referenceNumber)}`,
+      { token: params.accessToken },
+    )
+    const record = asRecord(json)
+    const statusRecord = asRecord(record.status ?? record)
+    return {
+      code: pickNumber(statusRecord, 'code') ?? pickNumber(record, 'code') ?? 0,
+      description: pickString(statusRecord, 'description'),
+      certificateSerialNumber: pickString(record, 'certificateSerialNumber'),
+    }
+  }
+
+  /** Download issued certificate(s) (DER, Base64) by serial number. */
+  async retrieveCertificates(params: { accessToken: string; serialNumbers: string[] }): Promise<unknown> {
+    const { json } = await this.request('POST', '/certificates/retrieve', {
+      token: params.accessToken,
+      json: { certificateSerialNumbers: params.serialNumbers },
+    })
+    return json
+  }
+
+  async queryCertificates(params: { accessToken: string; filter?: Record<string, unknown> }): Promise<KsefCertificateInfo[]> {
+    const { json } = await this.request('POST', '/certificates/query', {
+      token: params.accessToken,
+      json: params.filter ?? {},
+    })
+    const list = Array.isArray(json) ? json : (asRecord(json).certificates ?? asRecord(json).items)
+    if (!Array.isArray(list)) return []
+    return list.map((raw) => {
+      const r = asRecord(raw)
+      return {
+        certificateSerialNumber: pickString(r, 'certificateSerialNumber', 'serialNumber') ?? '',
+        name: pickString(r, 'name', 'certificateName'),
+        type: pickString(r, 'type', 'certificateType'),
+        status: pickString(r, 'status'),
+        validFrom: pickString(r, 'validFrom'),
+        validTo: pickString(r, 'validTo'),
+      }
+    })
+  }
+
+  async revokeCertificate(params: { accessToken: string; serialNumber: string; reason?: string }): Promise<void> {
+    await this.request('POST', `/certificates/${encodeURIComponent(params.serialNumber)}/revoke`, {
+      token: params.accessToken,
+      json: params.reason ? { revocationReason: params.reason } : {},
+    })
   }
 
   /**

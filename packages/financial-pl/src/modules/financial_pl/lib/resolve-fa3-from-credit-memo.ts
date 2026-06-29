@@ -1,13 +1,16 @@
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { getEuStandardVatRate } from '../config'
 import { fa3InvoiceSchema, type Fa3InvoiceInput } from '../data/validators'
 import {
+  asRecord,
   asString,
   assertMappedVatRates,
   buildBuyer,
   buildLines,
   buildSeller,
   buildVatBreakdown,
+  buildZamowienie,
   scaled4ToMoney2dp,
   toIsoDate,
   toScaled4,
@@ -51,11 +54,64 @@ const ORIGINAL_KSEF_NUMBER_UNKNOWN_DEFAULT =
   'The original invoice has no KSeF number and is not marked as issued outside KSeF. Submit the original to KSeF first, or confirm it was issued outside KSeF.'
 const ORIGINAL_ISSUE_DATE_UNKNOWN_DEFAULT =
   'The original invoice has no issue date, so the correction cannot reference it in KSeF. Set the original invoice issue date first.'
-const CURRENCY_UNSUPPORTED_DEFAULT =
-  'Only PLN corrections can be submitted to KSeF yet. Foreign-currency corrections are not supported.'
+const ISSUE_DATE_REQUIRED_DEFAULT = 'The credit memo has no issue date, which a KSeF correction requires. Set the credit memo issue date first.'
+const OSS_COUNTRY_REQUIRED_DEFAULT =
+  'An OSS (WSTO_EE) correction requires the consumption-country code. Set the OSS destination country before submitting it to KSeF.'
+const OSS_RATE_REQUIRED_DEFAULT =
+  'An OSS (WSTO_EE) correction line requires a destination-country VAT rate. Set the consumption-country rate (or a known EU member state) before submitting it to KSeF.'
 
 function tr(deps: ResolveKorDeps, key: string, fallback: string): string {
   return deps.translate?.(key, fallback) ?? fallback
+}
+
+/** The PL-meta `invoice_kind` of the corrected ORIGINAL → the FA(3) correction RodzajFaktury. */
+function readCorrectionKindFromOriginal(meta: Record<string, unknown> | undefined): 'KOR' | 'KOR_ZAL' | 'KOR_ROZ' {
+  const raw = (asString(meta?.invoice_kind) ?? 'vat').toLowerCase()
+  if (raw === 'zal' || raw === 'kor_zal') return 'KOR_ZAL'
+  if (raw === 'roz' || raw === 'kor_roz') return 'KOR_ROZ'
+  return 'KOR'
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  const text = asString(value)
+  return text === 'true' || text === '1'
+}
+
+/**
+ * Annotate the (already-negated) correction line rows for an OSS (WSTO_EE) correction so the OSS
+ * serialization is SHARED by the invoice and the KOR path (jury resolution 2): each row carries the
+ * destination rate (`oss_rate` → `P_12_XII`), the procedure marker, and the per-line FX rate. The
+ * monetary fields stay negated (a correction files the negated OSS difference). The OSS rate is the
+ * line's own sales rate when present, else the consumption-country EU standard rate.
+ */
+function applyOssMarkersToCorrection(
+  rows: InvoiceLineRow[],
+  ossProcedure: boolean,
+  consumptionCountry: string | undefined,
+  fxRate: string | undefined,
+  deps: ResolveKorDeps,
+): InvoiceLineRow[] {
+  if (!ossProcedure) return rows
+  if (!consumptionCountry) {
+    throw new CrudHttpError(422, {
+      error: tr(deps, 'financial_pl.errors.oss_country_required', OSS_COUNTRY_REQUIRED_DEFAULT),
+      code: 'oss_country_required',
+    })
+  }
+  const tableRate = getEuStandardVatRate(consumptionCountry)
+  return rows.map((row) => {
+    const lineRate = Number(asString(row.tax_rate) ?? '')
+    const ossRate =
+      Number.isFinite(lineRate) && lineRate > 0 ? String(lineRate) : tableRate !== undefined ? String(tableRate) : null
+    if (ossRate === null) {
+      throw new CrudHttpError(422, {
+        error: tr(deps, 'financial_pl.errors.oss_rate_required', OSS_RATE_REQUIRED_DEFAULT),
+        code: 'oss_rate_required',
+      })
+    }
+    return { ...row, oss_rate: ossRate, procedure: 'WSTO_EE', ...(fxRate ? { fx_rate: fxRate } : {}) }
+  })
 }
 
 /** Negate a numeric(18,4) money magnitude to a 2-dp string (e.g. "80.00" → "-80.00"). */
@@ -115,12 +171,6 @@ export async function resolveFa3FromCreditMemo(
   }
 
   const currencyCode = (asString(creditMemo.currency_code) ?? 'PLN').toUpperCase()
-  if (currencyCode !== 'PLN') {
-    throw new CrudHttpError(422, {
-      error: tr(deps, 'financial_pl.errors.currency_unsupported', CURRENCY_UNSUPPORTED_DEFAULT),
-      code: 'currency_unsupported',
-    })
-  }
 
   // The corrected ORIGINAL invoice — for the buyer snapshot + DaneFaKorygowanej reference.
   const originalResult = await queryEngine.query<InvoiceRow>(E.sales.sales_invoice, {
@@ -132,6 +182,20 @@ export async function resolveFa3FromCreditMemo(
   if (!original) {
     throw new CrudHttpError(404, { error: '[internal] corrected original invoice not found' })
   }
+
+  // The corrected ORIGINAL's PL-meta drives the correction kind (KOR / KOR_ZAL / KOR_ROZ) and the
+  // OSS signals (jury resolution 2: an OSS correction reuses the OSS serialization). The credit
+  // memo's OWN meta (when present) overrides for OSS markers that may differ on the correction.
+  const originalMetaResult = await queryEngine.query<Record<string, unknown>>('financial_pl:sales_invoice_pl_meta', {
+    ...scope,
+    filters: { sales_invoice_id: { $eq: correctedInvoiceId }, deleted_at: { $eq: null } },
+    page: { page: 1, pageSize: 1 },
+  })
+  const originalMeta = originalMetaResult.items?.[0]
+  const invoiceKind = readCorrectionKindFromOriginal(originalMeta)
+  const ossProcedure = isTruthyFlag(originalMeta?.oss_procedure)
+  const consumptionCountry = asString(originalMeta?.consumption_country_code) ?? undefined
+  const exchangeRate = asString(originalMeta?.exchange_rate) ?? undefined
 
   // DataWystFaKorygowanej MUST be the ORIGINAL invoice's issue date — never the credit
   // memo's (that would file a false statutory date). It is required by the FA(3) XSD, so a
@@ -157,26 +221,74 @@ export async function resolveFa3FromCreditMemo(
 
   const seller = buildSeller(deps)
   const buyer = buildBuyer(original, deps)
-  const vatBreakdown = buildVatBreakdown(lineRows, negateMoney(creditMemo.grand_total_net_amount), negateMoney(creditMemo.tax_total_amount))
+  // OSS correction (jury resolution 2): annotate the negated lines with the OSS markers so the same
+  // P_12_XII / Procedura=WSTO_EE / P_13_5 / P_14_5 serialization is shared with the invoice path.
+  const effectiveLineRows = applyOssMarkersToCorrection(lineRows, ossProcedure, consumptionCountry, exchangeRate, deps)
+  const vatBreakdown = buildVatBreakdown(
+    effectiveLineRows,
+    negateMoney(creditMemo.grand_total_net_amount),
+    negateMoney(creditMemo.tax_total_amount),
+    exchangeRate ? { fxRate: exchangeRate } : {},
+  )
   assertMappedVatRates(vatBreakdown, deps.translate)
 
   const totalGross = scaled4ToMoney2dp(
     vatBreakdown.reduce((sum, entry) => sum + toScaled4(entry.net) + toScaled4(entry.vat), 0n),
   )
 
-  const issueDate =
-    toIsoDate(creditMemo.issue_date) ?? toIsoDate(creditMemo.created_at) ?? new Date().toISOString().slice(0, 10)
+  // The KOR document's own issue date (P_1) — reject a missing one rather than
+  // silently defaulting to today (a mis-dated correction is a regulatory defect).
+  const issueDate = toIsoDate(creditMemo.issue_date) ?? toIsoDate(creditMemo.created_at)
+  if (!issueDate) {
+    const message =
+      deps.translate?.('financial_pl.errors.issue_date_required', ISSUE_DATE_REQUIRED_DEFAULT) ?? ISSUE_DATE_REQUIRED_DEFAULT
+    throw new CrudHttpError(422, { error: message, code: 'issue_date_required' })
+  }
+
+  // KOR_ZAL / KOR_ROZ carry the correction-tail `P_15ZK` (the payment amount for a ZAL, or the
+  // amount-remaining for a ROZ, BEFORE the correction) negated like the rest of the correction. A
+  // KOR_ZAL additionally carries the corrected `Zamowienie` (order) block from the original's
+  // PL-meta snapshot; a KOR_ROZ carries the full (negated) FaWiersz already built above.
+  const isAdvanceOrSettlementCorrection = invoiceKind === 'KOR_ZAL' || invoiceKind === 'KOR_ROZ'
+  // P_15ZK is the ORIGINAL document's pre-correction amount (the "before" value shown on the
+  // corrected invoice) — NOT the correction's own (negated) total: for KOR_ZAL the advance
+  // invoice's paid gross; for KOR_ROZ the settlement residual = original gross − Σ already-invoiced
+  // advances. Positive (a pre-state amount, not a negated difference). NOTE: the exact KSeF-accepted
+  // P_15ZK for a correction-of-advance/settlement is pending a live correction-of-advance round-trip;
+  // this derives it from the original's stored amounts.
+  let preCorrectionPaymentAmount: string | undefined
+  if (isAdvanceOrSettlementCorrection) {
+    const sumMetaAmounts = (rows: unknown): bigint =>
+      (Array.isArray(rows) ? rows : []).reduce<bigint>((sum, row) => {
+        const amount = asString(asRecord(row).amount)
+        return amount ? sum + toScaled4(amount) : sum
+      }, 0n)
+    const originalGrossScaled =
+      toScaled4(asString(original.grand_total_net_amount) ?? '0') +
+      toScaled4(asString(original.tax_total_amount) ?? '0')
+    if (invoiceKind === 'KOR_ZAL') {
+      // P_15ZK = the original ZAL's paid amount = Σ original advance_payments (the ZAL's own P_15),
+      // NOT the invoice gross — they can differ. Fall back to the original gross only when the
+      // original carries no advance snapshot (e.g. issued outside this connector).
+      const paidScaled = sumMetaAmounts(originalMeta?.advance_payments)
+      preCorrectionPaymentAmount = scaled4ToMoney2dp(paidScaled !== 0n ? paidScaled : originalGrossScaled)
+    } else {
+      // KOR_ROZ: P_15ZK = the settlement residual = original gross − Σ already-invoiced advances.
+      preCorrectionPaymentAmount = scaled4ToMoney2dp(originalGrossScaled - sumMetaAmounts(originalMeta?.advance_refs))
+    }
+  }
+  const order = invoiceKind === 'KOR_ZAL' ? buildZamowienie(asRecord(originalMeta).order_snapshot) : undefined
 
   const fa3Invoice: Fa3InvoiceInput = {
     invoiceNumber: asString(creditMemo.credit_memo_number) ?? creditMemoId,
     issueDate,
     currencyCode,
-    invoiceKind: 'KOR',
+    invoiceKind,
     seller,
     buyer,
     vatBreakdown,
     totalGross,
-    lines: buildLines(lineRows),
+    lines: buildLines(effectiveLineRows),
     correction: {
       reason,
       correctedInvoices: [
@@ -186,7 +298,11 @@ export async function resolveFa3FromCreditMemo(
           ...(correctedKsefNumber ? { correctedKsefNumber } : {}),
         },
       ],
+      ...(preCorrectionPaymentAmount !== undefined ? { preCorrectionPaymentAmount } : {}),
+      ...(exchangeRate && isAdvanceOrSettlementCorrection ? { preCorrectionFxRate: exchangeRate } : {}),
     },
+    ...(order ? { order } : {}),
+    ...(exchangeRate ? { exchangeRate } : {}),
   }
 
   return { invoice: fa3InvoiceSchema.parse(fa3Invoice), correctedInvoiceId }

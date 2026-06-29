@@ -49,8 +49,15 @@ export async function GET(req: Request) {
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1') || 1)
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? '50') || 50))
     const filter: FilterQuery<KsefSubmission> = { tenantId: auth.tenantId, deletedAt: null }
-    const orgIds = scope?.filterIds ?? (auth.orgId ? [auth.orgId] : null)
-    if (orgIds && orgIds.length > 0) filter.organizationId = { $in: orgIds }
+    // Org-scope contract (mirror upo/route.ts): filterIds===null ⇒ super-admin (all orgs in the
+    // tenant); filterIds===[] ⇒ no accessible orgs ⇒ return nothing — NEVER drop the org filter,
+    // which would leak other orgs' submissions. `??` is wrong here: an empty [] is not nullish, so
+    // it would skip the filter, and it also fails to preserve the legitimate null (super-admin) case.
+    const orgIds = scope ? scope.filterIds : auth.orgId ? [auth.orgId] : null
+    if (Array.isArray(orgIds) && orgIds.length === 0) {
+      return NextResponse.json({ items: [], total: 0, page, pageSize })
+    }
+    if (Array.isArray(orgIds) && orgIds.length > 0) filter.organizationId = { $in: orgIds }
     const ids = parseIdsParam(url.searchParams.get('ids'))
     if (ids && ids.length > 0) filter.id = { $in: ids }
     const salesInvoiceId = url.searchParams.get('salesInvoiceId')

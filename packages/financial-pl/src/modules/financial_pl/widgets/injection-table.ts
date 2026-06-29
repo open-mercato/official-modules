@@ -18,6 +18,10 @@ export const injectionTable: ModuleInjectionTable = {
       widgetId: 'financial_pl.injection.ksef-send-action',
       priority: 100,
     },
+    {
+      widgetId: 'financial_pl.injection.ksef-invoice-pdf',
+      priority: 90,
+    },
   ],
   'crud-form:sales.sales_invoice:fields': [
     {

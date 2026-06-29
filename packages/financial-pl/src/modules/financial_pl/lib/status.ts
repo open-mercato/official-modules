@@ -27,8 +27,9 @@ const SESSION_IN_PROGRESS = 100
 const SESSION_BATCH_PROCESSING = 150
 
 // 440 at the INVOICE scope means the submitted invoice is a DUPLICATE of one
-// already registered in KSeF (detection key: seller NIP + RodzajFaktury + invoice
-// number). The original invoice IS legally accepted — the 440 status carries
+// already registered in KSeF (detection key: the SHA-256 content hash of the
+// invoice document — so a byte-identical resend is what KSeF de-duplicates on,
+// per SPEC-007). The original invoice IS legally accepted — the 440 status carries
 // `status.extensions.originalKsefNumber` + `originalSessionReferenceNumber`, from
 // which the caller recovers the original KSeF number and its UPO. So at the
 // invoice scope 440 is an `accepted` DUPLICATE (never a rejection — a retry or

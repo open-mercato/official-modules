@@ -27,6 +27,10 @@ const SELLER = { name: 'Sprzedawca Sp. z o.o.', addressLine1: 'ul. Testowa 1', a
 const ORIGINAL_INVOICE = {
   id: 'inv-1',
   invoice_number: 'FV/2026/06/1',
+  // Original gross = 123.00 — deliberately DIFFERENT from the credit memo's 49.20 so the P_15ZK
+  // assertions verify it is the ORIGINAL's pre-correction amount, not the correction's own total.
+  grand_total_net_amount: '100.0000',
+  tax_total_amount: '23.0000',
   issue_date: '2026-06-20',
   currency_code: 'PLN',
   metadata: { buyerSnapshot: { companyName: 'Nabywca Sp. z o.o.', nip: '3755747347', addressLine1: 'ul. Kliencka 2', city: 'Krakow', postalCode: '00-002' } },
@@ -135,5 +139,94 @@ describe('resolveFa3FromCreditMemo', () => {
     await expect(
       resolveFa3FromCreditMemo({ queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER }, args),
     ).rejects.toMatchObject({ status: 422, body: { code: 'correction_lines_required' } })
+  })
+
+  // SPEC-009: the correction kind is derived from the corrected ORIGINAL's PL-meta invoice_kind.
+  const ACCEPTED_ORIGINAL = {
+    'financial_pl:ksef_submission': [
+      { document_kind: 'invoice', status: 'accepted', ksef_number: '2481632647-20260620-AABBCC-DDEEFF-11', deleted_at: null, created_at: '2026-06-20' },
+    ],
+  }
+
+  it('derives KOR_ZAL from a corrected ZAL original: carries P_15ZK (pre-correction amount) + the corrected Zamowienie', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'financial_pl:sales_invoice_pl_meta': [
+        {
+          sales_invoice_id: 'inv-1',
+          invoice_kind: 'zal',
+          // The original ZAL documented a 49.20 advance payment — its P_15 (paid), which drives P_15ZK
+          // and is deliberately distinct from the original invoice gross (123.00).
+          advance_payments: [{ receivedDate: '2026-06-19', amount: '49.20' }],
+          order_snapshot: {
+            totalValue: '49.20',
+            lines: [{ name: 'Towar', quantity: '1', unitNetPrice: '40.00', netValue: '40.00', vatValue: '9.20', vatRate: '23' }],
+          },
+          deleted_at: null,
+        },
+      ],
+    })
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    expect(invoice.invoiceKind).toBe('KOR_ZAL')
+    // P_15ZK = the ORIGINAL ZAL's paid amount = Σ advance_payments (49.20) — NOT the invoice gross
+    // (123.00) and NOT the correction's own total (-49.20).
+    expect(invoice.correction?.preCorrectionPaymentAmount).toBe('49.20')
+    expect(invoice.order?.lines).toHaveLength(1)
+    expect(invoice.correction?.correctedInvoices[0].correctedKsefNumber).toBe('2481632647-20260620-AABBCC-DDEEFF-11')
+  })
+
+  it('derives KOR_ROZ from a corrected ROZ original: carries P_15ZK + the full (negated) FaWiersz', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'financial_pl:sales_invoice_pl_meta': [
+        // The original ROZ netted a 23.00 advance, so its pre-correction residual = 123.00 − 23.00.
+        { sales_invoice_id: 'inv-1', invoice_kind: 'roz', advance_refs: [{ amount: '23.00' }], deleted_at: null },
+      ],
+    })
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    expect(invoice.invoiceKind).toBe('KOR_ROZ')
+    // P_15ZK = the ORIGINAL settlement residual (original gross 123.00 − Σ advances 23.00 = 100.00),
+    // NOT the correction's own total (-49.20).
+    expect(invoice.correction?.preCorrectionPaymentAmount).toBe('100.00')
+    expect(invoice.lines).toHaveLength(1)
+    expect(invoice.lines[0].netValue).toBe('-40.00')
+  })
+
+  it('OSS correction (jury rule 2): a KOR of an OSS original carries the OSS line fields + P_13_5/P_14_5 + FX (negated)', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'sales:sales_credit_memo': [{ ...CREDIT_MEMO, currency_code: 'EUR' }],
+      'sales:sales_credit_memo_line': [{ ...CREDIT_MEMO_LINE, tax_rate: '19.0000', tax_amount: '7.6000' }],
+      'financial_pl:sales_invoice_pl_meta': [
+        {
+          sales_invoice_id: 'inv-1',
+          invoice_kind: 'vat',
+          oss_procedure: true,
+          consumption_country_code: 'DE',
+          exchange_rate: '4.30',
+          deleted_at: null,
+        },
+      ],
+    })
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    expect(invoice.invoiceKind).toBe('KOR')
+    expect(invoice.currencyCode).toBe('EUR')
+    // OSS serialization is shared with the invoice path: the OSS bucket + per-line WSTO_EE markers,
+    // all as negated differences.
+    expect(invoice.vatBreakdown[0].rate).toBe('oss')
+    expect(invoice.vatBreakdown[0].net).toBe('-40.00')
+    expect(invoice.lines[0].ossRate).toBe('19')
+    expect(invoice.lines[0].procedure).toBe('WSTO_EE')
+    expect(invoice.lines[0].fxRate).toBe('4.30')
+    expect(invoice.exchangeRate).toBe('4.30')
   })
 })

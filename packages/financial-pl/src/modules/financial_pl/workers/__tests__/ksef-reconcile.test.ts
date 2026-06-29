@@ -7,10 +7,11 @@ import handle from '../ksef-reconcile.worker'
 
 type Row = {
   id: string
-  status: 'queued' | 'processing'
+  status: 'queued' | 'processing' | 'offline_issued'
   attemptCount: number
   submittedAt?: Date | null
   updatedAt?: Date | null
+  offlineSendDeadlineAt?: Date | null
 }
 
 type FindWhere = { status?: string | { $in: string[] } }
@@ -18,12 +19,14 @@ type FindWhere = { status?: string | { $in: string[] } }
 function makeEm(opts: {
   processing?: Row[]
   queued?: Row[]
+  offlineIssued?: Row[]
   gaveUp?: { id: string }[]
   nativeUpdate?: jest.Mock
 }) {
   const find = jest.fn(async (_entity: unknown, where: FindWhere) => {
     if (where.status === 'processing') return opts.processing ?? []
     if (where.status === 'queued') return opts.queued ?? []
+    if (where.status === 'offline_issued') return opts.offlineIssued ?? []
     // The over-ceiling give-up query keys status as { $in: [...] }.
     return opts.gaveUp ?? []
   })
@@ -116,7 +119,9 @@ describe('ksef-reconcile worker', () => {
       expect.objectContaining({
         organizationId: 'O',
         tenantId: 'T',
-        status: { $in: ['queued', 'processing'] },
+        deletedAt: null,
+        // offline_issued rows over the ceiling must also be surfaced as gave-up.
+        status: { $in: ['queued', 'processing', 'offline_issued'] },
         attemptCount: { $gte: 6 },
       }),
     )
@@ -147,5 +152,67 @@ describe('ksef-reconcile worker', () => {
     for (const call of find.mock.calls) {
       expect(call[1]).toEqual(expect.objectContaining({ organizationId: 'O', tenantId: 'T', deletedAt: null }))
     }
+  })
+
+  // --- SPEC-010: offline_issued deadline routing (deferred INITIAL send) ---
+
+  it('queries offline_issued candidates keyed on the deadline, soonest-first', async () => {
+    const { em, find } = makeEm({})
+    await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
+    const call = find.mock.calls.find((c) => (c[1] as FindWhere).status === 'offline_issued')
+    expect(call).toBeDefined()
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        status: 'offline_issued',
+        attemptCount: { $lt: 6 },
+        offlineSendDeadlineAt: { $lte: expect.any(Date) },
+      }),
+    )
+    // Prioritized by approaching deadline.
+    const opts = (call as unknown as unknown[])?.[2] as { orderBy?: unknown }
+    expect(opts.orderBy).toEqual({ offlineSendDeadlineAt: 'asc' })
+  })
+
+  it('CAS-claims an offline_issued row near its deadline and emits send_offline (initial send)', async () => {
+    const { em, nativeUpdate } = makeEm({
+      offlineIssued: [
+        { id: 'OFF1', status: 'offline_issued', attemptCount: 0, submittedAt: null, offlineSendDeadlineAt: new Date(Date.now() + 3_600_000) },
+      ],
+    })
+    await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
+
+    expect(nativeUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'OFF1', organizationId: 'O', tenantId: 'T', status: 'offline_issued' }),
+      expect.objectContaining({ attemptCount: 1 }),
+    )
+    expect(emitFinancialPlEvent).toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.send_offline',
+      { submissionId: 'OFF1', organizationId: 'O', tenantId: 'T' },
+      { persistent: true },
+    )
+  })
+
+  it('does not emit send_offline when the offline CAS claim is lost to another worker', async () => {
+    const { em } = makeEm({
+      offlineIssued: [
+        { id: 'OFF2', status: 'offline_issued', attemptCount: 0, submittedAt: null, offlineSendDeadlineAt: new Date(Date.now() + 3_600_000) },
+      ],
+      nativeUpdate: jest.fn(async () => 0),
+    })
+    await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
+    expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.send_offline',
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('includes offline_issued in the over-ceiling gave-up surfacing', async () => {
+    const { em, find } = makeEm({})
+    await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
+    expect(gaveUpFind(find)).toEqual(
+      expect.objectContaining({ status: { $in: ['queued', 'processing', 'offline_issued'] }, attemptCount: { $gte: 6 } }),
+    )
   })
 })
