@@ -4,6 +4,7 @@ import {
   jpkPurchaseRecordUpsertSchema,
   jpkFilingUpsertSchema,
   jpkGenerateSchema,
+  ksefInvoiceListQuerySchema,
 } from '../validators'
 
 // Valid seller/buyer (10-digit + checksum-valid NIPs reused across the FA(3) test suite).
@@ -358,5 +359,47 @@ describe('JPK validators (SPEC-012)', () => {
       expect(jpkGenerateSchema.safeParse({ filingId: 'not-a-uuid' }).success).toBe(false)
       expect(jpkGenerateSchema.safeParse({ filingId: '550e8400-e29b-41d4-a716-446655440000' }).success).toBe(true)
     })
+  })
+})
+
+describe('ksefInvoiceListQuerySchema (SPEC-013 — invoices list query)', () => {
+  it('applies safe defaults (page=1, pageSize=25) when page/pageSize are absent', () => {
+    const parsed = ksefInvoiceListQuerySchema.parse({})
+    expect(parsed.page).toBe(1)
+    expect(parsed.pageSize).toBe(25)
+    expect(parsed.search).toBeUndefined()
+    expect(parsed.status).toBeUndefined()
+  })
+
+  it('coerces page/pageSize from query strings', () => {
+    const parsed = ksefInvoiceListQuerySchema.parse({ page: '3', pageSize: '50' })
+    expect(parsed.page).toBe(3)
+    expect(parsed.pageSize).toBe(50)
+  })
+
+  it('enforces the DataTable pageSize ceiling (max 100)', () => {
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 100 }).success).toBe(true)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 101 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: '250' }).success).toBe(false)
+  })
+
+  it('rejects non-positive / non-integer page and pageSize', () => {
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 0 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: -1 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 0 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 1.5 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 'not-a-number' }).success).toBe(false)
+  })
+
+  it('trims a search term and rejects an empty/whitespace one (min length 1 after trim)', () => {
+    expect(ksefInvoiceListQuerySchema.parse({ search: '  FV/2026  ' }).search).toBe('FV/2026')
+    expect(ksefInvoiceListQuerySchema.safeParse({ search: '   ' }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ search: 'x'.repeat(257) }).success).toBe(false)
+  })
+
+  it('trims a status filter and caps its length (the status union itself is validated at the route)', () => {
+    expect(ksefInvoiceListQuerySchema.parse({ status: ' accepted ' }).status).toBe('accepted')
+    expect(ksefInvoiceListQuerySchema.safeParse({ status: '   ' }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ status: 'x'.repeat(65) }).success).toBe(false)
   })
 })
