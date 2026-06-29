@@ -28,6 +28,7 @@ export type KsefActionsProps = {
 }
 
 const FEATURE_SUBMIT = 'financial_pl.submit'
+const FEATURE_MANAGE = 'financial_pl.manage'
 const FEATURE_VIEW = 'financial_pl.view'
 
 // KSeF statuses for which the submission is terminal-success or in flight, so a
@@ -46,9 +47,9 @@ function resolveMessage(result: ActionResponse | null, key: keyof ActionResponse
  * Send to KSeF (arm-then-confirm via `useConfirmDialog`), Retry (latest non-accepted
  * submission), Download UPO, Download PDF, Issue offline — wired to the existing
  * `financial_pl` routes via `apiCall` + `useGuardedMutation`. Gating is wildcard-aware
- * (`hasAllFeatures`, never `Array.includes`): Send/Retry/Issue-offline → `financial_pl.submit`;
- * UPO/PDF → `financial_pl.view`. The UI hides what the caller cannot do; the server
- * routes enforce the same features independently.
+ * (`hasAllFeatures`, never `Array.includes`): Send/Retry → `financial_pl.submit`;
+ * Issue-offline → `financial_pl.manage` (matching its route); UPO/PDF → `financial_pl.view`.
+ * The UI hides what the caller cannot do; the server routes enforce the same features independently.
  */
 export function KsefActions({ invoiceId, submission, features, onChanged }: KsefActionsProps) {
   const t = useT()
@@ -56,6 +57,7 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
   const [busy, setBusy] = React.useState(false)
 
   const canSubmit = hasAllFeatures(features, [FEATURE_SUBMIT])
+  const canManage = hasAllFeatures(features, [FEATURE_MANAGE])
   const canView = hasAllFeatures(features, [FEATURE_VIEW])
 
   const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
@@ -191,7 +193,7 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
         </Button>
       ) : null}
 
-      {canSubmit && canSend ? (
+      {canManage && canSend ? (
         <Button type="button" variant="outline" disabled={busy} onClick={handleIssueOffline}>
           <WifiOff className="mr-1 size-4" />
           {t('financial_pl.actions.issueOffline', 'Issue offline')}

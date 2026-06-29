@@ -17,7 +17,9 @@ import { invoiceMetaPutSchema } from '../../../data/validators'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
-  PUT: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
+  // SPEC-013 composed gating: the PUT writes statutory metadata tied to a core sales
+  // invoice, so it requires BOTH the PL-meta manage feature and core invoice-manage.
+  PUT: { requireAuth: true, requireFeatures: ['financial_pl.manage', 'sales.invoices.manage'] },
 }
 
 // SPEC-013 — KSeF-immutability statuses (mirrors api/interceptors.ts). An invoice with a

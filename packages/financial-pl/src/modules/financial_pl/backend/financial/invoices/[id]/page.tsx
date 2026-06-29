@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
 import { Pencil } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -239,12 +238,12 @@ function SectionCard({
   )
 }
 
-export default function FinancialPlInvoiceDetailPage() {
+export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
-  // Next 15: in a client component the route params come from `useParams()` (the `params` prop is a
-  // Promise here and would break at runtime). Mirror the sibling edit page's extraction.
-  const params = useParams<{ id: string }>()
-  const invoiceId = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : ''
+  // This app renders backend pages via a `/[...slug]` catch-all that passes the resolved route
+  // segment as a synchronous `params` prop (mirrors core `sales/.../[id]/page.tsx`). `useParams()`
+  // would return the raw slug array here, not `{ id }`, so read the prop directly.
+  const invoiceId = typeof props.params?.id === 'string' ? props.params.id : ''
   const scopeVersion = useOrganizationScopeVersion()
 
   const [data, setData] = React.useState<InvoiceDetailResponse | null>(null)

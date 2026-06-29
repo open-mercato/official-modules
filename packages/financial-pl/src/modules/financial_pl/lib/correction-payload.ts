@@ -46,7 +46,8 @@ export type CreditMemoCreatePayload = {
 /**
  * Build the exact credit-memo create body. Includes the required top-level `currencyCode` +
  * `issueDate`, and the required per-line `currencyCode` + non-negative `quantity`, so it satisfies
- * core's `creditMemoCreateSchema`.
+ * core's `creditMemoCreateSchema`. A blank/empty `currencyCode` (top-level or per-line) defaults to
+ * `PLN` so the `/^[A-Z]{3}$/` validator never 422s on a null-currency invoice.
  */
 export function buildCreditMemoPayload(input: {
   invoiceId: string
@@ -56,16 +57,20 @@ export function buildCreditMemoPayload(input: {
   issueDate?: string
 }): CreditMemoCreatePayload {
   const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
+  // core's currencyCode validator requires /^[A-Z]{3}$/, so a blank/empty value would 422.
+  // Default to PLN (the only statutory settlement currency for a Polish KOR) both top-level
+  // and per-line when the caller leaves it empty.
+  const currencyCode = input.currencyCode.trim() || 'PLN'
   return {
     invoiceId: input.invoiceId,
     reason: input.reason,
-    currencyCode: input.currencyCode,
+    currencyCode,
     issueDate,
     lines: input.lines.map((line, index) => {
       const row: CreditMemoCreatePayload['lines'][number] = {
         name: line.name,
         quantity: line.quantity,
-        currencyCode: line.currencyCode || input.currencyCode,
+        currencyCode: line.currencyCode.trim() || currencyCode,
         lineNumber: line.lineNumber ?? index + 1,
       }
       if (line.quantityUnit && line.quantityUnit.trim()) row.quantityUnit = line.quantityUnit.trim()

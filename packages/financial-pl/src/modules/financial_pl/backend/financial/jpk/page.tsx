@@ -127,6 +127,10 @@ export default function FinancialPlJpkPage() {
   const [variant, setVariant] = React.useState<JpkVariant>('V7M')
   const [year, setYear] = React.useState<number>(currentYear)
   const [month, setMonth] = React.useState<number>(new Date().getMonth() + 1)
+  // Required by resolveJpkFiling: the 4-digit tax-office code (KodUrzedu) that generation/export
+  // throws without. contextNip is optional (Podmiot1 falls back to the credential NIP when blank).
+  const [kodUrzedu, setKodUrzedu] = React.useState('')
+  const [contextNip, setContextNip] = React.useState('')
   const [busy, setBusy] = React.useState(false)
 
   // --- Filings ---
@@ -252,6 +256,16 @@ export default function FinancialPlJpkPage() {
 
   // Generate = create the filing header (POST filings) then run the export (POST export?filingId=).
   const handleGenerate = React.useCallback(async () => {
+    // KodUrzedu is required by the resolver — block the round-trip on an invalid/missing value.
+    const kod = kodUrzedu.trim()
+    if (!/^\d{4}$/.test(kod)) {
+      flash(
+        t('financial_pl.jpk.generate.kodUrzeduInvalid', 'A 4-digit tax-office code (kod urzędu) is required.'),
+        'error',
+      )
+      return
+    }
+    const nip = contextNip.trim()
     setBusy(true)
     try {
       await runMutation({
@@ -260,7 +274,15 @@ export default function FinancialPlJpkPage() {
           const createCall = await apiCall<FilingUpsertResponse>('/api/financial_pl/ksef/jpk/filings', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ variant, year, month, celZlozenia: 1, correctionScope: 'both' }),
+            body: JSON.stringify({
+              variant,
+              year,
+              month,
+              celZlozenia: 1,
+              correctionScope: 'both',
+              kodUrzedu: kod,
+              ...(nip ? { contextNip: nip } : {}),
+            }),
           })
           if (!createCall.ok || !createCall.result?.id) {
             throw new Error(
@@ -283,7 +305,7 @@ export default function FinancialPlJpkPage() {
           return generateCall
         },
         context: mutationContext,
-        mutationPayload: { action: 'generate', variant, year, month },
+        mutationPayload: { action: 'generate', variant, year, month, kodUrzedu: kod, contextNip: nip || null },
       })
       flash(t('financial_pl.jpk.filings.messages.generated', 'JPK filing generated.'), 'success')
       refresh()
@@ -295,7 +317,7 @@ export default function FinancialPlJpkPage() {
     } finally {
       setBusy(false)
     }
-  }, [month, mutationContext, refresh, runMutation, t, variant, year])
+  }, [contextNip, kodUrzedu, month, mutationContext, refresh, runMutation, t, variant, year])
 
   // Download streams the already-generated XML — window.open the GET endpoint. A draft filing
   // has no XML yet (the GET would 422), so prompt the operator to generate it first.
@@ -560,6 +582,28 @@ export default function FinancialPlJpkPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="jpk-kod-urzedu">{t('financial_pl.jpk.generate.kodUrzedu', 'Tax office code')}</Label>
+                  <Input
+                    id="jpk-kod-urzedu"
+                    className="w-32"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="0000"
+                    value={kodUrzedu}
+                    onChange={(e) => setKodUrzedu(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="jpk-context-nip">{t('financial_pl.jpk.generate.contextNip', 'Context NIP (optional)')}</Label>
+                  <Input
+                    id="jpk-context-nip"
+                    className="w-44"
+                    inputMode="numeric"
+                    value={contextNip}
+                    onChange={(e) => setContextNip(e.target.value)}
+                  />
                 </div>
                 <Button onClick={handleGenerate} disabled={busy}>
                   <FileCog className="h-4 w-4" aria-hidden />

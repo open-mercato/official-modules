@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
 import { SearchX } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -198,10 +197,12 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
  * rendered READ-ONLY with a lock Alert and an "Issue a correction" link to the detail page. The
  * server-side interceptor enforces the same rule regardless of this UI guard.
  */
-export default function EditInvoicePage() {
+export default function EditInvoicePage(props: { params?: { id?: string } }) {
   const t = useT()
-  const params = useParams<{ id: string }>()
-  const invoiceId = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : ''
+  // Backend pages are served by the app's `/[...slug]` catch-all, which passes the resolved route
+  // segment as a synchronous `params` prop (mirrors core `sales/.../[id]/page.tsx`). `useParams()`
+  // returns the raw slug array here, not `{ id }`, so read the prop directly.
+  const invoiceId = typeof props.params?.id === 'string' ? props.params.id : ''
   const scopeVersion = useOrganizationScopeVersion()
 
   const [status, setStatus] = React.useState<'loading' | 'ready' | 'notFound' | 'error'>('loading')
