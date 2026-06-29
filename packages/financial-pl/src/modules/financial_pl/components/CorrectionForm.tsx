@@ -11,23 +11,29 @@ import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuarde
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { hasAllFeatures } from '@open-mercato/shared/security/features'
 import { InvoiceLinesField, type InvoiceLineInput } from './InvoiceLinesField'
+import { buildCreditMemoPayload } from '../lib/correction-payload'
+
+export { buildCreditMemoPayload } from '../lib/correction-payload'
+export type { CreditMemoCreatePayload } from '../lib/correction-payload'
 
 const FEATURE_CREDIT_MEMOS = 'sales.credit_memos.manage'
 
-/** Negate a decimal-string amount; returns '' for non-parseable input. */
-function negateAmount(value: string | undefined): string {
-  if (value == null || value === '') return ''
-  const n = Number(value)
-  if (!Number.isFinite(n)) return value
-  return String(-n)
+/**
+ * Prefill a correction line from an original invoice line. Credit-memo semantics come from the
+ * document type, NOT from negative quantities — core's `creditMemoCreateSchema` enforces
+ * `quantity >= 0`, so the prefilled quantity is kept POSITIVE.
+ */
+export function toCorrectionLine(line: InvoiceLineInput): InvoiceLineInput {
+  return { ...line }
 }
 
-/** Prefill a correction line as the negative of an original invoice line (quantity negated). */
-export function toNegativeLine(line: InvoiceLineInput): InvoiceLineInput {
-  return { ...line, quantity: negateAmount(line.quantity) }
+type CreditMemoResponse = {
+  creditMemoId?: string
+  id?: string
+  item?: { id?: string }
+  error?: string
+  message?: string
 }
-
-type CreditMemoResponse = { id?: string; item?: { id?: string }; error?: string; message?: string }
 type FromCreditMemoResponse = { ok?: boolean; submissionId?: string; error?: string; message?: string }
 
 export type CorrectionFormProps = {
@@ -42,7 +48,7 @@ export type CorrectionFormProps = {
 
 /**
  * Correction (KOR) authoring form. Captures a reason + editable correction lines
- * (prefilled as the negative of the original invoice lines, reusing `InvoiceLinesField`).
+ * (prefilled from the original invoice lines with POSITIVE quantities, reusing `InvoiceLinesField`).
  * On submit it creates a `SalesCreditMemo` via core `POST /api/sales/credit-memos`
  * (corrected `invoiceId` + `reason` + lines), then sends it via the existing
  * `submissions/from-credit-memo` route. The trigger is gated on
@@ -61,7 +67,7 @@ export function CorrectionForm({
   const canManage = hasAllFeatures(features, [FEATURE_CREDIT_MEMOS])
 
   const [reason, setReason] = React.useState('')
-  const [lines, setLines] = React.useState<InvoiceLineInput[]>(() => originalLines.map(toNegativeLine))
+  const [lines, setLines] = React.useState<InvoiceLineInput[]>(() => originalLines.map(toCorrectionLine))
   const [busy, setBusy] = React.useState(false)
 
   const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
@@ -76,7 +82,7 @@ export function CorrectionForm({
       flash(t('financial_pl.correction.reasonRequired', 'A correction reason is required.'), 'error')
       return
     }
-    const payload = { invoiceId, reason: reason.trim(), lines }
+    const payload = buildCreditMemoPayload({ invoiceId, reason: reason.trim(), currencyCode, lines })
     setBusy(true)
     try {
       const creditMemoId = await runMutation<string>({
@@ -92,7 +98,7 @@ export function CorrectionForm({
                 t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'),
             )
           }
-          const id = create.result?.id ?? create.result?.item?.id
+          const id = create.result?.creditMemoId ?? create.result?.id ?? create.result?.item?.id
           if (!id) {
             throw new Error(t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'))
           }
@@ -126,7 +132,7 @@ export function CorrectionForm({
     } finally {
       setBusy(false)
     }
-  }, [canManage, reason, lines, invoiceId, runMutation, retryLastMutation, onSubmitted, t])
+  }, [canManage, reason, lines, invoiceId, currencyCode, runMutation, retryLastMutation, onSubmitted, t])
 
   if (!canManage) {
     return (

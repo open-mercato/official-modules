@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
 import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
 import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
+import { buildCreditMemoPayload, type CorrectionLineInput } from '../lib/correction-payload';
 
 /**
  * TC-KSEF-UI-004: correction (KOR) authoring — credit memo create → send-from-credit-memo
@@ -37,17 +38,68 @@ function invoicePayload() {
   };
 }
 
+// The correction lines the CorrectionForm prefills/edits (POSITIVE quantities — credit-memo
+// semantics come from the document type, not negated quantities). Each line carries its own
+// currencyCode, exactly as InvoiceLinesField stamps it.
+function correctionLines(): CorrectionLineInput[] {
+  return [
+    {
+      name: 'Korekta pozycji',
+      quantity: '1',
+      quantityUnit: 'usł.',
+      unitPriceNet: '50',
+      taxRate: '23',
+      totalNetAmount: '50.00',
+      taxAmount: '11.50',
+      totalGrossAmount: '61.50',
+      currencyCode: 'PLN',
+      lineNumber: 1,
+    },
+  ];
+}
+
+// Drive the EXACT body the CorrectionForm posts (buildCreditMemoPayload) instead of hand-rolling a
+// payload — this is what guards #1/#2/#3: response field `creditMemoId`, positive line quantities,
+// and the required currencyCode (top-level + per line) + issueDate.
 function creditMemoPayload(invoiceId: string) {
-  return {
+  return buildCreditMemoPayload({
     invoiceId,
     reason: 'Korekta — zwrot części usługi',
     currencyCode: 'PLN',
+    lines: correctionLines(),
     issueDate: '2026-06-25',
-    lines: [{ name: 'Korekta pozycji', quantity: 1, unitPriceNet: 50, taxRate: 23 }],
-  };
+  });
 }
 
 test.describe('TC-KSEF-UI-004: correction (KOR) — credit memo create + from-credit-memo', () => {
+  // --- the payload the CorrectionForm builds satisfies core's creditMemoCreateSchema ---
+  // Asserts the exact shape buildCreditMemoPayload produces so this suite catches regressions on
+  // #1 (response field), #2 (negative quantity), #3 (missing currencyCode/issueDate) — previously
+  // masked because the test hand-built a positive-quantity payload directly.
+
+  test('the CorrectionForm payload carries currencyCode + issueDate + positive line quantities', () => {
+    const invoiceId = randomUUID();
+    const payload = creditMemoPayload(invoiceId);
+    expect(payload.invoiceId, 'corrected invoiceId is referenced').toBe(invoiceId);
+    expect(payload.currencyCode, 'top-level currencyCode is required (#3)').toBe('PLN');
+    expect(payload.issueDate, 'issueDate is included (#3)').toBe('2026-06-25');
+    expect(payload.lines.length, 'at least one correction line').toBeGreaterThan(0);
+    for (const line of payload.lines) {
+      expect(line.currencyCode, 'every line carries currencyCode (#3)').toBe('PLN');
+      expect(Number(line.quantity), 'line quantity is non-negative — core rejects negatives (#2)').toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test('the CorrectionForm defaults issueDate to today (ISO) when none is supplied', () => {
+    const payload = buildCreditMemoPayload({
+      invoiceId: randomUUID(),
+      reason: 'Korekta',
+      currencyCode: 'PLN',
+      lines: correctionLines(),
+    });
+    expect(payload.issueDate, 'issueDate defaults to an ISO YYYY-MM-DD').toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
   // --- credit memo create requires sales.credit_memos.manage ---
 
   test('credit memo create is rejected when unauthenticated (401)', async ({ request }) => {
@@ -112,6 +164,9 @@ test.describe('TC-KSEF-UI-004: correction (KOR) — credit memo create + from-cr
       }
       expect(memoRes.status(), 'admin authors the KOR credit memo').toBe(201);
       const memoBody = (await memoRes.json()) as { id?: string; creditMemoId?: string };
+      // The verified core contract returns { creditMemoId }; the CorrectionForm reads that field
+      // first (#1). Assert it is present rather than relying on a legacy `id` fallback.
+      expect(memoBody.creditMemoId, 'create returns { creditMemoId } (#1)').toBeTruthy();
       creditMemoId = memoBody.creditMemoId ?? memoBody.id ?? null;
       expect(creditMemoId, 'create returns the credit memo id').toBeTruthy();
 

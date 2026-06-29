@@ -31,7 +31,7 @@ import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { ErrorMessage } from '@open-mercato/ui/backend/detail/ErrorMessage'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { hasAllFeatures } from '@open-mercato/shared/lib/auth/featureMatch'
+import { hasAllFeatures } from '@open-mercato/shared/security/features'
 
 type CertificateType = 'Authentication' | 'Offline'
 
@@ -112,7 +112,7 @@ export default function FinancialPlCertificatesPage() {
           body: JSON.stringify({ features: [FEATURE_MANAGE] }),
         })
         if (cancelled) return
-        setCanManage(hasAllFeatures([FEATURE_MANAGE], res.result?.granted ?? []))
+        setCanManage(hasAllFeatures(res.result?.granted ?? [], [FEATURE_MANAGE]))
       } catch {
         if (!cancelled) setCanManage(false)
       }

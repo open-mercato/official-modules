@@ -161,8 +161,6 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     [retryLastMutation],
   )
 
-  const currencyCode = (value.header.currencyCode.trim().toUpperCase() || DEFAULT_CURRENCY)
-
   const setLines = React.useCallback((lines: InvoiceLineInput[]) => {
     setValue((prev) => ({ ...prev, lines }))
   }, [])
@@ -277,14 +275,22 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       id: 'lines',
       title: t('financial_pl.invoices.form.sections.lines', 'Lines'),
       column: 1,
-      component: () => (
-        <InvoiceLinesField
-          value={value.lines}
-          onChange={setLines}
-          currencyCode={currencyCode}
-          disabled={readOnly}
-        />
-      ),
+      // Derive the currency from the LIVE CrudForm header value (`values.currencyCode`) so editing
+      // the currency field re-stamps the lines immediately — `value.header.currencyCode` is only the
+      // initial/last-submitted value and would be stale while the user types.
+      component: (ctx) => {
+        const liveCurrency =
+          (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
+          DEFAULT_CURRENCY
+        return (
+          <InvoiceLinesField
+            value={value.lines}
+            onChange={setLines}
+            currencyCode={liveCurrency}
+            disabled={readOnly}
+          />
+        )
+      },
     },
     {
       id: 'plvat',
@@ -294,7 +300,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         <PlVatMetaForm value={value.meta} onChange={setMeta} disabled={readOnly} />
       ),
     },
-  ], [currencyCode, readOnly, setLines, setMeta, t, value.lines, value.meta])
+  ], [readOnly, setLines, setMeta, t, value.lines, value.meta])
 
   return (
     <div className="flex flex-col gap-4">

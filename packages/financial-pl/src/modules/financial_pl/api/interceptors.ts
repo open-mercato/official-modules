@@ -29,7 +29,20 @@ function asString(value: unknown): string | undefined {
  * target: a PUT body carries `{ id }`; a DELETE narrows via `?id=` (or a body `{ id }` fallback).
  */
 function resolveInvoiceId(request: InterceptorRequest): string | undefined {
-  return asString(request.body?.id) ?? asString(request.query?.id)
+  // The core CRUD route identifies its target a few different ways and the interceptor must catch
+  // ALL of them or it fails open:
+  //  - PUT carries `{ id }` in the body;
+  //  - the command-DELETE path passes ONLY the body (empty for `?id=` deletes);
+  //  - the canonical delete sends `DELETE ?id=<uuid>` with an EMPTY body.
+  // So fall back from body → parsed query → the raw URL's `?id=` (guarded for relative urls, which
+  // would make the URL constructor throw).
+  const fromBodyOrQuery = asString(request.body?.id) ?? asString(request.query?.id)
+  if (fromBodyOrQuery) return fromBodyOrQuery
+  try {
+    return asString(new URL(request.url, 'http://internal.local').searchParams.get('id') ?? undefined)
+  } catch {
+    return undefined
+  }
 }
 
 /**

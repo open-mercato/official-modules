@@ -14,7 +14,9 @@ import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/u
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { InvoiceForm, IssueCorrectionLink, type InvoiceFormValue } from './InvoiceForm'
 import { withComputedTotals, type InvoiceLineInput } from '../../../../../components/InvoiceLinesField'
-import type { InvoiceMeta } from '../../../../../components/PlVatMetaForm'
+import type { InvoiceMeta, ProcedureMarkings } from '../../../../../components/PlVatMetaForm'
+import type { InvoiceKindColumn } from '../../../../../data/entities'
+import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../../lib/jpk-markings-codes'
 
 const DEFAULT_CURRENCY = 'PLN'
 
@@ -45,8 +47,96 @@ type InvoiceDetailResponse = {
     lineNumber?: number | null
     kind?: string | null
   }> | null
-  meta?: (InvoiceMeta & { updatedAt?: string | null }) | null
+  meta?: (InvoiceMetaWire & { updatedAt?: string | null }) | null
   submission?: { status?: string | null } | null
+}
+
+/**
+ * Flat wire shape of `meta` from GET /api/financial_pl/ksef/invoices/<id>: JPK procedure markings
+ * are individual booleans (not a nested map), `docType` (not `typDokumentu`), and `orderSnapshot`
+ * carried directly. Must be projected onto the form's `InvoiceMeta` before rendering.
+ */
+type InvoiceMetaWire = {
+  contextNip?: string | null
+  mppRequired?: boolean
+  issuedOutsideKsef?: boolean
+  vatExemptionBasis?: string | null
+  invoiceKind?: string | null
+  selfBilling?: boolean
+  reverseCharge?: boolean
+  ossProcedure?: boolean
+  consumptionCountryCode?: string | null
+  exchangeRate?: string | null
+  exchangeRateDate?: string | null
+  advancePayments?: InvoiceMeta['advancePayments']
+  advanceRefs?: InvoiceMeta['advanceRefs']
+  orderSnapshot?: InvoiceMeta['orderSnapshot']
+  gtuCodes?: string[]
+  wstoEe?: boolean
+  ied?: boolean
+  tp?: boolean
+  ttWnt?: boolean
+  ttD?: boolean
+  mrT?: boolean
+  mrUz?: boolean
+  i42?: boolean
+  i63?: boolean
+  bSpv?: boolean
+  bSpvDostawa?: boolean
+  bMpvProwizja?: boolean
+  docType?: string | null
+  badDebtReliefPeriod?: string | null
+  badDebtTerminPlatnosci?: string | null
+}
+
+// Maps the wire's flat JPK procedure flags onto the form's procedure-markings map. Mirrors the
+// detail page's PROCEDURE_FLAG_MAP so edit + read views project the same shape.
+const PROCEDURE_FLAG_MAP: ReadonlyArray<[keyof InvoiceMetaWire, JpkProcedureMarking]> = [
+  ['wstoEe', 'WSTO_EE'],
+  ['ied', 'IED'],
+  ['tp', 'TP'],
+  ['ttWnt', 'TT_WNT'],
+  ['ttD', 'TT_D'],
+  ['mrT', 'MR_T'],
+  ['mrUz', 'MR_UZ'],
+  ['i42', 'I_42'],
+  ['i63', 'I_63'],
+  ['bSpv', 'B_SPV'],
+  ['bSpvDostawa', 'B_SPV_DOSTAWA'],
+  ['bMpvProwizja', 'B_MPV_PROWIZJA'],
+]
+
+const INVOICE_KINDS: ReadonlySet<string> = new Set(['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'])
+const TYP_DOKUMENTU: ReadonlySet<string> = new Set(['RO', 'WEW', 'FP'])
+
+/** Project the flat wire meta into the controlled `InvoiceMeta` the PlVatMetaForm edits. */
+function toFormMeta(meta: InvoiceMetaWire): InvoiceMeta {
+  const procedureMarkings: ProcedureMarkings = {}
+  for (const [flag, code] of PROCEDURE_FLAG_MAP) {
+    if (meta[flag] === true) procedureMarkings[code] = true
+  }
+  return {
+    contextNip: meta.contextNip ?? null,
+    mppRequired: meta.mppRequired,
+    issuedOutsideKsef: meta.issuedOutsideKsef,
+    vatExemptionBasis: meta.vatExemptionBasis ?? null,
+    invoiceKind:
+      meta.invoiceKind && INVOICE_KINDS.has(meta.invoiceKind) ? (meta.invoiceKind as InvoiceKindColumn) : undefined,
+    selfBilling: meta.selfBilling,
+    reverseCharge: meta.reverseCharge,
+    ossProcedure: meta.ossProcedure,
+    consumptionCountryCode: meta.consumptionCountryCode ?? null,
+    exchangeRate: meta.exchangeRate ?? null,
+    exchangeRateDate: meta.exchangeRateDate ?? null,
+    advancePayments: meta.advancePayments,
+    advanceRefs: meta.advanceRefs,
+    orderSnapshot: meta.orderSnapshot ?? null,
+    gtuCodes: (meta.gtuCodes ?? []) as GtuCode[],
+    procedureMarkings,
+    typDokumentu: meta.docType && TYP_DOKUMENTU.has(meta.docType) ? (meta.docType as JpkTypDokumentu) : null,
+    badDebtReliefPeriod: meta.badDebtReliefPeriod ?? null,
+    badDebtTerminPlatnosci: meta.badDebtTerminPlatnosci ?? null,
+  }
 }
 
 function toStr(value: string | number | null | undefined, fallback = ''): string {
@@ -84,7 +174,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       index + 1,
     ),
   )
-  const { updatedAt, ...meta } = data.meta ?? {}
+  const { updatedAt, ...wireMeta } = data.meta ?? {}
   return {
     header: {
       invoiceNumber: toStr(data.invoice?.invoiceNumber),
@@ -94,7 +184,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       orderId: toStr(data.invoice?.orderId),
     },
     lines: lines.length ? lines : [],
-    meta: meta as InvoiceMeta,
+    meta: data.meta ? toFormMeta(wireMeta) : {},
     metaUpdatedAt: updatedAt ?? null,
   }
 }

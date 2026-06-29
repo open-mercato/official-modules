@@ -9,7 +9,8 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
-import { SalesInvoicePlMeta } from '../../../data/entities'
+import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { KsefSubmission, SalesInvoicePlMeta } from '../../../data/entities'
 import type { JpkTypDokumentuColumn } from '../../../data/entities'
 import { JPK_PROCEDURE_MARKINGS, type JpkProcedureMarking } from '../../../lib/jpk-markings-codes'
 import { invoiceMetaPutSchema } from '../../../data/validators'
@@ -17,6 +18,21 @@ import { invoiceMetaPutSchema } from '../../../data/validators'
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
   PUT: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
+}
+
+// SPEC-013 — KSeF-immutability statuses (mirrors api/interceptors.ts). An invoice with a
+// submission in either state must not be edited.
+const KSEF_LOCKED_STATUSES = ['accepted', 'processing'] as const
+const KSEF_LOCKED_MESSAGE_DEFAULT =
+  'This invoice is locked: it has an accepted or in-progress KSeF submission. Issue a correction (KOR) instead of editing it.'
+
+async function resolveInvoiceLockedMessage(): Promise<string> {
+  try {
+    const { translate } = await resolveTranslations()
+    return translate('financial_pl.errors.invoice_locked_ksef', KSEF_LOCKED_MESSAGE_DEFAULT)
+  } catch {
+    return KSEF_LOCKED_MESSAGE_DEFAULT
+  }
 }
 
 // Pure-JPK procedure marking code → SalesInvoicePlMeta boolean column. The marking
@@ -119,6 +135,24 @@ export async function PUT(req: Request) {
 
     const body = await readJsonSafe<Record<string, unknown>>(req, {})
     const parsed = invoiceMetaPutSchema.parse(body)
+
+    // SPEC-013 — KSeF-immutability guard. This is a hand-written route, so the module's
+    // `before` interceptor (api/interceptors.ts) never runs for it; enforce the same rule
+    // here, BEFORE any write. A KSeF-accepted invoice is legally immutable (corrections only);
+    // an in-flight ('processing') submission must not race a concurrent edit. Org/tenant-scoped,
+    // document_kind='invoice' so an accepted correction never locks the corrected original.
+    const lockEm = (container.resolve('em') as EntityManager).fork()
+    const lockedCount = await lockEm.count(KsefSubmission, {
+      salesInvoiceId: parsed.salesInvoiceId,
+      documentKind: 'invoice',
+      status: { $in: KSEF_LOCKED_STATUSES },
+      organizationId,
+      tenantId: auth.tenantId,
+      deletedAt: null,
+    })
+    if (lockedCount > 0) {
+      throw new CrudHttpError(409, { error: await resolveInvoiceLockedMessage(), code: 'invoice_locked_ksef' })
+    }
 
     const guardResult = await validateCrudMutationGuard(container, {
       tenantId: auth.tenantId,

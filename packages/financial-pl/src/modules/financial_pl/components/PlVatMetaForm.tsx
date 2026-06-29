@@ -28,6 +28,8 @@ import type {
   AdvanceInvoiceRef,
   AdvancePaymentSnapshot,
   InvoiceKindColumn,
+  OrderLineSnapshot,
+  OrderSnapshot,
 } from '../data/entities'
 
 /** Procedure-markings flag map (one optional boolean per JPK procedure code). */
@@ -51,6 +53,7 @@ export type InvoiceMeta = {
   exchangeRateDate?: string | null
   advancePayments?: AdvancePaymentSnapshot[]
   advanceRefs?: AdvanceInvoiceRef[]
+  orderSnapshot?: OrderSnapshot | null
   gtuCodes?: GtuCode[]
   procedureMarkings?: ProcedureMarkings
   typDokumentu?: JpkTypDokumentu | null
@@ -132,6 +135,27 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
   }
   const removeAdvanceRef = (index: number) => {
     patch({ advanceRefs: advanceRefs.filter((_, i) => i !== index) })
+  }
+
+  // --- Order snapshot (ZAL / KOR_ZAL → FA(3) `Zamowienie`) -----------------------------------
+  const orderSnapshot = value.orderSnapshot ?? null
+  const orderLines: OrderLineSnapshot[] = orderSnapshot?.lines ?? []
+
+  const patchOrderSnapshot = (next: Partial<OrderSnapshot>) => {
+    const base: OrderSnapshot = orderSnapshot ?? { totalValue: '', lines: [] }
+    patch({ orderSnapshot: { ...base, ...next } })
+  }
+  const enableOrderSnapshot = (next: boolean) => {
+    patch({ orderSnapshot: next ? orderSnapshot ?? { totalValue: '', lines: [] } : null })
+  }
+  const updateOrderLine = (index: number, next: Partial<OrderLineSnapshot>) => {
+    patchOrderSnapshot({ lines: orderLines.map((row, i) => (i === index ? { ...row, ...next } : row)) })
+  }
+  const addOrderLine = () => {
+    patchOrderSnapshot({ lines: [...orderLines, { name: '' }] })
+  }
+  const removeOrderLine = (index: number) => {
+    patchOrderSnapshot({ lines: orderLines.filter((_, i) => i !== index) })
   }
 
   return (
@@ -382,6 +406,125 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
             {t('financial_pl.actions.addAdvanceRef', 'Add advance reference')}
           </Button>
         </div>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+        <legend className="px-1 text-sm font-medium text-foreground">
+          {t('financial_pl.fields.orderSnapshotGroup', 'Order snapshot (ZAL / KOR_ZAL)')}
+        </legend>
+        <SwitchField
+          label={t('financial_pl.fields.orderSnapshotEnabled', 'Attach an order snapshot (FA(3) Zamówienie)')}
+          checked={orderSnapshot != null}
+          disabled={busy}
+          onCheckedChange={(next) => enableOrderSnapshot(Boolean(next))}
+        />
+        {orderSnapshot != null ? (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <label className={labelClass} htmlFor="financial_pl-order-total">
+                {t('financial_pl.fields.orderTotalValue', 'Order total value')}
+              </label>
+              <Input
+                id="financial_pl-order-total"
+                inputMode="decimal"
+                value={orderSnapshot.totalValue}
+                disabled={busy}
+                onChange={(event) => patchOrderSnapshot({ totalValue: event.target.value })}
+                placeholder="1230.00"
+              />
+            </div>
+            {orderLines.map((row, index) => (
+              <div
+                key={index}
+                className="flex flex-col gap-2 rounded-md border border-border p-2 sm:flex-row sm:items-end"
+              >
+                <div className="flex flex-[2] flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-name-${index}`}>
+                    {t('financial_pl.fields.orderLineName', 'Name')}
+                  </label>
+                  <Input
+                    id={`financial_pl-order-line-name-${index}`}
+                    value={row.name}
+                    disabled={busy}
+                    onChange={(event) => updateOrderLine(index, { name: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-qty-${index}`}>
+                    {t('financial_pl.fields.orderLineQuantity', 'Quantity')}
+                  </label>
+                  <Input
+                    id={`financial_pl-order-line-qty-${index}`}
+                    inputMode="decimal"
+                    value={row.quantity ?? ''}
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateOrderLine(index, { quantity: event.target.value.length ? event.target.value : undefined })
+                    }
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-price-${index}`}>
+                    {t('financial_pl.fields.orderLineUnitPrice', 'Unit price')}
+                  </label>
+                  <Input
+                    id={`financial_pl-order-line-price-${index}`}
+                    inputMode="decimal"
+                    value={row.unitPrice ?? ''}
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateOrderLine(index, { unitPrice: event.target.value.length ? event.target.value : undefined })
+                    }
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-net-${index}`}>
+                    {t('financial_pl.fields.orderLineNetValue', 'Net value')}
+                  </label>
+                  <Input
+                    id={`financial_pl-order-line-net-${index}`}
+                    inputMode="decimal"
+                    value={row.netValue ?? ''}
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateOrderLine(index, { netValue: event.target.value.length ? event.target.value : undefined })
+                    }
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-vat-${index}`}>
+                    {t('financial_pl.fields.orderLineVatRate', 'VAT rate')}
+                  </label>
+                  <Input
+                    id={`financial_pl-order-line-vat-${index}`}
+                    inputMode="decimal"
+                    value={row.vatRate ?? ''}
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateOrderLine(index, { vatRate: event.target.value.length ? event.target.value : undefined })
+                    }
+                  />
+                </div>
+                <IconButton
+                  type="button"
+                  variant="ghost"
+                  disabled={busy}
+                  aria-label={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
+                  title={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
+                  onClick={() => removeOrderLine(index)}
+                >
+                  <Trash2 className="size-4" />
+                </IconButton>
+              </div>
+            ))}
+            <div className="flex">
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addOrderLine}>
+                <Plus className="mr-1 size-4" />
+                {t('financial_pl.actions.addOrderLine', 'Add order line')}
+              </Button>
+            </div>
+          </>
+        ) : null}
       </fieldset>
 
       <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">

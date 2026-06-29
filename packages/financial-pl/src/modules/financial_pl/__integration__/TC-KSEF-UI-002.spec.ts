@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
 import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
@@ -11,7 +10,8 @@ import { withClient } from '@open-mercato/core/modules/core/__integration__/help
  * Covers: POST/GET /api/sales/invoices (core, lines persisted via the graph create),
  *         GET/PUT /api/financial_pl/ksef/invoice-meta,
  *         GET /api/financial_pl/ksef/invoices and /api/financial_pl/ksef/invoices/<id>,
- *         the api/interceptors.ts fail-closed 409 lock on PUT invoice + PUT invoice-meta.
+ *         the api/interceptors.ts fail-closed 409 lock on PUT + DELETE-by-query invoice,
+ *         and the route-local 409 lock inside the hand-written PUT invoice-meta handler.
  *
  * Requires the @open-mercato/financial-pl official module to be activated in the test env
  * (yarn official-modules add financial-pl). `admin` holds `financial_pl.*` + core
@@ -23,9 +23,10 @@ import { withClient } from '@open-mercato/core/modules/core/__integration__/help
  * returns the lines (core GET is header-only; the module's own [id] route reads lines via the
  * QueryEngine). Then it proves the SERVER-SIDE immutability interceptor: with an `accepted`
  * KsefSubmission row landed for the invoice (the data path dbFixtures uses for state the API
- * cannot reach — the public submissions POST only ever lands `queued`), BOTH PUT
- * /api/sales/invoices AND PUT invoice-meta must return 409 — not merely a disabled button —
- * while a fresh (non-accepted) invoice still allows the same PUTs.
+ * cannot reach — the public submissions POST only ever lands `queued`), PUT
+ * /api/sales/invoices, DELETE /api/sales/invoices?id=<id> (the canonical empty-body delete shape),
+ * AND PUT invoice-meta must all return 409 — not merely a disabled button — while a fresh
+ * (non-accepted) invoice still allows the same PUT + DELETE.
  */
 const suffix = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
@@ -172,10 +173,13 @@ test.describe('TC-KSEF-UI-002: invoice authoring + meta + edit-prefill + immutab
     }
   });
 
-  test('a NON-accepted invoice still allows PUT (invoice + meta)', async ({ request }) => {
+  test('a NON-accepted invoice still allows PUT + DELETE (invoice + meta)', async ({ request }) => {
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
     let invoiceId: string | null = null;
+    // A second invoice exercised only by the destructive DELETE-by-query assertion, so the PUT
+    // assertions above keep a stable target.
+    let deletableInvoiceId: string | null = null;
     try {
       const createRes = await apiRequest(request, 'POST', '/api/sales/invoices', { token, data: invoicePayload() });
       if (createRes.status() === 403) {
@@ -185,7 +189,7 @@ test.describe('TC-KSEF-UI-002: invoice authoring + meta + edit-prefill + immutab
       invoiceId = ((await createRes.json()) as { invoiceId?: string }).invoiceId ?? null;
       expect(invoiceId).toBeTruthy();
 
-      // No accepted/processing submission ⇒ the interceptor passes ⇒ the meta PUT is allowed.
+      // No accepted/processing submission ⇒ the guard passes ⇒ the meta PUT is allowed.
       const metaRes = await apiRequest(request, 'PUT', '/api/financial_pl/ksef/invoice-meta', {
         token,
         data: { salesInvoiceId: invoiceId, invoiceKind: 'vat', mppRequired: true },
@@ -198,8 +202,23 @@ test.describe('TC-KSEF-UI-002: invoice authoring + meta + edit-prefill + immutab
         data: { id: invoiceId, grandTotalNetAmount: 110, grandTotalGrossAmount: 135 },
       });
       expect(putRes.status(), 'invoice PUT is not locked (interceptor passes) on a non-accepted invoice').not.toBe(409);
+
+      // DELETE ?id= of a non-accepted invoice is allowed (the interceptor passes — it must not
+      // fail closed on every delete, only on locked ones).
+      const createDeletable = await apiRequest(request, 'POST', '/api/sales/invoices', { token, data: invoicePayload() });
+      expect(createDeletable.status()).toBe(201);
+      deletableInvoiceId = ((await createDeletable.json()) as { invoiceId?: string }).invoiceId ?? null;
+      expect(deletableInvoiceId).toBeTruthy();
+      const deleteByQuery = await apiRequest(
+        request,
+        'DELETE',
+        `/api/sales/invoices?id=${encodeURIComponent(deletableInvoiceId as string)}`,
+        { token },
+      );
+      expect(deleteByQuery.status(), 'DELETE ?id= is not locked (interceptor passes) on a non-accepted invoice').not.toBe(409);
     } finally {
       await deleteSalesEntityIfExists(request, token, '/api/sales/invoices', invoiceId);
+      await deleteSalesEntityIfExists(request, token, '/api/sales/invoices', deletableInvoiceId);
     }
   });
 
@@ -236,12 +255,25 @@ test.describe('TC-KSEF-UI-002: invoice authoring + meta + edit-prefill + immutab
       });
       expect(putInvoice.status(), 'PUT a KSeF-accepted invoice is locked (409)').toBe(409);
 
-      // PUT the PL-VAT meta → also rejected with 409 (the own-route interceptor).
+      // PUT the PL-VAT meta → also rejected with 409 (the route-local KSeF-immutability guard:
+      // this is a hand-written route, so the module's `before` interceptor never runs for it — the
+      // guard lives INSIDE the PUT handler).
       const putMeta = await apiRequest(request, 'PUT', '/api/financial_pl/ksef/invoice-meta', {
         token,
         data: { salesInvoiceId: invoiceId, invoiceKind: 'vat', mppRequired: false },
       });
       expect(putMeta.status(), 'PUT the meta of a KSeF-accepted invoice is locked (409)').toBe(409);
+
+      // DELETE the core invoice by query (`?id=`, EMPTY body) → also 409. This is the canonical
+      // delete shape; the interceptor must resolve the id from the URL searchParams (not just the
+      // body) or it fails open. Asserting 409 also leaves the invoice intact for cleanup.
+      const deleteByQuery = await apiRequest(
+        request,
+        'DELETE',
+        `/api/sales/invoices?id=${encodeURIComponent(invoiceId as string)}`,
+        { token },
+      );
+      expect(deleteByQuery.status(), 'DELETE ?id= of a KSeF-accepted invoice is locked (409)').toBe(409);
     } finally {
       await deleteSubmissionRow(submissionRowId);
       await deleteSalesEntityIfExists(request, token, '/api/sales/invoices', invoiceId);

@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
 import { Pencil } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -238,9 +239,12 @@ function SectionCard({
   )
 }
 
-export default function FinancialPlInvoiceDetailPage({ params }: { params: { id: string } }) {
+export default function FinancialPlInvoiceDetailPage() {
   const t = useT()
-  const invoiceId = params.id
+  // Next 15: in a client component the route params come from `useParams()` (the `params` prop is a
+  // Promise here and would break at runtime). Mirror the sibling edit page's extraction.
+  const params = useParams<{ id: string }>()
+  const invoiceId = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : ''
   const scopeVersion = useOrganizationScopeVersion()
 
   const [data, setData] = React.useState<InvoiceDetailResponse | null>(null)
