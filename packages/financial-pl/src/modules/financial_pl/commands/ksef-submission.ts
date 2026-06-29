@@ -33,6 +33,7 @@ import { resolveKsefEnvironment } from '../config'
 import { readKsefCredentials as readKsefCredentialsFull } from '../lib/credentials'
 import { assertCertificateValidNow, CertificateValidityError } from '../lib/cert-enrollment'
 import { buildKodIUrl } from '../lib/ksef-qr'
+import { chooseRecovery } from '../lib/recovery'
 import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
 
@@ -93,6 +94,36 @@ function requireScope(input: { organizationId?: string; tenantId?: string }): { 
   return { organizationId: input.organizationId, tenantId: input.tenantId }
 }
 
+/**
+ * Self-billing (samofakturowanie, art. 106d) is issued by the BUYER on the seller's behalf,
+ * so the issuing context NIP must differ from the seller. This connector files EVERY invoice
+ * as the authenticated taxpayer (`seller.nip === contextNip` is enforced for online sends, and
+ * the offline path resolves the seller from the same credential), so a self-billed flag is
+ * contradictory and KSeF rejects it at submission (HTTP 410, "Faktura wystawiana we własnym
+ * imieniu nie może posiadać adnotacji 'samofakturowanie'"). Reject at EVERY submit-to-KSeF
+ * creation path — online queue (`sendCommand`, the choke point for send/send_from_invoice/
+ * send_from_credit_memo) AND offline issuance (`issueOfflineCommand`, whose deferred send via
+ * `subscribers/ksef-send-offline.ts` bypasses `sendCommand`) — so a self-billed invoice never
+ * reaches KSeF, and an offline invoice is never "issued" with a printed KOD II ahead of that
+ * late rejection. Both annotation channels feed FA(3) `P_17`. Storing `self_billing` on PL meta
+ * for JPK is unaffected — only SUBMITTING a self-billed invoice as the seller is blocked.
+ * External-seller self-billing (relaxing the seller===context invariant + buyer context +
+ * delegated permissions) is a separate roadmap item (SPEC-011).
+ */
+export function assertNotSelfBilled(invoice: {
+  selfBilling?: boolean
+  annotations?: { selfBilling?: boolean } | null
+}): void {
+  if (invoice.selfBilling === true || invoice.annotations?.selfBilling === true) {
+    throw new CrudHttpError(422, {
+      error:
+        '[internal] Self-billing (samofakturowanie) requires the issuer to differ from the seller; ' +
+        'this connector files invoices as the authenticated seller, so a self-billed invoice cannot be submitted in this configuration.',
+      code: 'self_billing_unsupported',
+    })
+  }
+}
+
 export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId: string }> = {
   id: 'financial_pl.ksef_submission.send',
   async execute(input, ctx) {
@@ -111,6 +142,10 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
         code: 'seller_nip_mismatch',
       })
     }
+
+    // Self-billing is invalid here (issuer === seller); reject before queueing. See
+    // assertNotSelfBilled — applied at every submit-to-KSeF creation path.
+    assertNotSelfBilled(parsed.invoice)
 
     // Defense in depth on the direct explicit-payload path: the submission context NIP
     // must match the org's STORED ksef_pl credential NIP (the NIP the stored token
@@ -241,6 +276,21 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
     })
     if (submission.status === 'accepted') {
       throw new CrudHttpError(409, { error: '[internal] submission already accepted' })
+    }
+
+    // A 'processing' row that already reached KSeF (both session + invoice references persisted)
+    // must be RE-POLLED, not re-sent — resetting it to 'queued' would force an unnecessary re-send
+    // (saved from a true duplicate only by KSeF's 440 content-dedup). Mirror the reconcile worker's
+    // recovery routing: keep the row 'processing' and emit the repoll event.
+    if (submission.status === 'processing' && chooseRecovery(submission) === 'repoll') {
+      submission.updatedAt = new Date()
+      await em.flush()
+      await emitFinancialPlEvent(
+        'financial_pl.ksef_submission.repoll',
+        { submissionId: submission.id, organizationId: submission.organizationId, tenantId: submission.tenantId },
+        { persistent: true },
+      )
+      return { submissionId: submission.id }
     }
 
     submission.status = 'queued'
@@ -452,6 +502,10 @@ export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submis
         tenantId: scope.tenantId,
       },
     )
+    // Self-billing is invalid for a self-issued invoice (KSeF 410). Reject BEFORE building the
+    // KOD II / persisting an offline_issued row, so an offline invoice is never "issued" (with a
+    // printed certificate QR) only to be rejected when the deferred send reaches KSeF.
+    assertNotSelfBilled(invoicePayload)
     const invoiceXml = buildFa3XmlFromInput(invoicePayload)
 
     const environment = resolveKsefEnvironment(creds.environment ?? details.environment).environment

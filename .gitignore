@@ -52,6 +52,7 @@ apps/sandbox/storage/attachments
 
 # Local-only agentic harness infra (machine-specific paths / borrowed core docs;
 # not part of this repo). MCP server config + the open-mercato core ARCHITECTURE.md
-# rules reference used by the dev-harness skills.
+# rules reference used by the dev-harness skills, plus the Serena code-intelligence cache.
 /.mcp.json
 /ARCHITECTURE.md
+/.serena/

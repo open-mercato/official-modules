@@ -41,6 +41,9 @@ jest.mock('@open-mercato/shared/lib/i18n/server', () => ({
 }))
 
 import { issueOfflineCommand } from '../ksef-submission'
+// The resolver is mocked above; import the (mocked) fn so a single test can make it yield a
+// self-billed payload and assert the offline path's self-billing guard fires.
+import { resolveFa3FromSalesInvoice } from '../../lib/resolve-fa3-from-invoice'
 
 const ORG = '11111111-1111-4111-8111-111111111111'
 const TEN = '22222222-2222-4222-8222-222222222222'
@@ -184,6 +187,44 @@ describe('financial_pl.ksef_submission.issue_offline (SPEC-010)', () => {
     expect(String(row.kodIiUrl)).toContain('/certificate/Nip/')
     expect(row.offlineIssuedAt).toBeInstanceOf(Date)
     expect(row.offlineSendDeadlineAt).toBeInstanceOf(Date)
+  })
+
+  it('rejects (422 self_billing_unsupported) a self-billed invoice before building KOD II / persisting a row', async () => {
+    const now = Date.now()
+    const { certPem, keyPem } = await rsaCertAndKey(new Date(now - 86_400_000), new Date(now + 31_536_000_000))
+    // The resolver yields a self-billed payload (P_17) — invalid for a self-issued invoice
+    // (KSeF rejects it 410). The offline path must reject it BEFORE issuing (no KOD II, no row),
+    // exactly like the online sendCommand path — both call the shared assertNotSelfBilled guard.
+    ;(resolveFa3FromSalesInvoice as jest.Mock).mockResolvedValueOnce({
+      invoiceNumber: 'FV/2026/OFF/SB',
+      issueDate: '2026-06-25',
+      currencyCode: 'PLN',
+      seller: { nip: '5260001246', name: 'Seller', countryCode: 'PL', addressLine1: 'ul. Testowa 1' },
+      buyer: { nip: '7342867148', name: 'Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2' },
+      vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+      totalGross: '123.00',
+      lines: [{ lineNumber: 1, name: 'Item', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 }],
+      selfBilling: true,
+    })
+    const create = jest.fn()
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => null), create, persist: () => ({ flush: async () => {} }) }
+    await expect(
+      issueOfflineCommand.execute(
+        { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, mode: 'offline24' },
+        makeCtx({
+          creds: {
+            contextNip: '5260001246',
+            environment: 'test',
+            offlineCertificatePem: certPem,
+            offlineCertificatePrivateKeyPem: keyPem,
+            offlineCertificateSerialNumber: '0A',
+          },
+          em,
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'self_billing_unsupported' } })
+    // The guard fires after cert validation but before persistence — no offline_issued row created.
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('returns the existing active offline_issued row instead of creating a duplicate', async () => {

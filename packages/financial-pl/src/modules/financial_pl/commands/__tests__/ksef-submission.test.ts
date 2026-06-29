@@ -1,4 +1,33 @@
-import { sendCommand } from '../ksef-submission'
+import { sendCommand, assertNotSelfBilled } from '../ksef-submission'
+
+/** Capture a synchronously-thrown error for property assertions (CrudHttpError carries status+body). */
+function caught(fn: () => void): unknown {
+  try {
+    fn()
+    return null
+  } catch (e) {
+    return e
+  }
+}
+
+describe('assertNotSelfBilled (shared self-billing guard — applied at every submit-to-KSeF creation path)', () => {
+  it('rejects the top-level selfBilling channel with 422 self_billing_unsupported', () => {
+    expect(caught(() => assertNotSelfBilled({ selfBilling: true }))).toMatchObject({
+      status: 422,
+      body: { code: 'self_billing_unsupported' },
+    })
+  })
+  it('rejects the annotations.selfBilling channel with 422 self_billing_unsupported', () => {
+    expect(caught(() => assertNotSelfBilled({ annotations: { selfBilling: true } }))).toMatchObject({
+      status: 422,
+      body: { code: 'self_billing_unsupported' },
+    })
+  })
+  it('passes a non-self-billed payload (both channels absent or false)', () => {
+    expect(caught(() => assertNotSelfBilled({}))).toBeNull()
+    expect(caught(() => assertNotSelfBilled({ selfBilling: false, annotations: { selfBilling: false } }))).toBeNull()
+  })
+})
 
 const ORG = '11111111-1111-4111-8111-111111111111'
 const TEN = '22222222-2222-4222-8222-222222222222'
@@ -69,6 +98,27 @@ describe('financial_pl.ksef_submission.send idempotency', () => {
         makeCtx(em),
       ),
     ).rejects.toMatchObject({ status: 422, body: { code: 'seller_nip_mismatch' } })
+    expect(em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects (422 self_billing_unsupported) a self-billed payload — issuer === seller is contradictory for samofakturowanie (KSeF 410)', async () => {
+    const em: Record<string, unknown> = { findOne: jest.fn(), create: jest.fn() }
+    em.fork = () => em
+    // Top-level `selfBilling` channel.
+    await expect(
+      sendCommand.execute(
+        { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, contextNip: '5260001246', invoice: { ...validInvoice, selfBilling: true } },
+        makeCtx(em),
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'self_billing_unsupported' } })
+    // `annotations.selfBilling` channel (both feed FA(3) P_17).
+    await expect(
+      sendCommand.execute(
+        { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, contextNip: '5260001246', invoice: { ...validInvoice, annotations: { selfBilling: true } } },
+        makeCtx(em),
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'self_billing_unsupported' } })
+    // The guard short-circuits before the dedupe lookup / any live send.
     expect(em.findOne).not.toHaveBeenCalled()
   })
 

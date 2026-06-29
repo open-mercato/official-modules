@@ -120,7 +120,16 @@ export async function submitInvoiceToKsef(
     options.wait,
   )
 
-  await client.closeOnlineSession({ accessToken, sessionReference: session.referenceNumber })
+  // Session close is best-effort and must run AFTER the send is captured (we already hold
+  // `sent.referenceNumber`): KSeF auto-closes idle sessions, so a transient close failure must not
+  // throw out of the flow before the session/invoice references + polled status are returned —
+  // that would strand an already-accepted invoice and force an unnecessary re-send on the
+  // consumer's catch path. Polling below works on a still-open session too.
+  try {
+    await client.closeOnlineSession({ accessToken, sessionReference: session.referenceNumber })
+  } catch {
+    // intentionally non-fatal — the invoice is already sent
+  }
 
   let evaluation = evaluateInvoiceStatus(0)
   let lastStatus: KsefStatusResult | undefined

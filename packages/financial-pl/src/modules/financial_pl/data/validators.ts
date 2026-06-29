@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { isValidPolishNip } from '../lib/nip'
 import { isMappedFa3VatRate } from '../lib/fa3'
 import { isStructurallyValidKsefNumber } from '../lib/ksef-number'
+import { GTU_CODES, JPK_PROCEDURE_MARKINGS, JPK_TYP_DOKUMENTU, type JpkProcedureMarking } from '../lib/jpk-markings-codes'
+import type { AdvanceInvoiceRef, AdvancePaymentSnapshot, InvoiceKindColumn, OrderSnapshot } from './entities'
 
 // 10 digits AND a valid NIP checksum, so a malformed NIP is rejected with a clear 422
 // before send rather than silently dropped into a `<BrakID>` filing or bounced by KSeF.
@@ -466,6 +468,198 @@ export const ksefSubmissionListQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).optional(),
 })
 
+// JPK-VAT (V7M/V7K) record + filing persistence boundary (SPEC-006). Monetary fields are carried
+// as decimal strings (mirroring `moneySchema`) so they round-trip the JPK exporter's fixed-point
+// amounts without float drift. The optional-monetary helper additionally accepts an empty string
+// (a cleared form field) so a partially-filled purchase row upserts without a spurious 422.
+const optionalMoneySchema = z
+  .string()
+  // The trailing `?` makes the whole amount optional so an EMPTY string (a cleared form field)
+  // is accepted alongside a valid decimal — a partially-filled purchase row upserts without a
+  // spurious 422 (matching the comment above).
+  .regex(/^(-?\d+(\.\d{1,2})?)?$/, 'Amount must be a decimal with up to 2 fraction digits')
+  .optional()
+
+/** A purchase (zakup) evidence row staged for the JPK_V7 ewidencja. */
+export const jpkPurchaseRecordUpsertSchema = z.object({
+  id: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+  tenantId: z.string().uuid().optional(),
+  contextNip: nipSchema.optional(),
+  year: z.number().int().min(2026).max(2100),
+  month: z.number().int().min(1).max(12),
+  supplierNip: nipSchema.optional(),
+  supplierCountryCode: z.string().length(2).optional(),
+  supplierName: z.string().min(1).max(512).optional(),
+  documentNumber: z.string().min(1).max(256),
+  purchaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  receiptDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  documentType: z.enum(['MK', 'VAT_RR', 'WEW']).optional(),
+  imp: z.boolean().optional(),
+  ksefMarking: z.enum(['NrKSeF', 'OFF', 'BFK', 'DI']).optional(),
+  nrKsef: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine((value) => isStructurallyValidKsefNumber(value), 'KSeF number is structurally invalid')
+    .optional(),
+  transactionClass: z
+    .enum(['domestic', 'wnt', 'import_goods', 'import_services', 'import_services_28b', 'reverse_charge_domestic'])
+    .default('domestic'),
+  netFixedAssets: optionalMoneySchema,
+  vatFixedAssets: optionalMoneySchema,
+  netOther: optionalMoneySchema,
+  vatOther: optionalMoneySchema,
+  corrFixedAssets: optionalMoneySchema,
+  corrOther: optionalMoneySchema,
+  corr89b1: optionalMoneySchema,
+  corr89b4: optionalMoneySchema,
+  marginGross: optionalMoneySchema,
+  selfAssessedNet: optionalMoneySchema,
+  selfAssessedVat: optionalMoneySchema,
+  selfAssessedRate: optionalMoneySchema,
+}).refine((d) => !(d.ksefMarking === 'NrKSeF' && (!d.nrKsef || d.nrKsef.trim() === '')), {
+  message: 'nrKsef is required when ksefMarking is NrKSeF (empty <NrKSeF/> is XSD-invalid)',
+  path: ['nrKsef'],
+})
+
+/** A JPK_V7 filing header (variant + period + correction scope) staged for generation. */
+export const jpkFilingUpsertSchema = z.object({
+  id: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+  tenantId: z.string().uuid().optional(),
+  // The taxpayer NIP this filing is filed under (Podmiot1). A filing is scoped to a single NIP;
+  // when omitted the generator falls back to the KSeF credential NIP. Threading it explicitly lets
+  // a multi-NIP (org, tenant) keep one ACTIVE filing per NIP × period (see the unique index).
+  contextNip: nipSchema.optional(),
+  variant: z.enum(['V7M', 'V7K']),
+  year: z.number().int().min(2026).max(2100),
+  month: z.number().int().min(1).max(12),
+  quarter: z.number().int().min(1).max(4).optional(),
+  celZlozenia: z.union([z.literal(1), z.literal(2)]).default(1),
+  correctionScope: z.enum(['both', 'declaration', 'evidence']).default('both'),
+  // KodUrzedu must be a valid TKodUS (4-digit tax-office code) — an empty/arbitrary value
+  // yields an XSD-invalid Naglowek. Optional on a draft; generation requires it (resolver).
+  kodUrzedu: z.string().regex(/^\d{4}$/, 'KodUrzedu must be a 4-digit tax-office code').optional(),
+  declarationInputs: z.record(z.string(), z.unknown()).optional(),
+}).superRefine((d, ctx) => {
+  // A partial scope (declaration-only / evidence-only) is meaningful only on a correction filing
+  // (CelZlozenia=2). A primary filing (CelZlozenia=1) must carry BOTH halves; reject a partial
+  // scope rather than persist a business-invalid primary file that omits the required part.
+  if (d.celZlozenia === 1 && d.correctionScope !== 'both') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'correctionScope must be "both" on a primary filing (celZlozenia=1)',
+      path: ['correctionScope'],
+    })
+  }
+})
+
+/** Generate the JPK_V7 XML for a persisted filing. */
+export const jpkGenerateSchema = z.object({
+  filingId: z.string().uuid(),
+})
+
+// Standalone delete input — NOT `jpkPurchaseRecordUpsertSchema.pick({ id })`, because that schema
+// carries a `.refine()` (a ZodEffects) on which `.pick()` throws at runtime.
+export const jpkPurchaseRecordDeleteSchema = z.object({
+  id: z.string().uuid(),
+})
+
+// --- KSeF certificate enroll/revoke request bodies (SPEC-007) ---------------------------------
+export const ksefCertificateEnrollSchema = z.object({
+  certificateName: z.string().min(1),
+  algorithm: z.enum(['RSA', 'EC']).optional(),
+  certificateType: z.enum(['Authentication', 'Offline']).optional(),
+})
+
+export const ksefCertificateRevokeSchema = z.object({
+  serialNumber: z.string().min(1),
+  reason: z.string().min(1).optional(),
+})
+
+// --- Invoice PL VAT metadata PUT body (SPEC-009) ----------------------------------------------
+const INVOICE_KINDS = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'] as const satisfies readonly InvoiceKindColumn[]
+
+const advancePaymentSchema = z.object({
+  receivedDate: z.string().min(1).max(40),
+  amount: z.string().min(1).max(40),
+  fxRate: z.string().min(1).max(40).optional(),
+}) satisfies z.ZodType<AdvancePaymentSnapshot>
+
+const advanceRefSchema = z
+  .object({
+    ksefNumber: z.string().min(1).max(120).optional(),
+    invoiceNumber: z.string().min(1).max(120).optional(),
+    // The already-invoiced gross of this advance; ROZ nets Σ amounts off the full gross to derive
+    // the residual P_15. Optional — when omitted the residual equals the full gross (no netting).
+    amount: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
+  })
+  .refine((v) => Boolean(v.ksefNumber) || Boolean(v.invoiceNumber), {
+    message: 'Either ksefNumber or invoiceNumber is required',
+  }) satisfies z.ZodType<AdvanceInvoiceRef>
+
+const orderLineSchema = z.object({
+  name: z.string().min(1).max(500),
+  quantity: z.string().max(40).optional(),
+  unitPrice: z.string().max(40).optional(),
+  netValue: z.string().max(40).optional(),
+  vatRate: z.string().max(40).optional(),
+})
+
+const orderSnapshotSchema = z.object({
+  totalValue: z.string().min(1).max(40),
+  lines: z.array(orderLineSchema).max(1000),
+}) satisfies z.ZodType<OrderSnapshot>
+
+// One optional boolean per JPK procedure marking code (the API/widget shape; the entity stores one
+// boolean column per code). Codes are validated against JPK_PROCEDURE_MARKINGS.
+const procedureMarkingsSchema = z
+  .object(
+    JPK_PROCEDURE_MARKINGS.reduce(
+      (acc, code) => {
+        acc[code] = z.boolean().optional()
+        return acc
+      },
+      {} as Record<JpkProcedureMarking, z.ZodOptional<z.ZodBoolean>>,
+    ),
+  )
+  .strict()
+
+export const invoiceMetaPutSchema = z.object({
+  salesInvoiceId: z.string().uuid(),
+  contextNip: z
+    .string()
+    .regex(/^[0-9]{10}$/)
+    .nullish(),
+  mppRequired: z.boolean().optional(),
+  vatExemptionBasis: z.string().max(500).nullish(),
+  /** Mark the invoice as lawfully issued outside KSeF (drives the JPK_VAT `BFK` marking). */
+  issuedOutsideKsef: z.boolean().optional(),
+  // --- SPEC-009: FA(3) advanced doc-types, self-billing, OSS/FX, GTU/JPK markings ---
+  invoiceKind: z.enum(INVOICE_KINDS).optional(),
+  selfBilling: z.boolean().optional(),
+  reverseCharge: z.boolean().optional(),
+  ossProcedure: z.boolean().optional(),
+  consumptionCountryCode: z
+    .string()
+    .regex(/^[A-Z]{2}$/)
+    .nullish(),
+  exchangeRate: z.string().max(40).nullish(),
+  exchangeRateDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullish(),
+  advancePayments: z.array(advancePaymentSchema).max(1000).optional(),
+  advanceRefs: z.array(advanceRefSchema).max(1000).optional(),
+  orderSnapshot: orderSnapshotSchema.nullish(),
+  // Pure-JPK GTU goods/services group codes (deduped, validated against GTU_CODES).
+  gtuCodes: z.array(z.enum(GTU_CODES)).max(GTU_CODES.length).optional(),
+  procedureMarkings: procedureMarkingsSchema.optional(),
+  // Pure-JPK TypDokumentu (validated against JPK_TYP_DOKUMENTU).
+  typDokumentu: z.enum(JPK_TYP_DOKUMENTU).nullish(),
+})
+
 export type Fa3PartyInput = z.infer<typeof fa3PartySchema>
 export type Fa3AnnotationsInput = z.infer<typeof fa3AnnotationsSchema>
 export type Fa3CorrectionInput = z.infer<typeof fa3CorrectionSchema>
@@ -482,3 +676,10 @@ export type KsefRecomputeOfflineDeadlineInput = z.infer<typeof ksefRecomputeOffl
 export type SendFromInvoiceInput = z.infer<typeof sendFromInvoiceSchema>
 export type SendFromCreditMemoInput = z.infer<typeof sendFromCreditMemoSchema>
 export type KsefSubmissionListQuery = z.infer<typeof ksefSubmissionListQuerySchema>
+export type JpkPurchaseRecordUpsertInput = z.infer<typeof jpkPurchaseRecordUpsertSchema>
+export type JpkPurchaseRecordDeleteInput = z.infer<typeof jpkPurchaseRecordDeleteSchema>
+export type JpkFilingUpsertInput = z.infer<typeof jpkFilingUpsertSchema>
+export type JpkGenerateInput = z.infer<typeof jpkGenerateSchema>
+export type KsefCertificateEnrollInput = z.infer<typeof ksefCertificateEnrollSchema>
+export type KsefCertificateRevokeInput = z.infer<typeof ksefCertificateRevokeSchema>
+export type InvoiceMetaPutInput = z.infer<typeof invoiceMetaPutSchema>

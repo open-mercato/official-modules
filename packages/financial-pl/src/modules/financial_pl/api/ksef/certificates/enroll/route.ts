@@ -9,17 +9,14 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { ksefCertificateEnrollSchema, type KsefCertificateEnrollInput } from '../../../../data/validators'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
 }
 
-const enrollBodySchema = z.object({
-  certificateName: z.string().min(1),
-  algorithm: z.enum(['RSA', 'EC']).optional(),
-  certificateType: z.enum(['Authentication', 'Offline']).optional(),
-})
-type EnrollInput = z.infer<typeof enrollBodySchema>
+const enrollBodySchema = ksefCertificateEnrollSchema
+type EnrollInput = KsefCertificateEnrollInput
 
 export async function POST(req: Request) {
   try {

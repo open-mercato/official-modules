@@ -1,4 +1,10 @@
-import { fa3CorrectionReferenceSchema, fa3InvoiceSchema } from '../validators'
+import {
+  fa3CorrectionReferenceSchema,
+  fa3InvoiceSchema,
+  jpkPurchaseRecordUpsertSchema,
+  jpkFilingUpsertSchema,
+  jpkGenerateSchema,
+} from '../validators'
 
 // Valid seller/buyer (10-digit + checksum-valid NIPs reused across the FA(3) test suite).
 const seller = {
@@ -286,5 +292,71 @@ describe('fa3InvoiceSchema — foreign currency (jury resolution 1)', () => {
         }),
       ),
     ).not.toThrow()
+  })
+})
+
+describe('JPK validators (SPEC-012)', () => {
+  const validKsef = '2481632647-20261005-3F8DD3400000-57'
+  const basePurchase = { year: 2026, month: 6, documentNumber: 'FZ/1', purchaseDate: '2026-06-10' }
+
+  describe('jpkPurchaseRecordUpsertSchema', () => {
+    it('rejects ksefMarking=NrKSeF without a non-empty nrKsef (empty <NrKSeF/> is XSD-invalid)', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF' }).success).toBe(false)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: '   ' }).success).toBe(false)
+    })
+    it('accepts ksefMarking=NrKSeF with a structurally valid nrKsef', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: validKsef }).success).toBe(true)
+    })
+    it('rejects a structurally invalid nrKsef', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: 'not-a-ksef' }).success).toBe(false)
+    })
+    it('defaults transactionClass to domestic', () => {
+      expect(jpkPurchaseRecordUpsertSchema.parse({ ...basePurchase }).transactionClass).toBe('domestic')
+    })
+    it('optionalMoneySchema accepts an empty string and rejects > 2 fraction digits', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, netOther: '' }).success).toBe(true)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, netOther: '1.234' }).success).toBe(false)
+    })
+    it('accepts selfAssessedRate (L9 — captured rate for self-assessment)', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, selfAssessedRate: '23.00' }).success).toBe(true)
+    })
+    it('rejects out-of-range year/month', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, year: 2025 }).success).toBe(false)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, month: 13 }).success).toBe(false)
+    })
+  })
+
+  describe('jpkFilingUpsertSchema', () => {
+    const base = { variant: 'V7M' as const, year: 2026, month: 6, kodUrzedu: '0202' }
+    it('rejects a non-4-digit kodUrzedu', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, kodUrzedu: '20' }).success).toBe(false)
+    })
+    it('defaults celZlozenia=1 and correctionScope=both', () => {
+      const r = jpkFilingUpsertSchema.parse({ ...base })
+      expect(r.celZlozenia).toBe(1)
+      expect(r.correctionScope).toBe('both')
+    })
+    it('L7: rejects a partial correctionScope on a primary filing (celZlozenia=1)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 1, correctionScope: 'declaration' }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 1, correctionScope: 'evidence' }).success).toBe(false)
+    })
+    it('L7: allows a partial correctionScope on a correction filing (celZlozenia=2)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 2, correctionScope: 'declaration' }).success).toBe(true)
+    })
+    it('accepts an optional contextNip (H4)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '7980332920' }).success).toBe(true)
+    })
+    it('rejects out-of-range month/year/quarter', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, month: 0 }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, year: 2025 }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, quarter: 5 }).success).toBe(false)
+    })
+  })
+
+  describe('jpkGenerateSchema', () => {
+    it('requires a uuid filingId', () => {
+      expect(jpkGenerateSchema.safeParse({ filingId: 'not-a-uuid' }).success).toBe(false)
+      expect(jpkGenerateSchema.safeParse({ filingId: '550e8400-e29b-41d4-a716-446655440000' }).success).toBe(true)
+    })
   })
 })

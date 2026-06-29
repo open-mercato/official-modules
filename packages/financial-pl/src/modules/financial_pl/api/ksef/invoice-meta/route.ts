@@ -10,29 +10,14 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
 import { SalesInvoicePlMeta } from '../../../data/entities'
-import type {
-  AdvanceInvoiceRef,
-  AdvancePaymentSnapshot,
-  InvoiceKindColumn,
-  JpkTypDokumentuColumn,
-  OrderSnapshot,
-} from '../../../data/entities'
-import {
-  GTU_CODES,
-  JPK_PROCEDURE_MARKINGS,
-  JPK_TYP_DOKUMENTU,
-  type JpkProcedureMarking,
-} from '../../../lib/jpk-markings-codes'
+import type { JpkTypDokumentuColumn } from '../../../data/entities'
+import { JPK_PROCEDURE_MARKINGS, type JpkProcedureMarking } from '../../../lib/jpk-markings-codes'
+import { invoiceMetaPutSchema } from '../../../data/validators'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
   PUT: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
 }
-
-// SPEC-009: invoice_kind / TypDokumentu / GTU accepted-value sets are validated at this
-// boundary against the single-source-of-truth constants (lib/jpk-markings-codes.ts +
-// the PL-meta column unions); the entity columns stay plain `text`/`json`.
-const INVOICE_KINDS = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'] as const satisfies readonly InvoiceKindColumn[]
 
 // Pure-JPK procedure marking code → SalesInvoicePlMeta boolean column. The marking
 // object is the API/widget shape; the entity stores one boolean per code (matching the
@@ -120,85 +105,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-
-const advancePaymentSchema = z.object({
-  receivedDate: z.string().min(1).max(40),
-  amount: z.string().min(1).max(40),
-  fxRate: z.string().min(1).max(40).optional(),
-}) satisfies z.ZodType<AdvancePaymentSnapshot>
-
-const advanceRefSchema = z
-  .object({
-    ksefNumber: z.string().min(1).max(120).optional(),
-    invoiceNumber: z.string().min(1).max(120).optional(),
-    // The already-invoiced gross of this advance; ROZ nets Σ amounts off the full gross to derive
-    // the residual P_15. Optional — when omitted the residual equals the full gross (no netting).
-    amount: z.string().regex(/^-?\d+(\.\d{1,2})?$/).optional(),
-  })
-  .refine((v) => Boolean(v.ksefNumber) || Boolean(v.invoiceNumber), {
-    message: 'Either ksefNumber or invoiceNumber is required',
-  }) satisfies z.ZodType<AdvanceInvoiceRef>
-
-const orderLineSchema = z.object({
-  name: z.string().min(1).max(500),
-  quantity: z.string().max(40).optional(),
-  unitPrice: z.string().max(40).optional(),
-  netValue: z.string().max(40).optional(),
-  vatRate: z.string().max(40).optional(),
-})
-
-const orderSnapshotSchema = z.object({
-  totalValue: z.string().min(1).max(40),
-  lines: z.array(orderLineSchema).max(1000),
-}) satisfies z.ZodType<OrderSnapshot>
-
-// One optional boolean per JPK procedure marking code (the API/widget shape; the entity
-// stores one boolean column per code). Codes are validated against JPK_PROCEDURE_MARKINGS.
-const procedureMarkingsSchema = z
-  .object(
-    JPK_PROCEDURE_MARKINGS.reduce(
-      (acc, code) => {
-        acc[code] = z.boolean().optional()
-        return acc
-      },
-      {} as Record<JpkProcedureMarking, z.ZodOptional<z.ZodBoolean>>,
-    ),
-  )
-  .strict()
-
-const invoiceMetaPutSchema = z.object({
-  salesInvoiceId: z.string().uuid(),
-  contextNip: z
-    .string()
-    .regex(/^[0-9]{10}$/)
-    .nullish(),
-  mppRequired: z.boolean().optional(),
-  vatExemptionBasis: z.string().max(500).nullish(),
-  /** Mark the invoice as lawfully issued outside KSeF (drives the JPK_VAT `BFK` marking). */
-  issuedOutsideKsef: z.boolean().optional(),
-  // --- SPEC-009: FA(3) advanced doc-types, self-billing, OSS/FX, GTU/JPK markings ---
-  invoiceKind: z.enum(INVOICE_KINDS).optional(),
-  selfBilling: z.boolean().optional(),
-  reverseCharge: z.boolean().optional(),
-  ossProcedure: z.boolean().optional(),
-  consumptionCountryCode: z
-    .string()
-    .regex(/^[A-Z]{2}$/)
-    .nullish(),
-  exchangeRate: z.string().max(40).nullish(),
-  exchangeRateDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .nullish(),
-  advancePayments: z.array(advancePaymentSchema).max(1000).optional(),
-  advanceRefs: z.array(advanceRefSchema).max(1000).optional(),
-  orderSnapshot: orderSnapshotSchema.nullish(),
-  // Pure-JPK GTU goods/services group codes (deduped, validated against GTU_CODES).
-  gtuCodes: z.array(z.enum(GTU_CODES)).max(GTU_CODES.length).optional(),
-  procedureMarkings: procedureMarkingsSchema.optional(),
-  // Pure-JPK TypDokumentu (validated against JPK_TYP_DOKUMENTU).
-  typDokumentu: z.enum(JPK_TYP_DOKUMENTU).nullish(),
-})
 
 export async function PUT(req: Request) {
   try {

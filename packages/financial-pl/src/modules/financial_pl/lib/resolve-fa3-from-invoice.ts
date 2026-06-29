@@ -111,6 +111,12 @@ function applyOssMarkers(
   }
   const tableRate = getEuStandardVatRate(consumptionCountry)
   return rows.map((row) => {
+    // INVARIANT: on an OSS / WSTO_EE line, the stored `tax_rate` MUST be the CONSUMPTION-country
+    // VAT rate (the destination rate, e.g. DE 19%), NOT the Polish sale rate — it is reported
+    // verbatim as the destination rate (P_12_XII) and OSS buckets bypass the domestic
+    // rate-reconciliation guard. When the line carries no positive rate we fall back to the EU
+    // standard-rate table for the consumption country. Callers that persist the Polish rate on an
+    // OSS line would file a wrong destination VAT rate.
     const lineRate = Number(asString(row.tax_rate) ?? '')
     const ossRate =
       Number.isFinite(lineRate) && lineRate > 0 ? String(lineRate) : tableRate !== undefined ? String(tableRate) : null

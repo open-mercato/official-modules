@@ -325,3 +325,208 @@ export class SalesInvoicePlMeta {
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
 }
+
+/** Purchase-side JPK document classification (FA(3) `DokumentZakupu`): MK/VAT_RR/WEW. */
+export type JpkDokumentZakupuColumn = 'MK' | 'VAT_RR' | 'WEW'
+
+/** How the purchase line is accounted for in the JPK_VAT register (drives net/vat field placement). */
+export type JpkTransactionClassColumn =
+  | 'domestic'
+  | 'wnt'
+  | 'import_goods'
+  | 'import_services'
+  | 'import_services_28b'
+  | 'reverse_charge_domestic'
+
+/** JPK_VAT purchase marking — the buyer-side twin of the sales `NrKSeF`/`OFF`/`BFK`/`DI` node. */
+export type JpkPurchaseMarkingColumn = 'NrKSeF' | 'OFF' | 'BFK' | 'DI'
+
+/**
+ * A purchase-register (`ZakupWiersz`) row captured for JPK_VAT (V7M/V7K). Kept out of the
+ * country-agnostic core; there is no purchases module here, so this is the source of truth for
+ * the buyer-side evidence. Linked by FK-id only (no cross-module ORM relation, §4). The numeric
+ * amounts are stored as `text` to preserve the exact decimal strings the JPK builder emits.
+ */
+@Entity({ tableName: 'financial_pl_jpk_purchase_record' })
+@Index({ name: 'financial_pl_jpk_purchase_record_scope_idx', properties: ['organizationId', 'tenantId'] })
+@Index({ name: 'financial_pl_jpk_purchase_record_period_idx', properties: ['organizationId', 'tenantId', 'year', 'month'] })
+export class PurchaseVatRecord {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'context_nip', type: 'text', nullable: true })
+  contextNip?: string | null
+
+  @Property({ name: 'year', type: 'integer' })
+  year!: number
+
+  @Property({ name: 'month', type: 'integer' })
+  month!: number
+
+  @Property({ name: 'supplier_nip', type: 'text', nullable: true })
+  supplierNip?: string | null
+
+  @Property({ name: 'supplier_country_code', type: 'text', nullable: true })
+  supplierCountryCode?: string | null
+
+  @Property({ name: 'supplier_name', type: 'text', nullable: true })
+  supplierName?: string | null
+
+  @Property({ name: 'document_number', type: 'text' })
+  documentNumber!: string
+
+  @Property({ name: 'purchase_date', type: 'date' })
+  purchaseDate!: string
+
+  @Property({ name: 'receipt_date', type: 'date', nullable: true })
+  receiptDate?: string | null
+
+  @Property({ name: 'document_type', type: 'text', nullable: true })
+  documentType?: JpkDokumentZakupuColumn | null
+
+  @Property({ name: 'imp', type: 'boolean', default: false })
+  imp = false
+
+  @Property({ name: 'ksef_marking', type: 'text', nullable: true })
+  ksefMarking?: JpkPurchaseMarkingColumn | null
+
+  @Property({ name: 'nr_ksef', type: 'text', nullable: true })
+  nrKsef?: string | null
+
+  @Property({ name: 'transaction_class', type: 'text', default: 'domestic' })
+  transactionClass: JpkTransactionClassColumn = 'domestic'
+
+  @Property({ name: 'net_fixed_assets', type: 'text', nullable: true })
+  netFixedAssets?: string | null
+
+  @Property({ name: 'vat_fixed_assets', type: 'text', nullable: true })
+  vatFixedAssets?: string | null
+
+  @Property({ name: 'net_other', type: 'text', nullable: true })
+  netOther?: string | null
+
+  @Property({ name: 'vat_other', type: 'text', nullable: true })
+  vatOther?: string | null
+
+  @Property({ name: 'corr_fixed_assets', type: 'text', nullable: true })
+  corrFixedAssets?: string | null
+
+  @Property({ name: 'corr_other', type: 'text', nullable: true })
+  corrOther?: string | null
+
+  @Property({ name: 'corr_89b_1', type: 'text', nullable: true })
+  corr89b1?: string | null
+
+  @Property({ name: 'corr_89b_4', type: 'text', nullable: true })
+  corr89b4?: string | null
+
+  @Property({ name: 'margin_gross', type: 'text', nullable: true })
+  marginGross?: string | null
+
+  @Property({ name: 'self_assessed_net', type: 'text', nullable: true })
+  selfAssessedNet?: string | null
+
+  @Property({ name: 'self_assessed_vat', type: 'text', nullable: true })
+  selfAssessedVat?: string | null
+
+  @Property({ name: 'self_assessed_rate', type: 'text', nullable: true })
+  selfAssessedRate?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+/** JPK_VAT filing variant: monthly V7M or quarterly V7K. */
+export type JpkVariantColumn = 'V7M' | 'V7K'
+
+/** Filing lifecycle: drafted, generated XML produced, submitted to the tax authority. */
+export type JpkFilingStatusColumn = 'draft' | 'generated' | 'submitted'
+
+/** Correction scope for `celZlozenia=2`: the declaration part, the evidence part, or both. */
+export type JpkCorrectionScopeColumn = 'both' | 'declaration' | 'evidence'
+
+/**
+ * A single JPK_VAT filing (one period × variant × purpose). `generated_xml` is the built
+ * JPK XML document — compliance-sensitive, declared in encryption.ts. `declaration_inputs`
+ * carries the optional `JpkDeclarationInputs` overrides (prior surplus, manual P_49..P_660).
+ * At most one ACTIVE (non-deleted) filing per period/variant/purpose, enforced via a partial
+ * unique index (declared in the migration).
+ */
+@Entity({ tableName: 'financial_pl_jpk_filing' })
+@Index({ name: 'financial_pl_jpk_filing_scope_idx', properties: ['organizationId', 'tenantId'] })
+// At most one ACTIVE (non-deleted) filing per (org, tenant, context_nip, variant, year, month,
+// purpose). `coalesce(context_nip, '')` keeps the uniqueness firm for a single-NIP (null) org while
+// still permitting one filing per NIP in a multi-NIP org. Declared on the entity (not only the
+// migration) so the ORM tracks it and `db:generate` keeps the snapshot in sync.
+@Index({
+  name: 'financial_pl_jpk_filing_active_unique',
+  expression:
+    `create unique index "financial_pl_jpk_filing_active_unique" on "financial_pl_jpk_filing" ("organization_id", "tenant_id", coalesce("context_nip", ''), "variant", "year", "month", "cel_zlozenia") where "deleted_at" is null`,
+})
+export class JpkVatFiling {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'context_nip', type: 'text', nullable: true })
+  contextNip?: string | null
+
+  @Property({ name: 'variant', type: 'text' })
+  variant: JpkVariantColumn = 'V7M'
+
+  @Property({ name: 'year', type: 'integer' })
+  year!: number
+
+  @Property({ name: 'month', type: 'integer' })
+  month!: number
+
+  @Property({ name: 'quarter', type: 'integer', nullable: true })
+  quarter?: number | null
+
+  @Property({ name: 'cel_zlozenia', type: 'integer', default: 1 })
+  celZlozenia = 1
+
+  @Property({ name: 'correction_scope', type: 'text', default: 'both' })
+  correctionScope: JpkCorrectionScopeColumn = 'both'
+
+  @Property({ name: 'kod_urzedu', type: 'text', nullable: true })
+  kodUrzedu?: string | null
+
+  @Property({ name: 'declaration_inputs', type: 'json', nullable: true })
+  declarationInputs?: Record<string, unknown> | null
+
+  @Property({ name: 'status', type: 'text', default: 'draft' })
+  status: JpkFilingStatusColumn = 'draft'
+
+  @Property({ name: 'generated_xml', type: 'text', nullable: true })
+  generatedXml?: string | null
+
+  @Property({ name: 'generated_at', type: Date, nullable: true })
+  generatedAt?: Date | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}

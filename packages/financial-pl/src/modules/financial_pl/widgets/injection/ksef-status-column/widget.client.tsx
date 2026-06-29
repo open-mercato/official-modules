@@ -94,7 +94,7 @@ export default function KsefStatusCell({
         isOverdue ? (
           <span
             className="inline-flex items-center gap-1 text-xs font-medium text-destructive"
-            title={t('financial_pl.status.offline_overdue', 'Overdue: send to KSeF past the statutory deadline')}
+            title={t('financial_pl.status.offline_overdue_hint', 'Overdue: send to KSeF past the statutory deadline')}
           >
             <AlertTriangle className="size-3.5" />
             {t('financial_pl.status.offline_overdue', 'Overdue')}

@@ -88,7 +88,7 @@ export default function PlVatMetaPanel({ context, disabled }: CustomFieldProps) 
   const [typDokumentu, setTypDokumentu] = React.useState<JpkTypDokumentu | ''>('')
   const [updatedAt, setUpdatedAt] = React.useState<string | null>(null)
 
-  const { runMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
+  const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
     contextId: 'financial_pl.pl-vat-meta',
   })
 
@@ -170,7 +170,7 @@ export default function PlVatMetaPanel({ context, disabled }: CustomFieldProps) 
           }
           return call
         },
-        context: { retryLastMutation: async () => false },
+        context: { retryLastMutation },
         mutationPayload: payload,
       })
       flash(t('financial_pl.fields.plVatMetaSaved', 'Polish VAT metadata saved.'), 'success')
@@ -194,6 +194,7 @@ export default function PlVatMetaPanel({ context, disabled }: CustomFieldProps) 
     typDokumentu,
     updatedAt,
     runMutation,
+    retryLastMutation,
     t,
   ])
 

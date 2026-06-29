@@ -361,22 +361,26 @@ export function buildVatBreakdown(
     existing.vatScaled += toScaled4(row.tax_amount)
     buckets.set(key, existing)
   }
-  if (buckets.size === 0) {
-    const netScaled = toScaled4(headerNetField)
-    const vatScaled = toScaled4(headerVatField)
-    return [
-      {
-        rate: deriveHeaderVatRate(netScaled, vatScaled),
-        net: scaled4ToMoney2dp(netScaled),
-        vat: scaled4ToMoney2dp(vatScaled),
-      },
-    ]
-  }
   // FX: for a Polish-rate bucket on a foreign-currency invoice, emit the PLN-converted output
   // VAT (`P_14_xW`, art. 106e ust. 11) = round(vat × rate) with EXACT BigInt math. The OSS
   // bucket has no `W` variant, so `vatPln` is never set for it.
   const fxScaled = opts.fxRate ? toScaled4(opts.fxRate) : 0n
   const hasFx = fxScaled > 0n
+  if (buckets.size === 0) {
+    const netScaled = toScaled4(headerNetField)
+    const vatScaled = toScaled4(headerVatField)
+    const entry: Fa3InvoiceInput['vatBreakdown'][number] = {
+      rate: deriveHeaderVatRate(netScaled, vatScaled),
+      net: scaled4ToMoney2dp(netScaled),
+      vat: scaled4ToMoney2dp(vatScaled),
+    }
+    // A header-only (line-less) foreign-currency invoice still owes the PLN-converted output VAT:
+    // compute P_14_xW with the same math as the line-based branch (the header rate is never OSS).
+    if (hasFx && entry.rate !== 'oss') {
+      entry.vatPln = scaled4ToMoney2dp((vatScaled * fxScaled) / 10000n)
+    }
+    return [entry]
+  }
   return Array.from(buckets.values()).map((bucket) => {
     const entry: Fa3InvoiceInput['vatBreakdown'][number] = {
       rate: bucket.rate,

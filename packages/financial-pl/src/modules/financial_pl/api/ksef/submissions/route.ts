@@ -10,8 +10,13 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { parseIdsParam } from '@open-mercato/shared/lib/crud/ids'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
-import { KsefSubmission } from '../../../data/entities'
+import { findAndCountWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { KsefSubmission, type KsefSubmissionStatusColumn } from '../../../data/entities'
 import { ksefSubmissionSendSchema, type KsefSubmissionSendInput } from '../../../data/validators'
+
+const KSEF_SUBMISSION_STATUSES: ReadonlySet<KsefSubmissionStatusColumn> = new Set([
+  'not_applicable', 'ready', 'queued', 'processing', 'accepted', 'rejected', 'offline_issued',
+])
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
@@ -63,7 +68,14 @@ export async function GET(req: Request) {
     const salesInvoiceId = url.searchParams.get('salesInvoiceId')
     if (salesInvoiceId) filter.salesInvoiceId = salesInvoiceId
     const status = url.searchParams.get('status')
-    if (status) filter.status = status as KsefSubmission['status']
+    if (status) {
+      // Validate against the known status union rather than blindly casting — an unknown value
+      // returns a clean 400 instead of silently matching zero rows.
+      if (!KSEF_SUBMISSION_STATUSES.has(status as KsefSubmissionStatusColumn)) {
+        throw new CrudHttpError(400, { error: 'Invalid status filter' })
+      }
+      filter.status = status as KsefSubmissionStatusColumn
+    }
     // Discriminator filter. DEFAULTS to 'invoice' so a ?salesInvoiceId= query keeps its
     // pre-correction meaning (invoice submissions only) — a correction stores salesInvoiceId =
     // the corrected original, so without this default an existing invoice-facing client would
@@ -77,11 +89,20 @@ export async function GET(req: Request) {
     }
 
     const em = (container.resolve('em') as EntityManager).fork()
-    const [rows, total] = await em.findAndCount(KsefSubmission, filter, {
-      orderBy: { createdAt: 'desc' },
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
-    })
+    // KsefSubmission.invoice_xml / upo_xml are encrypted-at-rest: use the decryption-aware finder
+    // (the prescribed convention) even though toRow projects those columns out. Per-row scope drives
+    // decryption; (tenantId, orgId) is only a fallback.
+    const [rows, total] = await findAndCountWithDecryption(
+      em,
+      KsefSubmission,
+      filter,
+      {
+        orderBy: { createdAt: 'desc' },
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      },
+      { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
+    )
     return NextResponse.json({ items: rows.map(toRow), total, page, pageSize })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })

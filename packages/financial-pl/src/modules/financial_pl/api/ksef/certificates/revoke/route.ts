@@ -9,16 +9,14 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { ksefCertificateRevokeSchema, type KsefCertificateRevokeInput } from '../../../../data/validators'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
 }
 
-const revokeBodySchema = z.object({
-  serialNumber: z.string().min(1),
-  reason: z.string().min(1).optional(),
-})
-type RevokeInput = z.infer<typeof revokeBodySchema>
+const revokeBodySchema = ksefCertificateRevokeSchema
+type RevokeInput = KsefCertificateRevokeInput
 
 export async function POST(req: Request) {
   try {
