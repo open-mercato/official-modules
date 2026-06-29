@@ -288,6 +288,21 @@ function rateKey(rate: Fa3VatBucketKey): string {
   return typeof rate === 'number' ? String(rate) : rate
 }
 
+/** Sign-aware 2-dp decimal-string addition via integer cents (no float) — used to merge VAT
+ *  buckets that target the same FA(3) summary field. */
+function sumMoney2(a: string, b: string): string {
+  const toCents = (s: string): bigint => {
+    const m = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim())
+    if (!m) return 0n
+    const frac = ((m[3] ?? '') + '00').slice(0, 2)
+    return (m[1] === '-' ? -1n : 1n) * (BigInt(m[2]) * 100n + BigInt(frac))
+  }
+  const cents = toCents(a) + toCents(b)
+  const neg = cents < 0n
+  const mag = neg ? -cents : cents
+  return `${neg ? '-' : ''}${(mag / 100n).toString()}.${(mag % 100n).toString().padStart(2, '0')}`
+}
+
 // FA(3) `P_12` (line VAT rate) is the closed `TStawkaPodatku` enumeration. The raw
 // internal rate (`0`, `np`) is NOT a member — KSeF rejects `<P_12>0</P_12>` and
 // `<P_12>np</P_12>` on XSD validation (only 23/22/8/7/5/4/3, "0 KR"/"0 WDT"/"0 EX",
@@ -353,7 +368,23 @@ function renderParty(tag: string, party: Fa3Party, sellerNipOnly = false, nipOnl
 }
 
 function renderVatBreakdown(entries: Fa3VatBreakdownEntry[]): string {
-  const ordered = [...entries].sort(
+  // Merge buckets that target the SAME FA(3) summary field before emitting — a legacy and a current
+  // rate can share a field (22% + 23% → P_13_1, 7% + 8% → P_13_2). Emitting two P_13_1/P_14_1
+  // elements is XSD-invalid, so sum net/vat/vatPln into one entry per field (M5).
+  const mergedByField = new Map<string, Fa3VatBreakdownEntry>()
+  for (const entry of entries) {
+    const key = rateKey(entry.rate)
+    const fieldKey = VAT_NET_FIELD[key] ?? VAT_TAX_FIELD[key] ?? key
+    const existing = mergedByField.get(fieldKey)
+    if (!existing) {
+      mergedByField.set(fieldKey, { ...entry })
+    } else {
+      existing.net = sumMoney2(existing.net, entry.net)
+      existing.vat = sumMoney2(existing.vat, entry.vat)
+      if (entry.vatPln !== undefined) existing.vatPln = sumMoney2(existing.vatPln ?? '0.00', entry.vatPln)
+    }
+  }
+  const ordered = [...mergedByField.values()].sort(
     (a, b) => (VAT_FIELD_RANK[rateKey(a.rate)] ?? 99) - (VAT_FIELD_RANK[rateKey(b.rate)] ?? 99),
   )
   const parts: string[] = []

@@ -42,9 +42,13 @@ type ArmedSend = { invoiceId: string; armedAt: number }
  * 3. Fallback — when the response is not ok and carries no `error` field, a
  *    localized fallback error toast is shown so the action never silently no-ops.
  *
- * Success / server-validation copy is still owned by the server route (returned
- * pre-translated as `message` / `error`); client-side guard copy is localized
- * via the host-provided translator (`context.t`).
+ * Success / server-validation copy is owned by the server route (returned pre-translated as
+ * `message` / `error`), so it is always localized. Client-side guard copy is localized via the
+ * host-provided translator (`context.t`) WHEN the row-action host supplies one; the core DataTable
+ * row-action context currently passes only `{ navigate }`, so absent `context.t` the guard copy
+ * falls back to the built-in English text. The keys below exist in all four locales, so guard copy
+ * localizes automatically once the host threads a translator into the row-action context (H7 —
+ * full localization of the guard toasts depends on that core contract addition).
  */
 const widget: InjectionRowActionWidget = {
   metadata: {

@@ -18,6 +18,7 @@ import type {
   JpkGtu,
   JpkSprzedazProcedure,
 } from './jpk-codes'
+import { isEuMemberState } from '../../config'
 
 export type JpkVatBucket = { rate: number | 'zw' | 'np' | 'oo' | 'oss'; net: string; vat: string }
 
@@ -65,10 +66,22 @@ const RATE_FIELDS: Record<string, { net: JpkSprzedazK | null; vat: JpkSprzedazK 
   '8': { net: 'K_17', vat: 'K_18' },
   '7': { net: 'K_17', vat: 'K_18' },
   '5': { net: 'K_15', vat: 'K_16' },
-  '0': { net: 'K_13', vat: null }, // 0% domestic (WDT→K_21 / export→K_22 need a txn type the model lacks)
+  '0': { net: 'K_13', vat: null }, // 0% domestic (WDT/export are split by buyer country — see zeroRateNetField)
   zw: { net: 'K_10', vat: null }, // exempt
   np: { net: 'K_11', vat: null }, // outside PL
   oo: { net: 'K_31', vat: 'K_32' }, // domestic reverse charge (art. 17, supplier side)
+}
+
+/**
+ * Select the K_ field for a 0%-rated sale by destination: a domestic 0% sale files under K_13; the
+ * same 0% rate on a cross-border supply is an intra-community supply (WDT → K_21) when the buyer is
+ * in another EU member state, or an export (→ K_22) to a third country. A missing/PL buyer country
+ * is treated as domestic.
+ */
+function zeroRateNetField(buyerCountryCode: string | null | undefined): JpkSprzedazK {
+  const country = (buyerCountryCode ?? '').trim().toUpperCase()
+  if (!country || country === 'PL') return 'K_13'
+  return isEuMemberState(country) ? 'K_21' : 'K_22'
 }
 
 /**
@@ -80,7 +93,12 @@ export function buildSprzedazRow(input: BuildSprzedazInput): JpkSprzedazRow | nu
   let reportable = false
   for (const b of input.vatBreakdown) {
     if (b.rate === 'oss') continue // VIU-DO, excluded from JPK_V7M
-    const fields = RATE_FIELDS[typeof b.rate === 'number' ? String(b.rate) : b.rate]
+    // A 0% rate splits by destination (domestic K_13 / intra-EU supply K_21 / export K_22); all
+    // other rates use the static field map.
+    const fields =
+      b.rate === 0
+        ? { net: zeroRateNetField(input.buyer.countryCode), vat: null }
+        : RATE_FIELDS[typeof b.rate === 'number' ? String(b.rate) : b.rate]
     if (!fields) continue
     add(k, fields.net, fields.vat, b.net, b.vat)
     reportable = true

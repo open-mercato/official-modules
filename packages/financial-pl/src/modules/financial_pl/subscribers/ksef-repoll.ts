@@ -26,7 +26,7 @@ import { emitFinancialPlEvent } from '../events'
  * (accepted/UPO) converge — two concurrent re-polls land on the same result.
  */
 export const metadata = {
-  event: 'financial_pl.ksef_submission.repoll',
+  event: 'financial_pl.ksef_submission.repoll_requested',
   persistent: true,
   id: 'financial_pl:ksef-repoll',
 }

@@ -53,6 +53,28 @@ const baseInvoice: Record<string, unknown> = {
   },
 }
 
+describe('foreign-currency KursWaluty consistency (H3)', () => {
+  it('stamps the FX rate on every line and emits the PLN-converted VAT for a non-OSS EUR invoice', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [{ ...baseInvoice, currency_code: 'EUR' }],
+      'sales:sales_invoice_line': [
+        { line_number: 1, invoice_id: 'inv-1', total_net_amount: '200.0000', tax_amount: '46.0000', tax_rate: '23.0000' },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [{ sales_invoice_id: 'inv-1', exchange_rate: '4.0000' }],
+    })
+    const result = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip: '7980332920', seller: SELLER },
+      { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'ten-1' },
+    )
+    // Every FaWiersz carries the FX rate (→ KursWaluty), matching the P_14_xW the summary emits.
+    expect(result.lines.length).toBeGreaterThan(0)
+    expect(result.lines.every((line) => line.fxRate === '4.0000')).toBe(true)
+    expect(result.exchangeRate).toBe('4.0000')
+    const bucket = result.vatBreakdown.find((entry) => entry.rate === 23)
+    expect(bucket?.vatPln).toBe('184.00') // 46 EUR × 4.0
+  })
+})
+
 describe('roundMoneyTo2dp', () => {
   it('rounds numeric(18,4) strings to 2dp with exact BigInt math', () => {
     expect(roundMoneyTo2dp('100.0000')).toBe('100.00')

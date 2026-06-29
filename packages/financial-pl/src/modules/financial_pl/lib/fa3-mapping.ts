@@ -286,11 +286,15 @@ export function buildLines(lineRows: InvoiceLineRow[]): Fa3InvoiceInput['lines']
   })
 }
 
-/** Derive a single FA(3) VAT rate from header net/tax totals (line-less fallback). */
+/** Derive a single FA(3) VAT rate from header net/tax totals (line-less fallback). Uses absolute
+ *  magnitudes so a credit memo's NEGATED header (negative net+vat) derives the SAME rate as the
+ *  original sale instead of collapsing to the 23% fallback (M1). */
 export function deriveHeaderVatRate(netScaled: bigint, vatScaled: bigint): Fa3VatRate {
   if (vatScaled === 0n) return 0
-  if (netScaled <= 0n) return 23
-  return normalizeVatRate(Math.round((Number(vatScaled) / Number(netScaled)) * 100))
+  const absNet = netScaled < 0n ? -netScaled : netScaled
+  const absVat = vatScaled < 0n ? -vatScaled : vatScaled
+  if (absNet === 0n) return 23 // VAT but no taxable base — unusual; default to the standard rate
+  return normalizeVatRate(Math.round((Number(absVat) / Number(absNet)) * 100))
 }
 
 /** Round a 4-dp-scaled amount to 2-dp integer cents (half-up), sign-agnostic magnitude. */

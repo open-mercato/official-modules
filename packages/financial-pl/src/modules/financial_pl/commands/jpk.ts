@@ -1,6 +1,7 @@
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { ensureTenantScope, ensureOrganizationScope } from '@open-mercato/shared/lib/commands/scope'
+import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { CrudHttpError, isUniqueViolation } from '@open-mercato/shared/lib/crud/errors'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -67,8 +68,43 @@ async function readKsefCredentials(
   }
 }
 
-export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsertInput, { id: string }> = {
+// --- Undo snapshots (M8) ----------------------------------------------------------------------
+// The JPK CRUD commands are reversible: create → soft-delete the created row; update → restore the
+// captured before-fields; delete → clear deleted_at. The snapshot rides on the command result and
+// is persisted to the action log via buildLog so the bus can replay it through undo().
+type JpkUndoSnapshot = {
+  kind: 'purchase_record' | 'filing'
+  op: 'create' | 'update' | 'delete'
+  id: string
+  tenantId: string
+  organizationId: string
+  before?: Record<string, unknown>
+}
+
+function jpkBuildLog(resourceKind: string, undo: JpkUndoSnapshot) {
+  return { resourceKind, resourceId: undo.id, tenantId: undo.tenantId, organizationId: undo.organizationId, payload: { undo } }
+}
+
+function readJpkUndo(logEntry: unknown): JpkUndoSnapshot | null {
+  const payload = extractUndoPayload(logEntry as never) as JpkUndoSnapshot | null
+  if (!payload || typeof payload !== 'object') return null
+  if (typeof payload.id !== 'string' || typeof payload.tenantId !== 'string' || typeof payload.organizationId !== 'string') {
+    return null
+  }
+  return payload
+}
+
+/** Capture the current value of the mutated columns on an entity (for an update undo). */
+function snapshotFields(entity: object, keys: string[]): Record<string, unknown> {
+  const view = entity as unknown as Record<string, unknown>
+  const before: Record<string, unknown> = {}
+  for (const key of keys) before[key] = view[key]
+  return before
+}
+
+export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsertInput, { id: string; undo: JpkUndoSnapshot }> = {
   id: 'financial_pl.jpk.upsert_purchase_record',
+  isUndoable: true,
   async execute(input, ctx) {
     const parsed = jpkPurchaseRecordUpsertSchema.parse(input)
     const scope = resolveCommandScope(ctx)
@@ -115,9 +151,13 @@ export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsert
         deletedAt: null,
       })
       if (!existing) throw new CrudHttpError(404, { error: '[internal] purchase record not found' })
+      const before = snapshotFields(existing, Object.keys(fields))
       Object.assign(existing, fields, { updatedAt: now })
       await em.flush()
-      return { id: existing.id }
+      return {
+        id: existing.id,
+        undo: { kind: 'purchase_record', op: 'update', id: existing.id, tenantId: scope.tenantId, organizationId: scope.organizationId, before },
+      }
     }
 
     const record = em.create(PurchaseVatRecord, {
@@ -128,12 +168,33 @@ export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsert
       updatedAt: now,
     })
     await em.persist(record).flush()
-    return { id: record.id }
+    return {
+      id: record.id,
+      undo: { kind: 'purchase_record', op: 'create', id: record.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+    }
+  },
+  async buildLog({ result }) {
+    return jpkBuildLog('financial_pl.jpk_purchase_record', result.undo)
+  },
+  async undo({ ctx, logEntry }) {
+    const snap = readJpkUndo(logEntry)
+    if (!snap || snap.kind !== 'purchase_record') return
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const record = await em.findOne(PurchaseVatRecord, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    if (!record) return
+    if (snap.op === 'create') {
+      record.deletedAt = new Date()
+      record.updatedAt = record.deletedAt
+    } else if (snap.op === 'update' && snap.before) {
+      Object.assign(record, snap.before, { updatedAt: new Date() })
+    }
+    await em.flush()
   },
 }
 
-export const deletePurchaseRecordCommand: CommandHandler<{ id: string }, { id: string }> = {
+export const deletePurchaseRecordCommand: CommandHandler<{ id: string }, { id: string; undo: JpkUndoSnapshot }> = {
   id: 'financial_pl.jpk.delete_purchase_record',
+  isUndoable: true,
   async execute(input, ctx) {
     const parsed = jpkPurchaseRecordDeleteSchema.parse(input)
     const scope = resolveCommandScope(ctx)
@@ -151,12 +212,29 @@ export const deletePurchaseRecordCommand: CommandHandler<{ id: string }, { id: s
     existing.deletedAt = new Date()
     existing.updatedAt = existing.deletedAt
     await em.flush()
-    return { id: existing.id }
+    return {
+      id: existing.id,
+      undo: { kind: 'purchase_record', op: 'delete', id: existing.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+    }
+  },
+  async buildLog({ result }) {
+    return jpkBuildLog('financial_pl.jpk_purchase_record', result.undo)
+  },
+  async undo({ ctx, logEntry }) {
+    const snap = readJpkUndo(logEntry)
+    if (!snap || snap.kind !== 'purchase_record' || snap.op !== 'delete') return
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const record = await em.findOne(PurchaseVatRecord, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    if (!record) return
+    record.deletedAt = null
+    record.updatedAt = new Date()
+    await em.flush()
   },
 }
 
-export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: string }> = {
+export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: string; undo: JpkUndoSnapshot }> = {
   id: 'financial_pl.jpk.upsert_filing',
+  isUndoable: true,
   async execute(input, ctx) {
     const parsed = jpkFilingUpsertSchema.parse(input)
     const scope = resolveCommandScope(ctx)
@@ -186,9 +264,13 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
         deletedAt: null,
       })
       if (!existing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
+      const before = snapshotFields(existing, Object.keys(fields))
       Object.assign(existing, fields, { updatedAt: now })
       await em.flush()
-      return { id: existing.id }
+      return {
+        id: existing.id,
+        undo: { kind: 'filing', op: 'update', id: existing.id, tenantId: scope.tenantId, organizationId: scope.organizationId, before },
+      }
     }
 
     const filing = em.create(JpkVatFiling, {
@@ -224,7 +306,27 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
       }
       throw err
     }
-    return { id: filing.id }
+    return {
+      id: filing.id,
+      undo: { kind: 'filing', op: 'create', id: filing.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+    }
+  },
+  async buildLog({ result }) {
+    return jpkBuildLog('financial_pl.jpk_filing', result.undo)
+  },
+  async undo({ ctx, logEntry }) {
+    const snap = readJpkUndo(logEntry)
+    if (!snap || snap.kind !== 'filing') return
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const filing = await em.findOne(JpkVatFiling, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    if (!filing) return
+    if (snap.op === 'create') {
+      filing.deletedAt = new Date()
+      filing.updatedAt = filing.deletedAt
+    } else if (snap.op === 'update' && snap.before) {
+      Object.assign(filing, snap.before, { updatedAt: new Date() })
+    }
+    await em.flush()
   },
 }
 

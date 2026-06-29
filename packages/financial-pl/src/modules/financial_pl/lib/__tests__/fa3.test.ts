@@ -36,6 +36,34 @@ function sampleDocument(): Fa3Document {
   }
 }
 
+describe('FA(3) VAT summary — buckets sharing a field are merged (M5)', () => {
+  it('sums a legacy 22% bucket into the same P_13_1/P_14_1 as 23% (one element each)', () => {
+    const doc = sampleDocument()
+    doc.model.vatBreakdown = [
+      { rate: 23, net: '100.00', vat: '23.00' },
+      { rate: 22, net: '50.00', vat: '11.00' },
+    ]
+    const xml = buildFa3Xml(doc)
+    // Exactly one P_13_1 / P_14_1, carrying the summed amounts (not two duplicate elements).
+    expect(xml.match(/<P_13_1>/g)).toHaveLength(1)
+    expect(xml.match(/<P_14_1>/g)).toHaveLength(1)
+    expect(xml).toContain('<P_13_1>150.00</P_13_1>')
+    expect(xml).toContain('<P_14_1>34.00</P_14_1>')
+  })
+
+  it('merges 7% into 8% (P_13_2/P_14_2) as well', () => {
+    const doc = sampleDocument()
+    doc.model.vatBreakdown = [
+      { rate: 8, net: '100.00', vat: '8.00' },
+      { rate: 7, net: '100.00', vat: '7.00' },
+    ]
+    const xml = buildFa3Xml(doc)
+    expect(xml.match(/<P_13_2>/g)).toHaveLength(1)
+    expect(xml).toContain('<P_13_2>200.00</P_13_2>')
+    expect(xml).toContain('<P_14_2>15.00</P_14_2>')
+  })
+})
+
 describe('FA(3) XML mapper', () => {
   it('produces a Faktura document with the FA(3) namespace and header', () => {
     const xml = buildFa3Xml(sampleDocument())

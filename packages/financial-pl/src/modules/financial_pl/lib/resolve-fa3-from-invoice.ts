@@ -207,7 +207,14 @@ export async function resolveFa3FromSalesInvoice(
   const currencyCode = (asString(invoice.currency_code) ?? 'PLN').toUpperCase()
 
   const baseLineRows = lineRows.length > 0 ? lineRows : metadataLinesToRows(invoice)
-  const effectiveLineRows = applyOssMarkers(baseLineRows, ossProcedure, consumptionCountry, exchangeRate, deps)
+  const ossLineRows = applyOssMarkers(baseLineRows, ossProcedure, consumptionCountry, exchangeRate, deps)
+  // Non-OSS foreign-currency invoice: stamp the FX rate on every line too, so each FaWiersz emits
+  // `KursWaluty` consistently with the `P_14_xW` (PLN-converted output VAT) the summary carries
+  // (H3). OSS lines already receive fx_rate from applyOssMarkers.
+  const effectiveLineRows =
+    exchangeRate && !ossProcedure
+      ? ossLineRows.map((row) => (asString(row.fx_rate) ? row : { ...row, fx_rate: exchangeRate }))
+      : ossLineRows
 
   const vatBreakdown = buildVatBreakdown(
     effectiveLineRows,
@@ -247,6 +254,8 @@ export async function resolveFa3FromSalesInvoice(
     unitNetPrice: roundMoneyTo2dp(headerNet),
     netValue: roundMoneyTo2dp(headerNet),
     vatRate: deriveHeaderVatRate(toScaled4(headerNet), toScaled4(headerVat)),
+    // Header-only foreign-currency invoice: the single fallback line carries KursWaluty too (H3).
+    ...(exchangeRate ? { fxRate: exchangeRate } : {}),
   }
 
   const lines =

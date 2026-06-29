@@ -36,6 +36,7 @@ import { buildKodIUrl } from '../lib/ksef-qr'
 import { chooseRecovery } from '../lib/recovery'
 import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
+import { isInvoiceIssued } from '../lib/invoice-status'
 
 type CredentialsService = {
   getRaw: (
@@ -286,7 +287,25 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
       submission.updatedAt = new Date()
       await em.flush()
       await emitFinancialPlEvent(
-        'financial_pl.ksef_submission.repoll',
+        'financial_pl.ksef_submission.repoll_requested',
+        { submissionId: submission.id, organizationId: submission.organizationId, tenantId: submission.tenantId },
+        { persistent: true },
+      )
+      return { submissionId: submission.id }
+    }
+
+    // Offline-issued (offline24 / awaryjny) submissions retry through the DEFERRED OFFLINE send
+    // path — never the online queue — so offlineMode and the statutory send-by deadline are
+    // preserved. (A 'processing' offline row that already reached KSeF is routed to repoll above.)
+    const isOfflineMode = submission.mode === 'offline24' || submission.mode === 'awaryjny'
+    if (isOfflineMode) {
+      submission.status = 'offline_issued'
+      submission.lastErrorCode = null
+      submission.lastErrorMessage = null
+      submission.updatedAt = new Date()
+      await em.flush()
+      await emitFinancialPlEvent(
+        'financial_pl.ksef_submission.offline_send_requested',
         { submissionId: submission.id, organizationId: submission.organizationId, tenantId: submission.tenantId },
         { persistent: true },
       )
@@ -335,7 +354,9 @@ export const sendFromInvoiceCommand: CommandHandler<SendFromInvoiceInput, { subm
         error: translate('financial_pl.errors.proforma_not_supported', 'A proforma invoice cannot be submitted to KSeF.'),
       })
     }
-    if (invoice.is_immutable !== true) {
+    // Core has no `is_immutable` column — an invoice is immutable once its lifecycle status leaves
+    // the editable set (draft/void/canceled/…). Mirrors the JPK resolver + credit-memo draft gate.
+    if (!isInvoiceIssued(invoice.status)) {
       throw new CrudHttpError(409, {
         error: translate('financial_pl.errors.invoice_not_issued', 'Only an issued (immutable) invoice can be submitted to KSeF.'),
       })

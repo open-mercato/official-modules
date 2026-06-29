@@ -10,6 +10,10 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { ksefIssueOfflineSchema, type KsefIssueOfflineInput } from '../../../../data/validators'
 
+// Offline issuance is gated by the stricter `financial_pl.manage` (vs `financial_pl.submit` on the
+// online submission writes) DELIBERATELY: it prints a legally-binding KOD II invoice and commits
+// the org to a statutory send-by deadline — a more consequential action than a normal online send,
+// so it is restricted to the manage role (over-gating, not under-gating). (L4: intentional.)
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['financial_pl.manage'] },
 }

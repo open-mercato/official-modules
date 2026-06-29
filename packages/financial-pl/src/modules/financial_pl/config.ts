@@ -134,6 +134,16 @@ function normalizeEuVatCountryKey(countryCode: string): string {
 }
 
 /**
+ * Whether an ISO alpha-2 country code is an EU-27 member state (Greece resolves under both `GR` and
+ * the EU VAT code `EL`). Used to distinguish a 0% intra-community supply (WDT → `K_21`) from a 0%
+ * export to a third country (→ `K_22`) in the JPK sales register.
+ */
+export function isEuMemberState(countryCode: string | null | undefined): boolean {
+  if (!countryCode) return false
+  return normalizeEuVatCountryKey(countryCode) in EU_STANDARD_VAT_RATES
+}
+
+/**
  * Parse the optional `OM_KSEF_EU_VAT_RATES` JSON override (a partial
  * `{ "<ISO>": <rate> }` map) and merge it over the shipped table so a mid-year
  * rate change can be patched without a release. Malformed JSON or non-numeric

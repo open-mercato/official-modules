@@ -84,13 +84,16 @@ function sumMoney(values: string[]): string {
   return fromCents(values.reduce((acc, v) => acc + toCents(v), 0n))
 }
 
-/** Per-line VAT = round-half-up(net * rate%, 2dp), by magnitude (sign-preserving). Non-numeric rates → 0. */
+/** Per-line VAT = round-half-up(net * rate%, 2dp), by magnitude (sign-preserving). Non-numeric rates
+ *  → 0. The rate is taken in basis points (rate × 100) so a FRACTIONAL rate (e.g. Finland 25.5%) is
+ *  applied exactly instead of being truncated to a whole percent. */
 function lineVat(net: string, rate: Fa3VatRate): string {
   if (typeof rate !== 'number') return '0.00'
   const netCents = toCents(net)
   const sign = netCents < 0n ? -1n : 1n
-  const mag = (netCents < 0n ? -netCents : netCents) * BigInt(Math.round(rate))
-  const vatMag = (mag + 50n) / 100n
+  const rateBp = BigInt(Math.round(rate * 100)) // basis points: 25.5% → 2550
+  const mag = (netCents < 0n ? -netCents : netCents) * rateBp
+  const vatMag = (mag + 5000n) / 10000n // ÷100 (percent) ÷100 (bp), round half-up
   return fromCents(sign * vatMag)
 }
 

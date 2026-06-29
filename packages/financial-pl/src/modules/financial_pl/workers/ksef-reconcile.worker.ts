@@ -10,7 +10,7 @@ import { emitFinancialPlEvent } from '../events'
  *  - a stale `processing` row that carries BOTH `sessionReference` and
  *    `invoiceReference` provably reached KSeF, so it is recovered by RE-POLLING:
  *    a cutoff-guarded CAS bump (attemptCount/updatedAt) that KEEPS status
- *    `processing`, then a `financial_pl.ksef_submission.repoll` emit. The repoll
+ *    `processing`, then a `financial_pl.ksef_submission.repoll_requested` emit. The repoll
  *    subscriber asks KSeF for the status/UPO (read-only — never re-sends) and, if
  *    KSeF has no record / the status stays non-terminal, falls back to a re-send.
  *  - a stale `processing` row WITHOUT both references (a true orphan: the send
@@ -152,7 +152,7 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
     if (claimed > 0) {
       offlineSent += 1
       await emitFinancialPlEvent(
-        'financial_pl.ksef_submission.send_offline',
+        'financial_pl.ksef_submission.offline_send_requested',
         { submissionId: candidate.id, organizationId, tenantId },
         { persistent: true },
       )
@@ -182,7 +182,7 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
       if (claimed > 0) {
         repolled += 1
         await emitFinancialPlEvent(
-          'financial_pl.ksef_submission.repoll',
+          'financial_pl.ksef_submission.repoll_requested',
           { submissionId: candidate.id, organizationId, tenantId },
           { persistent: true },
         )

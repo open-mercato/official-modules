@@ -636,6 +636,40 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "text"
+        },
+        "bad_debt_relief_period": {
+          "name": "bad_debt_relief_period",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "bad_debt_termin_platnosci": {
+          "name": "bad_debt_termin_platnosci",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "date"
         }
       },
       "indexes": [

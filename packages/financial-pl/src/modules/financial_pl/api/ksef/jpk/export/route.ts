@@ -7,6 +7,7 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { CommandRuntimeContext, CommandBus } from '@open-mercato/shared/lib/commands'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { JpkVatFiling } from '../../../../data/entities'
 import { jpkGenerateSchema, type JpkGenerateInput } from '../../../../data/validators'
@@ -43,9 +44,27 @@ async function resolveScope(req: Request) {
  */
 export async function POST(req: Request) {
   try {
-    const { container, auth, scope, organizationId } = await resolveScope(req)
+    const { container, auth, scope, organizationId, tenantId } = await resolveScope(req)
     const url = new URL(req.url)
     const parsed = querySchema.parse({ filingId: url.searchParams.get('filingId') ?? '' })
+
+    // Run the mutation-guard registry around this custom write, like every sibling mutating route
+    // (invoice-meta / submissions / certificates), so any registered policy / optimistic-lock /
+    // conflict guard for the JPK-filing resource applies to generation too (M7).
+    const guardResult = await validateCrudMutationGuard(container, {
+      tenantId,
+      organizationId,
+      userId: auth.sub ?? null,
+      resourceKind: 'financial_pl.jpk_filing',
+      resourceId: parsed.filingId,
+      operation: 'custom',
+      requestMethod: req.method,
+      requestHeaders: req.headers,
+      mutationPayload: { filingId: parsed.filingId },
+    })
+    if (guardResult && !guardResult.ok) {
+      return NextResponse.json(guardResult.body, { status: guardResult.status })
+    }
 
     const ctx: CommandRuntimeContext = {
       container,
@@ -60,6 +79,21 @@ export async function POST(req: Request) {
       'financial_pl.jpk.generate',
       { input: { filingId: parsed.filingId }, ctx },
     )
+
+    if (guardResult?.ok && guardResult.shouldRunAfterSuccess) {
+      await runCrudMutationGuardAfterSuccess(container, {
+        tenantId,
+        organizationId,
+        userId: auth.sub ?? null,
+        resourceKind: 'financial_pl.jpk_filing',
+        resourceId: parsed.filingId,
+        operation: 'custom',
+        requestMethod: req.method,
+        requestHeaders: req.headers,
+        metadata: guardResult.metadata ?? null,
+      })
+    }
+
     return NextResponse.json({ ok: true, filingId: result?.filingId, status: result?.status }, { status: 200 })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })

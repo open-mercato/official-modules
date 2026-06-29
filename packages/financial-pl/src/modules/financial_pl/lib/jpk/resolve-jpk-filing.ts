@@ -35,6 +35,8 @@ import {
 } from '../fa3-mapping'
 import { deriveJpkVatMarking } from '../jpk-vat-marking'
 import { type ResolveFa3QueryEngine } from '../resolve-fa3-from-invoice'
+import { resolveMetaExchangeRate } from '../resolve-fa3-advance'
+import { isInvoiceIssued } from '../invoice-status'
 import type { BuildJpkXmlInput, JpkPodmiot1 } from './build-jpk-xml'
 import { buildSprzedazRow, type BuildSprzedazInput, type JpkVatBucket } from './build-sprzedaz'
 import { buildZakupRows, type JpkTransactionClass } from './build-zakup'
@@ -92,6 +94,22 @@ function isTruthyFlag(value: unknown): boolean {
   if (typeof value === 'boolean') return value
   const text = asString(value)
   return text === 'true' || text === '1'
+}
+
+/** Format a 4-dp-scaled BigInt back to a signed decimal string with 4 fraction digits, so the
+ *  shared `buildVatBreakdown` (`toScaled4`) re-parses it exactly (no precision loss before summing). */
+function scaled4ToString4dp(scaled4: bigint): string {
+  const negative = scaled4 < 0n
+  const magnitude = negative ? -scaled4 : scaled4
+  const whole = magnitude / 10000n
+  const frac = (magnitude % 10000n).toString().padStart(4, '0')
+  return `${negative ? '-' : ''}${whole.toString()}.${frac}`
+}
+
+/** Convert a numeric(18,4) amount to PLN at the given 4-dp-scaled FX rate, returning a 4-dp string
+ *  (amount[4dp] × fx[4dp] = 8dp → /1e4 = 4dp). JPK_V7 amounts are statutorily in PLN. */
+function toPlnString4dp(amount: unknown, fxScaled4: bigint): string {
+  return scaled4ToString4dp((toScaled4(amount) * fxScaled4) / 10000n)
 }
 
 /** Read the buyer/supplier party from a sales document's plaintext `metadata.buyerSnapshot`. */
@@ -204,6 +222,9 @@ async function resolveSalesRow(
     docId: string
     dowodSprzedazy: string
     sign: 1 | -1
+    /** When set, the filing is scoped to a single NIP — a document stamped with a different
+     *  context_nip (on its PL-meta) belongs to another taxpayer and is excluded (H4). */
+    contextNip: string | null
   },
 ): Promise<JpkSprzedazRow | null> {
   // PL-meta is keyed by the (corrected) sales invoice id; a credit memo's correction reuses the
@@ -219,10 +240,20 @@ async function resolveSalesRow(
     meta = metaRes.items?.[0]
   }
 
+  // Multi-NIP (H4): a filing scoped to a single NIP includes ONLY documents stamped with that NIP
+  // on their PL-meta. A credit memo inherits its corrected original's meta, so it is scoped by the
+  // original's context_nip — consistent with the purchase-side narrowing. When the filing carries
+  // no contextNip (single-NIP org) no scoping is applied.
+  if (opts.contextNip && asString(meta?.context_nip) !== opts.contextNip) return null
+
   // OSS invoices are excluded from JPK_V7M (reported in VIU-DO); skip them wholesale.
   if (isTruthyFlag(meta?.oss_procedure)) return null
 
-  const issueDate = toIsoDate(doc.issue_date) ?? toIsoDate(doc.issued_at)
+  // The issue date places the row in the register. Fall back through the alternative date columns
+  // (issued_at, then the metadata sale date) before dropping a document — silently dropping a
+  // finalized correction would understate output VAT (M2).
+  const issueDate =
+    toIsoDate(doc.issue_date) ?? toIsoDate(doc.issued_at) ?? toIsoDate(asRecord(doc.metadata).saleDate)
   if (!issueDate) return null // an un-dated document cannot be placed in the register
 
   // KSeF node. An invoice reports its own submission. A credit memo (faktura korygująca) reports
@@ -272,7 +303,33 @@ async function resolveSalesRow(
           total_net_amount: scaled4ToMoney2dp(-toScaled4(line.total_net_amount)),
           tax_amount: scaled4ToMoney2dp(-toScaled4(line.tax_amount)),
         }))
-  const vatBreakdown = buildVatBreakdown(signedLines, headerNet, headerVat) as JpkVatBucket[]
+
+  // JPK_V7 amounts are statutorily in PLN. A foreign-currency document is converted at the stored
+  // per-invoice exchange rate (PL-meta `exchange_rate`) — BOTH net and VAT, unlike the FA(3) path
+  // which converts only the output VAT (`P_14_xW`). A foreign-currency document with no resolvable
+  // rate cannot be lawfully placed in the register, so generation fails loud rather than filing a
+  // foreign-currency amount under a PLN field (H2). OSS rows are already excluded above.
+  const currencyCode = (asString(doc.currency_code) ?? 'PLN').toUpperCase()
+  let plnLines = signedLines
+  let plnHeaderNet = headerNet
+  let plnHeaderVat = headerVat
+  if (currencyCode !== 'PLN') {
+    const fxRate = resolveMetaExchangeRate(meta)
+    const fxScaled = fxRate ? toScaled4(fxRate) : 0n
+    if (fxScaled <= 0n) {
+      throw new Error(
+        `[internal] JPK: foreign-currency document ${opts.dowodSprzedazy} (${currencyCode}) has no exchange_rate; cannot convert to PLN`,
+      )
+    }
+    plnLines = signedLines.map((line) => ({
+      ...line,
+      total_net_amount: toPlnString4dp(line.total_net_amount, fxScaled),
+      tax_amount: toPlnString4dp(line.tax_amount, fxScaled),
+    }))
+    plnHeaderNet = toPlnString4dp(headerNet, fxScaled)
+    plnHeaderVat = toPlnString4dp(headerVat, fxScaled)
+  }
+  const vatBreakdown = buildVatBreakdown(plnLines, plnHeaderNet, plnHeaderVat) as JpkVatBucket[]
 
   const { gtu, procedures, typDokumentu } = readSalesMarkers(meta)
   return buildSprzedazRow({
@@ -288,6 +345,51 @@ async function resolveSalesRow(
     typDokumentu: opts.sign === 1 ? typDokumentu : undefined,
     gtu,
     procedures,
+  })
+}
+
+/**
+ * Resolve a NEGATED art. 89a ust. 1 bad-debt-relief correction row (M3) for an invoice flagged on
+ * its PL-meta with `bad_debt_relief_period` === the filing period. The row reverses the original
+ * sale's per-rate buckets (negated) and carries KorektaPodstawyOpodt + TerminPlatnosci so the
+ * declaration aggregates the output-VAT reduction into P_68/P_69 (and the negated K_ fields reduce
+ * P_37/P_38). The KSeF node references the original invoice. Returns null when un-markable / no due
+ * date. Bad-debt relief is a domestic VAT-rated correction — no FX path here.
+ */
+async function resolveBadDebtRow(
+  deps: ResolveJpkDeps,
+  scope: { tenantId: string; organizationIds: Array<string | null> },
+  invoice: InvoiceRow,
+  meta: MetaRow,
+): Promise<JpkSprzedazRow | null> {
+  const terminPlatnosci = toIsoDate(meta.bad_debt_termin_platnosci)
+  if (!terminPlatnosci) return null
+  const docId = asString(invoice.id)
+  if (!docId) return null
+  const ksef = await resolveSubmissionMarking(
+    deps,
+    scope,
+    { idField: 'sales_invoice_id', id: docId, documentKind: 'invoice' },
+    meta,
+    true,
+  )
+  if (!ksef) return null
+  const lines = await loadLines(deps.queryEngine, scope, E.sales.sales_invoice_line, 'invoice_id', docId)
+  const negatedLines: InvoiceLineRow[] = lines.map((line) => ({
+    ...line,
+    total_net_amount: scaled4ToMoney2dp(-toScaled4(line.total_net_amount)),
+    tax_amount: scaled4ToMoney2dp(-toScaled4(line.tax_amount)),
+  }))
+  const headerNet = scaled4ToMoney2dp(-toScaled4(invoice.grand_total_net_amount))
+  const headerVat = scaled4ToMoney2dp(-toScaled4(invoice.tax_total_amount))
+  const vatBreakdown = buildVatBreakdown(negatedLines, headerNet, headerVat) as JpkVatBucket[]
+  return buildSprzedazRow({
+    buyer: readBuyer(invoice),
+    dowodSprzedazy: asString(invoice.invoice_number) ?? docId,
+    dataWystawienia: toIsoDate(invoice.issue_date) ?? toIsoDate(invoice.issued_at) ?? terminPlatnosci,
+    ksef,
+    vatBreakdown,
+    korekta: { terminPlatnosci },
   })
 }
 
@@ -332,15 +434,16 @@ async function gatherMonthEvidence(
   for (let page = 1; ; page++) {
     const res = await deps.queryEngine.query<InvoiceRow>(E.sales.sales_invoice, {
       ...scope,
-      filters: { ...issuedInPeriod, is_immutable: { $eq: true } },
+      filters: { ...issuedInPeriod },
       page: { page, pageSize: invPageSize },
       sort: [{ field: 'issue_date', dir: 'asc' }],
     })
     const batch = res.items ?? []
     for (const invoice of batch) {
-      // Issued (immutable), non-proforma only — mirrors the send command's gate.
+      // Issued (immutable), non-proforma only — mirrors the send command's gate. Core has no
+      // `is_immutable` column; immutability is derived from the invoice's lifecycle `status`.
       if (asString(invoice.document_type) === 'proforma') continue
-      if (invoice.is_immutable !== true) continue
+      if (!isInvoiceIssued(invoice.status)) continue
       const id = asString(invoice.id)
       if (!id) continue
       const row = await resolveSalesRow(deps, scope, invoice, {
@@ -349,6 +452,7 @@ async function gatherMonthEvidence(
         docId: id,
         dowodSprzedazy: asString(invoice.invoice_number) ?? id,
         sign: 1,
+        contextNip,
       })
       if (row) sprzedaz.push(row)
     }
@@ -377,6 +481,7 @@ async function gatherMonthEvidence(
         docId: id,
         dowodSprzedazy: asString(memo.credit_memo_number) ?? id,
         sign: -1,
+        contextNip,
       })
       if (row) sprzedaz.push(row)
     }
@@ -417,6 +522,34 @@ async function gatherMonthEvidence(
     })
     zakup.push(zakupRow)
     if (selfAssess) sprzedaz.push(selfAssess)
+  }
+
+  // --- (4) art. 89a ust. 1 bad-debt-relief corrections claimed in THIS period (M3) -------------
+  // Invoices flagged on their PL-meta with `bad_debt_relief_period` === this period emit a NEGATED
+  // KorektaPodstawyOpodt SprzedazWiersz. The original invoice was issued in an earlier period, so
+  // this never double-counts the normal in-period sales gather. NIP-scoped like every other read.
+  const reliefPeriod = `${year}-${String(month).padStart(2, '0')}`
+  const reliefMetaRes = await deps.queryEngine.query<MetaRow>('financial_pl:sales_invoice_pl_meta', {
+    ...scope,
+    filters: {
+      bad_debt_relief_period: { $eq: reliefPeriod },
+      deleted_at: { $eq: null },
+      ...(contextNip ? { context_nip: { $eq: contextNip } } : {}),
+    },
+    page: { page: 1, pageSize: 500 },
+  })
+  for (const reliefMeta of reliefMetaRes.items ?? []) {
+    const invoiceId = asString(reliefMeta.sales_invoice_id)
+    if (!invoiceId) continue
+    const invRes = await deps.queryEngine.query<InvoiceRow>(E.sales.sales_invoice, {
+      ...scope,
+      filters: { id: { $eq: invoiceId }, deleted_at: { $eq: null } },
+      page: { page: 1, pageSize: 1 },
+    })
+    const invoice = invRes.items?.[0]
+    if (!invoice) continue
+    const row = await resolveBadDebtRow(deps, scope, invoice, reliefMeta)
+    if (row) sprzedaz.push(row)
   }
 
   return { sprzedaz, zakup }

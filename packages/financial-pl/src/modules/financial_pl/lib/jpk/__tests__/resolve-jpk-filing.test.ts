@@ -163,6 +163,95 @@ describe('resolveJpkFiling — multi-NIP purchase scoping (H4)', () => {
   })
 })
 
+describe('resolveJpkFiling — multi-NIP SALES scoping (H4)', () => {
+  it('includes only sales invoices whose PL-meta context_nip matches the filing NIP', async () => {
+    const filing = makeFiling({ variant: 'V7M', month: 6, contextNip: '2481632647' })
+    const rows: Rows = {
+      'sales:sales_invoice': [
+        { id: 'inv-a', invoice_number: 'FV/A', issue_date: '2026-06-10', grand_total_net_amount: '100.0000', tax_total_amount: '23.0000', status: 'issued', document_type: 'invoice', deleted_at: null, metadata: {} },
+        { id: 'inv-b', invoice_number: 'FV/B', issue_date: '2026-06-11', grand_total_net_amount: '200.0000', tax_total_amount: '46.0000', status: 'issued', document_type: 'invoice', deleted_at: null, metadata: {} },
+      ],
+      'sales:sales_invoice_line': [
+        { line_number: 1, invoice_id: 'inv-a', total_net_amount: '100.0000', tax_amount: '23.0000', tax_rate: '23.0000', deleted_at: null },
+        { line_number: 1, invoice_id: 'inv-b', total_net_amount: '200.0000', tax_amount: '46.0000', tax_rate: '23.0000', deleted_at: null },
+      ],
+      'financial_pl:ksef_submission': [
+        { sales_invoice_id: 'inv-a', document_kind: 'invoice', status: 'accepted', ksef_number: 'A-NR', deleted_at: null, created_at: '2026-06-10' },
+        { sales_invoice_id: 'inv-b', document_kind: 'invoice', status: 'accepted', ksef_number: 'B-NR', deleted_at: null, created_at: '2026-06-11' },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [
+        { sales_invoice_id: 'inv-a', context_nip: '2481632647', deleted_at: null },
+        { sales_invoice_id: 'inv-b', context_nip: '9999999999', deleted_at: null },
+      ],
+    }
+    const result = await resolveJpkFiling(deps(rows, []), args(filing))
+    expect(result.ewidencja!.sprzedaz).toHaveLength(1)
+    expect(result.ewidencja!.sprzedaz[0].dowodSprzedazy).toBe('FV/A')
+  })
+})
+
+describe('resolveJpkFiling — purchase org isolation (M12)', () => {
+  it('excludes a purchase record owned by another organization', async () => {
+    const filing = makeFiling({ variant: 'V7M', month: 6 })
+    const purchases = [
+      purchase(6, '100.00', { documentNumber: 'FZ/MINE' }),
+      purchase(6, '200.00', { organizationId: 'other-org', documentNumber: 'FZ/OTHER' }),
+    ]
+    const result = await resolveJpkFiling(deps({}, purchases), args(filing))
+    expect(result.ewidencja!.zakup).toHaveLength(1)
+    expect(result.ewidencja!.zakup[0].dowodZakupu).toBe('FZ/MINE')
+  })
+})
+
+describe('resolveJpkFiling — foreign-currency conversion to PLN (H2)', () => {
+  const fxRows = (withRate: boolean): Rows => ({
+    'sales:sales_invoice': [
+      { id: 'inv-1', invoice_number: 'FV/EUR', issue_date: '2026-06-10', currency_code: 'EUR', grand_total_net_amount: '100.0000', tax_total_amount: '23.0000', status: 'issued', document_type: 'invoice', deleted_at: null, metadata: {} },
+    ],
+    'sales:sales_invoice_line': [
+      { line_number: 1, invoice_id: 'inv-1', total_net_amount: '100.0000', tax_amount: '23.0000', tax_rate: '23.0000', deleted_at: null },
+    ],
+    'financial_pl:ksef_submission': [
+      { sales_invoice_id: 'inv-1', document_kind: 'invoice', status: 'accepted', ksef_number: 'NR', deleted_at: null, created_at: '2026-06-10' },
+    ],
+    'financial_pl:sales_invoice_pl_meta': [
+      withRate ? { sales_invoice_id: 'inv-1', exchange_rate: '4.0000', deleted_at: null } : { sales_invoice_id: 'inv-1', deleted_at: null },
+    ],
+  })
+
+  it('converts a EUR invoice net+VAT to PLN at the meta exchange rate', async () => {
+    const result = await resolveJpkFiling(deps(fxRows(true), []), args(makeFiling({ variant: 'V7M', month: 6 })))
+    // 100 EUR × 4.0 = 400 PLN (K_19); 23 EUR × 4.0 = 92 PLN (K_20)
+    expect(result.ewidencja!.sprzedaz[0].k).toEqual({ K_19: '400.00', K_20: '92.00' })
+  })
+
+  it('throws for a foreign-currency invoice with no exchange rate (cannot file a PLN amount)', async () => {
+    await expect(resolveJpkFiling(deps(fxRows(false), []), args(makeFiling({ variant: 'V7M', month: 6 })))).rejects.toThrow(
+      /exchange_rate|PLN/,
+    )
+  })
+})
+
+describe('resolveJpkFiling — line-less credit memo rate (M1)', () => {
+  it('derives the rate from the header magnitude (8%), not the old 23% fallback', async () => {
+    const rows: Rows = {
+      'sales:sales_invoice': [],
+      'sales:sales_credit_memo': [
+        { id: 'cm-1', invoice_id: 'inv-orig', credit_memo_number: 'KOR/8', issue_date: '2026-06-20', grand_total_net_amount: '100.0000', tax_total_amount: '8.0000', status: 'issued', deleted_at: null, metadata: {} },
+      ],
+      'sales:sales_credit_memo_line': [], // no lines → header fallback
+      'financial_pl:ksef_submission': [
+        { credit_memo_id: 'cm-1', document_kind: 'credit_memo', status: 'accepted', ksef_number: 'MEMO-NR', deleted_at: null, created_at: '2026-06-20' },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [],
+    }
+    const result = await resolveJpkFiling(deps(rows, []), args(makeFiling({ variant: 'V7M', month: 6 })))
+    expect(result.ewidencja!.sprzedaz).toHaveLength(1)
+    // |8 / 100| → 8% → K_17/K_18 (negated), NOT K_19/K_20.
+    expect(result.ewidencja!.sprzedaz[0].k).toEqual({ K_17: '-100.00', K_18: '-8.00' })
+  })
+})
+
 describe('resolveJpkFiling — credit-memo gating + NrKSeF (M3 / M4)', () => {
   const invoice = {
     id: 'inv-1',
@@ -170,7 +259,7 @@ describe('resolveJpkFiling — credit-memo gating + NrKSeF (M3 / M4)', () => {
     issue_date: '2026-06-20',
     grand_total_net_amount: '100.0000',
     tax_total_amount: '23.0000',
-    is_immutable: true,
+    status: 'issued',
     document_type: 'invoice',
     deleted_at: null,
     metadata: { buyerSnapshot: { nip: '3755747347', companyName: 'Nabywca' } },
@@ -225,16 +314,62 @@ describe('resolveJpkFiling — credit-memo gating + NrKSeF (M3 / M4)', () => {
   })
 })
 
+describe('resolveJpkFiling — art. 89a bad-debt relief (M3)', () => {
+  it('emits a NEGATED KorektaPodstawyOpodt correction row and aggregates P_68/P_69 (<= 0)', async () => {
+    const filing = makeFiling({ variant: 'V7M', month: 6 })
+    const rows: Rows = {
+      // Original issued in March (NOT in the June normal-sales gather — no double count).
+      'sales:sales_invoice': [
+        { id: 'inv-orig', invoice_number: 'FV/ORIG', issue_date: '2026-03-10', grand_total_net_amount: '1000.0000', tax_total_amount: '230.0000', status: 'issued', document_type: 'invoice', deleted_at: null, metadata: { buyerSnapshot: { nip: '3755747347', companyName: 'Nabywca' } } },
+      ],
+      'sales:sales_invoice_line': [
+        { line_number: 1, invoice_id: 'inv-orig', total_net_amount: '1000.0000', tax_amount: '230.0000', tax_rate: '23.0000', deleted_at: null },
+      ],
+      'sales:sales_credit_memo': [],
+      'financial_pl:ksef_submission': [
+        { sales_invoice_id: 'inv-orig', document_kind: 'invoice', status: 'accepted', ksef_number: 'ORIG-NR', deleted_at: null, created_at: '2026-03-10' },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [
+        { sales_invoice_id: 'inv-orig', bad_debt_relief_period: '2026-06', bad_debt_termin_platnosci: '2026-03-15', deleted_at: null },
+      ],
+    }
+    const result = await resolveJpkFiling(deps(rows, []), args(filing))
+    expect(result.ewidencja!.sprzedaz).toHaveLength(1)
+    const row = result.ewidencja!.sprzedaz[0]
+    expect(row.k).toEqual({ K_19: '-1000.00', K_20: '-230.00' })
+    expect(row.korektaPodstawyOpodt).toBe(true)
+    expect(row.terminPlatnosci).toBe('2026-03-15')
+    // Declaration: bad-debt relief reduces output tax, so P_68/P_69 are negative.
+    expect(result.deklaracja!.pozycje.P_68).toBe('-1000')
+    expect(result.deklaracja!.pozycje.P_69).toBe('-230')
+  })
+})
+
 describe('resolveJpkFiling — guards', () => {
   it('skips an invoice with no determinate KSeF marking (pending)', async () => {
     const filing = makeFiling({ variant: 'V7M', month: 6 })
     const rows: Rows = {
-      'sales:sales_invoice': [{ id: 'inv-1', invoice_number: 'FV/1', issue_date: '2026-06-10', grand_total_net_amount: '100.0000', tax_total_amount: '23.0000', is_immutable: true, document_type: 'invoice', metadata: {} }],
+      'sales:sales_invoice': [{ id: 'inv-1', invoice_number: 'FV/1', issue_date: '2026-06-10', grand_total_net_amount: '100.0000', tax_total_amount: '23.0000', status: 'issued', document_type: 'invoice', metadata: {} }],
       'sales:sales_credit_memo': [],
       'financial_pl:ksef_submission': [], // no submission ⇒ pending ⇒ skipped
       'financial_pl:sales_invoice_pl_meta': [],
     }
     const result = await resolveJpkFiling(deps(rows, []), args(filing))
+    expect(result.ewidencja!.sprzedaz).toHaveLength(0)
+  })
+
+  it('H1: a draft (non-issued) invoice is excluded from the register', async () => {
+    const filing = makeFiling({ variant: 'V7M', month: 6 })
+    const rows: Rows = {
+      'sales:sales_invoice': [{ id: 'inv-1', invoice_number: 'FV/1', issue_date: '2026-06-10', grand_total_net_amount: '100.0000', tax_total_amount: '23.0000', status: 'draft', document_type: 'invoice', metadata: {} }],
+      'sales:sales_credit_memo': [],
+      'financial_pl:ksef_submission': [
+        { sales_invoice_id: 'inv-1', document_kind: 'invoice', status: 'accepted', ksef_number: 'INV-NR', deleted_at: null, created_at: '2026-06-10' },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [],
+    }
+    const result = await resolveJpkFiling(deps(rows, []), args(filing))
+    // Even with an accepted KSeF marking, a draft invoice is not yet immutable ⇒ excluded.
     expect(result.ewidencja!.sprzedaz).toHaveLength(0)
   })
 

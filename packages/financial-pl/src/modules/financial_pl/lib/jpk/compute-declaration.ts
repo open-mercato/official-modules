@@ -173,10 +173,14 @@ export function computeJpkDeclaration(args: {
   const badDebt = nalRows.filter((row) => row.korektaPodstawyOpodt && row.terminPlatnosci)
   const P_68s = sumField(badDebt, 'K_15') + sumField(badDebt, 'K_17') + sumField(badDebt, 'K_19')
   const P_69s = sumField(badDebt, 'K_16') + sumField(badDebt, 'K_18') + sumField(badDebt, 'K_20')
+  // art. 89a ust. 1 relief REDUCES output tax, so P_68/P_69 are NON-POSITIVE. Clamp defensively so
+  // a mis-signed evidence row can never file a positive (illegal) bad-debt correction.
+  const P_68c = P_68s > 0n ? 0n : P_68s
+  const P_69c = P_69s > 0n ? 0n : P_69s
   // P_68/P_69 are an XSD-grouped pair (and TKwotaC allows the negative bad-debt values).
-  if (P_68s !== 0n || P_69s !== 0n) {
-    d.P_68 = pln(P_68s)
-    d.P_69 = pln(P_69s)
+  if (P_68c !== 0n || P_69c !== 0n) {
+    d.P_68 = pln(P_68c)
+    d.P_69 = pln(P_69c)
   }
 
   if (inputs.P_ORDZU) d.P_ORDZU = inputs.P_ORDZU

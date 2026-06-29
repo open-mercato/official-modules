@@ -120,13 +120,42 @@ describe('JPK commands — create path persists under the resolved scope', () =>
 
     const result = await upsertPurchaseRecordCommand.execute(purchaseInput(), makeCtx({ em }))
 
-    expect(result).toEqual({ id: 'NEW' })
+    expect(result).toMatchObject({ id: 'NEW' })
     expect(create).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ organizationId: ORG, tenantId: TEN }),
     )
     expect(persist).toHaveBeenCalled()
     expect(flush).toHaveBeenCalled()
+  })
+})
+
+describe('JPK commands — undoable (M8)', () => {
+  it('delete is undoable: execute soft-deletes + returns a snapshot, undo restores deleted_at', async () => {
+    const record: Record<string, unknown> = { id: REC, organizationId: ORG, tenantId: TEN, deletedAt: null, updatedAt: null }
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => record), flush: jest.fn(async () => {}) }
+
+    const result = await deletePurchaseRecordCommand.execute({ id: REC }, makeCtx({ em }))
+    expect(record.deletedAt).toBeInstanceOf(Date)
+    expect(result.undo).toMatchObject({ kind: 'purchase_record', op: 'delete', id: REC, tenantId: TEN, organizationId: ORG })
+
+    const logEntry = { commandPayload: { undo: result.undo } }
+    await deletePurchaseRecordCommand.undo!({ ctx: makeCtx({ em }), logEntry } as never)
+    expect(record.deletedAt).toBeNull()
+  })
+
+  it('upsert create is undoable: undo soft-deletes the created row', async () => {
+    const created: Record<string, unknown> = { id: 'NEW', organizationId: ORG, tenantId: TEN, deletedAt: null, updatedAt: null }
+    const em: Record<string, unknown> = {
+      findOne: jest.fn(async () => created),
+      create: jest.fn(() => created),
+      persist: () => ({ flush: async () => {} }),
+      flush: jest.fn(async () => {}),
+    }
+    const result = await upsertPurchaseRecordCommand.execute(purchaseInput(), makeCtx({ em }))
+    expect(result.undo).toMatchObject({ op: 'create', id: 'NEW' })
+    await upsertPurchaseRecordCommand.undo!({ ctx: makeCtx({ em }), logEntry: { commandPayload: { undo: result.undo } } } as never)
+    expect(created.deletedAt).toBeInstanceOf(Date)
   })
 })
 

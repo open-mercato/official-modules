@@ -48,7 +48,12 @@ export async function GET(req: Request) {
     if (Array.isArray(orgIds) && orgIds.length > 0) accessFilter.organizationId = { $in: orgIds }
 
     const em = (container.resolve('em') as EntityManager).fork()
-    const located = await em.findOne(KsefSubmission, accessFilter)
+    // Access/ownership check only — project the encrypted columns (invoice_xml/upo_xml) OUT so this
+    // raw findOne never materializes ciphertext; the receipt is read via findOneWithDecryption below
+    // (L1: same project-out carve-out the list routes carry).
+    const located = await em.findOne(KsefSubmission, accessFilter, {
+      fields: ['id', 'status', 'organizationId', 'tenantId'],
+    })
     if (!located) throw new CrudHttpError(404, { error: '[internal] KSeF submission not found' })
     // A UPO only exists once KSeF accepted the invoice; never serve a blank/partial
     // receipt for a queued/processing/rejected submission.

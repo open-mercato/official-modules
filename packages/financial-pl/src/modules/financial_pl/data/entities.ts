@@ -316,6 +316,16 @@ export class SalesInvoicePlMeta {
   @Property({ name: 'doc_type', type: 'text', nullable: true })
   docType?: JpkTypDokumentuColumn | null
 
+  // art. 89a ust. 1 creditor bad-debt relief (SPEC-012): the period (`YYYY-MM`) in which to claim
+  // the output-VAT reduction for this unpaid invoice, and the invoice's payment due date
+  // (`TerminPlatnosci`). Both null ⇒ no relief. The JPK resolver emits a NEGATED
+  // KorektaPodstawyOpodt SprzedazWiersz (→ P_68/P_69) in that period.
+  @Property({ name: 'bad_debt_relief_period', type: 'text', nullable: true })
+  badDebtReliefPeriod?: string | null
+
+  @Property({ name: 'bad_debt_termin_platnosci', type: 'date', nullable: true })
+  badDebtTerminPlatnosci?: Date | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 

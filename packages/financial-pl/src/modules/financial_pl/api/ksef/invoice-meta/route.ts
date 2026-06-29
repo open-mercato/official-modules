@@ -66,6 +66,8 @@ function projectMeta(record: SalesInvoicePlMeta) {
     gtuCodes: record.gtuCodes ?? [],
     procedureMarkings,
     typDokumentu: record.docType ?? null,
+    badDebtReliefPeriod: record.badDebtReliefPeriod ?? null,
+    badDebtTerminPlatnosci: record.badDebtTerminPlatnosci ?? null,
     ksefStatus: record.ksefStatus,
     ksefNumber: record.ksefNumber ?? null,
     updatedAt: record.updatedAt ?? null,
@@ -216,6 +218,9 @@ export async function PUT(req: Request) {
       }
     }
     if (parsed.typDokumentu !== undefined) record.docType = (parsed.typDokumentu ?? null) as JpkTypDokumentuColumn | null
+    if (parsed.badDebtReliefPeriod !== undefined) record.badDebtReliefPeriod = parsed.badDebtReliefPeriod ?? null
+    if (parsed.badDebtTerminPlatnosci !== undefined)
+      record.badDebtTerminPlatnosci = parsed.badDebtTerminPlatnosci ? new Date(parsed.badDebtTerminPlatnosci) : null
     record.updatedAt = now
     if (!existing) em.persist(record)
     await em.flush()

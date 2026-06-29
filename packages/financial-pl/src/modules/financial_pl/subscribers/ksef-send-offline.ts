@@ -21,7 +21,7 @@ import { emitFinancialPlEvent } from '../events'
  * registration — the same idempotency / 440-heal as the online submit path.
  */
 export const metadata = {
-  event: 'financial_pl.ksef_submission.send_offline',
+  event: 'financial_pl.ksef_submission.offline_send_requested',
   persistent: true,
   id: 'financial_pl:ksef-send-offline',
 }

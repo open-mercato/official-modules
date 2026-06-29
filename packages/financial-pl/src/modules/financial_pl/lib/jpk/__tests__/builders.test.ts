@@ -22,10 +22,33 @@ describe('buildSprzedazRow (rate → K mapping)', () => {
     expect(buildSprzedazRow({ ...base, vatBreakdown: [{ rate: 'zw', net: '100.00', vat: '0.00' }] })?.k).toEqual({ K_10: '100.00' })
     expect(buildSprzedazRow({ ...base, vatBreakdown: [{ rate: 'oo', net: '100.00', vat: '23.00' }] })?.k).toEqual({ K_31: '100.00', K_32: '23.00' })
   })
+  it('H5: 0% splits by buyer country — domestic K_13, intra-EU supply (WDT) K_21, export K_22', () => {
+    const zero = [{ rate: 0 as const, net: '100.00', vat: '0.00' }]
+    // PL buyer → domestic 0% (K_13)
+    expect(buildSprzedazRow({ ...base, vatBreakdown: zero })?.k).toEqual({ K_13: '100.00' })
+    // EU buyer (DE) → intra-community supply (WDT, K_21)
+    expect(buildSprzedazRow({ ...base, buyer: { ...buyer, countryCode: 'DE' }, vatBreakdown: zero })?.k).toEqual({ K_21: '100.00' })
+    // Greece (ISO GR / EU code EL) still resolves as EU → K_21
+    expect(buildSprzedazRow({ ...base, buyer: { ...buyer, countryCode: 'GR' }, vatBreakdown: zero })?.k).toEqual({ K_21: '100.00' })
+    // non-EU buyer (US) → export (K_22)
+    expect(buildSprzedazRow({ ...base, buyer: { ...buyer, countryCode: 'US' }, vatBreakdown: zero })?.k).toEqual({ K_22: '100.00' })
+    // missing country → domestic
+    expect(buildSprzedazRow({ ...base, buyer: { nip: null, name: null }, vatBreakdown: zero })?.k).toEqual({ K_13: '100.00' })
+  })
   it('DROPS the OSS bucket (VIU-DO) and returns null for a purely-OSS sale', () => {
     expect(buildSprzedazRow({ ...base, vatBreakdown: [{ rate: 'oss', net: '100.00', vat: '19.00' }] })).toBeNull()
     const mixed = buildSprzedazRow({ ...base, vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }, { rate: 'oss', net: '50.00', vat: '9.50' }] })
     expect(mixed?.k).toEqual({ K_19: '100.00', K_20: '23.00' }) // OSS dropped
+  })
+  it('L8: korekta carrying BOTH dates emits only TerminPlatnosci (XSD choice — mutually exclusive)', () => {
+    const row = buildSprzedazRow({
+      ...base,
+      vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+      korekta: { terminPlatnosci: '2026-03-15', dataZaplaty: '2026-05-01' },
+    })
+    expect(row?.korektaPodstawyOpodt).toBe(true)
+    expect(row?.terminPlatnosci).toBe('2026-03-15')
+    expect(row?.dataZaplaty).toBeUndefined()
   })
   it('carries BRAK for a no-NIP consumer + GTU/markers', () => {
     const row = buildSprzedazRow({ ...base, buyer: { name: null, nip: null }, vatBreakdown: [{ rate: 23, net: '10.00', vat: '2.30' }], gtu: ['GTU_01'], procedures: { TP: true } })

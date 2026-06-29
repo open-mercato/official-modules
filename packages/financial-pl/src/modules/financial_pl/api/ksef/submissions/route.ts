@@ -12,7 +12,7 @@ import { parseIdsParam } from '@open-mercato/shared/lib/crud/ids'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { findAndCountWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission, type KsefSubmissionStatusColumn } from '../../../data/entities'
-import { ksefSubmissionSendSchema, type KsefSubmissionSendInput } from '../../../data/validators'
+import { ksefSubmissionSendSchema, ksefSubmissionListQuerySchema, type KsefSubmissionSendInput } from '../../../data/validators'
 
 const KSEF_SUBMISSION_STATUSES: ReadonlySet<KsefSubmissionStatusColumn> = new Set([
   'not_applicable', 'ready', 'queued', 'processing', 'accepted', 'rejected', 'offline_issued',
@@ -65,8 +65,13 @@ export async function GET(req: Request) {
     if (Array.isArray(orgIds) && orgIds.length > 0) filter.organizationId = { $in: orgIds }
     const ids = parseIdsParam(url.searchParams.get('ids'))
     if (ids && ids.length > 0) filter.id = { $in: ids }
-    const salesInvoiceId = url.searchParams.get('salesInvoiceId')
-    if (salesInvoiceId) filter.salesInvoiceId = salesInvoiceId
+    // Validate salesInvoiceId as a UUID via the shared list-query schema (L2/L3) — an invalid value
+    // returns a clean 400 rather than silently matching zero rows.
+    const queryCheck = ksefSubmissionListQuerySchema.safeParse({
+      salesInvoiceId: url.searchParams.get('salesInvoiceId') ?? undefined,
+    })
+    if (!queryCheck.success) throw new CrudHttpError(400, { error: 'Invalid salesInvoiceId (expected a UUID)' })
+    if (queryCheck.data.salesInvoiceId) filter.salesInvoiceId = queryCheck.data.salesInvoiceId
     const status = url.searchParams.get('status')
     if (status) {
       // Validate against the known status union rather than blindly casting — an unknown value

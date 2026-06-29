@@ -187,7 +187,7 @@ describe('ksef-reconcile worker', () => {
       expect.objectContaining({ attemptCount: 1 }),
     )
     expect(emitFinancialPlEvent).toHaveBeenCalledWith(
-      'financial_pl.ksef_submission.send_offline',
+      'financial_pl.ksef_submission.offline_send_requested',
       { submissionId: 'OFF1', organizationId: 'O', tenantId: 'T' },
       { persistent: true },
     )
@@ -202,7 +202,7 @@ describe('ksef-reconcile worker', () => {
     })
     await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
     expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
-      'financial_pl.ksef_submission.send_offline',
+      'financial_pl.ksef_submission.offline_send_requested',
       expect.anything(),
       expect.anything(),
     )

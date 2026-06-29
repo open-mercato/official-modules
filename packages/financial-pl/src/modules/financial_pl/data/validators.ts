@@ -553,6 +553,15 @@ export const jpkFilingUpsertSchema = z.object({
       path: ['correctionScope'],
     })
   }
+  // V7K: a supplied quarter must agree with the filing month (quarter = ceil(month / 3)), else the
+  // Deklaracja would carry a Kwartal inconsistent with its evidence month (M4).
+  if (d.variant === 'V7K' && d.quarter !== undefined && d.quarter !== Math.ceil(d.month / 3)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'quarter must equal ceil(month / 3) for a V7K filing',
+      path: ['quarter'],
+    })
+  }
 })
 
 /** Generate the JPK_V7 XML for a persisted filing. */
@@ -658,6 +667,17 @@ export const invoiceMetaPutSchema = z.object({
   procedureMarkings: procedureMarkingsSchema.optional(),
   // Pure-JPK TypDokumentu (validated against JPK_TYP_DOKUMENTU).
   typDokumentu: z.enum(JPK_TYP_DOKUMENTU).nullish(),
+  // art. 89a ust. 1 creditor bad-debt relief: the YYYY-MM period to claim the relief in, and the
+  // invoice's payment due date (TerminPlatnosci). Setting both flags this invoice for a negated
+  // KorektaPodstawyOpodt correction row (→ P_68/P_69) in that JPK period (SPEC-012).
+  badDebtReliefPeriod: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'badDebtReliefPeriod must be YYYY-MM')
+    .nullish(),
+  badDebtTerminPlatnosci: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'badDebtTerminPlatnosci must be YYYY-MM-DD')
+    .nullish(),
 })
 
 export type Fa3PartyInput = z.infer<typeof fa3PartySchema>
