@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
-import { FileCog, Plus } from 'lucide-react'
+import { FileCog, Plus, Send } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@open-mercato/ui/primitives/card'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,9 @@ type FilingRow = {
   celZlozenia: number
   status: string
   generatedAt: string | null
+  submissionReference: string | null
+  submittedAt: string | null
+  hasUpo: boolean
 }
 
 type FilingResponse = {
@@ -53,6 +57,7 @@ type FilingResponse = {
 
 type FilingUpsertResponse = { ok?: boolean; id?: string; error?: string }
 type GenerateResponse = { ok?: boolean; filingId?: string; status?: string; error?: string }
+type SubmitResponse = { filingId?: string; status?: string; referenceNumber?: string; error?: string }
 
 type PurchaseRecordRow = {
   id: string
@@ -132,6 +137,7 @@ export default function FinancialPlJpkPage() {
   const [kodUrzedu, setKodUrzedu] = React.useState('')
   const [contextNip, setContextNip] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [submittingFilingId, setSubmittingFilingId] = React.useState<string | null>(null)
 
   // --- Filings ---
   const [filings, setFilings] = React.useState<FilingRow[]>([])
@@ -199,6 +205,9 @@ export default function FinancialPlJpkPage() {
           celZlozenia: asNumber(item.celZlozenia, 1),
           status: asString(item.status) ?? 'draft',
           generatedAt: asString(item.generatedAt),
+          submissionReference: asString(item.submissionReference),
+          submittedAt: asString(item.submittedAt),
+          hasUpo: item.hasUpo === true,
         })),
       )
       setFilingsTotal(typeof payload.total === 'number' ? payload.total : items.length)
@@ -336,6 +345,46 @@ export default function FinancialPlJpkPage() {
     [t],
   )
 
+  const handleSubmit = React.useCallback(
+    async (row: FilingRow) => {
+      if (row.status !== 'generated') return
+      setSubmittingFilingId(row.id)
+      try {
+        const call = await runMutation({
+          operation: async () => {
+            const call = await apiCall<SubmitResponse>('/api/financial_pl/ksef/jpk/submit', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ filingId: row.id }),
+            })
+            if (!call.ok) {
+              const fallback =
+                call.status === 422
+                  ? t('financial_pl.jpkSubmit.signerMissing', 'JPK signer credential is missing.')
+                  : t('financial_pl.jpkSubmit.submit', 'Submit to MF')
+              throw new Error(call.result?.error ?? fallback)
+            }
+            return call
+          },
+          context: mutationContext,
+          mutationPayload: { action: 'submit', filingId: row.id },
+        })
+        const reference = call.result?.referenceNumber ?? row.submissionReference
+        const submitted = t('financial_pl.jpkSubmit.submitted', 'Submitted')
+        flash(reference ? `${submitted}: ${reference}` : submitted, 'success')
+        refresh()
+      } catch (err) {
+        flash(
+          err instanceof Error ? err.message : t('financial_pl.jpkSubmit.signerMissing', 'JPK signer credential is missing.'),
+          'error',
+        )
+      } finally {
+        setSubmittingFilingId(null)
+      }
+    },
+    [mutationContext, refresh, runMutation, t],
+  )
+
   const filingColumns = React.useMemo<ColumnDef<FilingRow>[]>(
     () => [
       {
@@ -369,8 +418,53 @@ export default function FinancialPlJpkPage() {
           <span className="text-sm text-muted-foreground">{formatDate(row.original.generatedAt)}</span>
         ),
       },
+      {
+        id: 'submission',
+        header: t('financial_pl.jpkSubmit.submit', 'Submit to MF'),
+        enableSorting: false,
+        cell: ({ row }) => {
+          const filing = row.original
+          if (filing.status === 'submitted') {
+            return (
+              <div className="flex flex-col items-start gap-1.5">
+                <StatusBadge variant="success" dot>
+                  {t('financial_pl.jpkSubmit.submitted', 'Submitted')}
+                </StatusBadge>
+                {filing.submissionReference ? (
+                  <span className="font-mono text-xs text-muted-foreground">{filing.submissionReference}</span>
+                ) : null}
+                <Tag variant={filing.hasUpo ? 'success' : 'warning'} dot>
+                  {filing.hasUpo
+                    ? t('financial_pl.jpkSubmit.upoAvailable', 'UPO available')
+                    : t('financial_pl.jpkSubmit.upoPending', 'UPO pending')}
+                </Tag>
+              </div>
+            )
+          }
+          if (filing.status !== 'generated') {
+            return <span className="text-sm text-muted-foreground">—</span>
+          }
+          const isSubmitting = submittingFilingId === filing.id
+          return (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={busy || submittingFilingId !== null}
+              onClick={() => {
+                void handleSubmit(filing)
+              }}
+            >
+              <Send className="h-4 w-4" aria-hidden />
+              {isSubmitting
+                ? t('financial_pl.jpkSubmit.submitting', 'Submitting')
+                : t('financial_pl.jpkSubmit.submit', 'Submit to MF')}
+            </Button>
+          )
+        },
+      },
     ],
-    [t],
+    [busy, handleSubmit, submittingFilingId, t],
   )
 
   const recordColumns = React.useMemo<ColumnDef<PurchaseRecordRow>[]>(
@@ -705,6 +799,9 @@ export default function FinancialPlJpkPage() {
           </div>
 
           {busy ? <LoadingMessage label={t('financial_pl.jpk.generate.busy', 'Generating JPK filing…')} /> : null}
+          {submittingFilingId ? (
+            <LoadingMessage label={t('financial_pl.jpkSubmit.submitting', 'Submitting')} />
+          ) : null}
         </div>
       </PageBody>
 

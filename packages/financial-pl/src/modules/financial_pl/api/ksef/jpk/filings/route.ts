@@ -32,6 +32,9 @@ function toRow(filing: JpkVatFiling) {
     declarationInputs: filing.declarationInputs ?? null,
     status: filing.status,
     generatedAt: filing.generatedAt ?? null,
+    submissionReference: filing.submissionReference ?? null,
+    submittedAt: filing.submittedAt ?? null,
+    hasUpo: Boolean(filing.upoXml),
     createdAt: filing.createdAt,
     updatedAt: filing.updatedAt ?? null,
   }

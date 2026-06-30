@@ -9,6 +9,7 @@ import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Label } from '@open-mercato/ui/primitives/label'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   Select,
   SelectContent,
@@ -29,6 +30,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { ErrorMessage } from '@open-mercato/ui/backend/detail/ErrorMessage'
+import { LoadingMessage } from '@open-mercato/ui/backend/detail/LoadingMessage'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { hasAllFeatures } from '@open-mercato/shared/security/features'
@@ -48,6 +50,18 @@ type CertificateListResponse = { items?: Array<Record<string, unknown>> }
 type EnrollResponse = { ok?: boolean; serial?: string; status?: string; message?: string; error?: string }
 type RevokeResponse = { ok?: boolean; message?: string; error?: string }
 type FeatureCheckResponse = { ok?: boolean; granted?: string[] }
+type CredentialHealthCertificate = {
+  present: boolean
+  notAfter: string | null
+  daysToExpiry: number | null
+  expiringSoon: boolean
+}
+type CredentialHealthResponse = {
+  token: { present: boolean; sunsetDate: string; daysToSunset: number | null }
+  authCert: CredentialHealthCertificate
+  offlineCert: CredentialHealthCertificate
+  warnings: string[]
+}
 
 const CERTIFICATE_TYPES: readonly CertificateType[] = ['Authentication', 'Offline']
 
@@ -89,6 +103,9 @@ export default function FinancialPlCertificatesPage() {
   const [rows, setRows] = React.useState<CertificateRow[]>([])
   const [isLoading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [health, setHealth] = React.useState<CredentialHealthResponse | null>(null)
+  const [healthLoading, setHealthLoading] = React.useState(false)
+  const [healthError, setHealthError] = React.useState<string | null>(null)
   const [reloadToken, setReloadToken] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
 
@@ -160,6 +177,30 @@ export default function FinancialPlCertificatesPage() {
   React.useEffect(() => {
     void loadCertificates()
   }, [loadCertificates, reloadToken, scopeVersion])
+
+  const loadCredentialHealth = React.useCallback(async () => {
+    setHealthLoading(true)
+    setHealthError(null)
+    try {
+      const call = await apiCall<CredentialHealthResponse>('/api/financial_pl/ksef/credential-health')
+      if (!call.ok || !call.result) {
+        setHealth(null)
+        setHealthError(t('financial_pl.credentialHealth.errors.load', 'Failed to load credential health.'))
+        return
+      }
+      setHealth(call.result)
+    } catch (err) {
+      console.error('financial_pl.credential_health.load', err)
+      setHealth(null)
+      setHealthError(t('financial_pl.credentialHealth.errors.load', 'Failed to load credential health.'))
+    } finally {
+      setHealthLoading(false)
+    }
+  }, [t])
+
+  React.useEffect(() => {
+    void loadCredentialHealth()
+  }, [loadCredentialHealth, reloadToken, scopeVersion])
 
   const openEnrollDialog = React.useCallback(() => {
     setEnrollName('')
@@ -258,6 +299,42 @@ export default function FinancialPlCertificatesPage() {
     [confirm, mutationContext, refresh, runMutation, t],
   )
 
+  const formatDays = React.useCallback(
+    (days: number | null): string => {
+      if (days === null) return ''
+      return ` (${days} ${t('financial_pl.credentialHealth.days', 'days')})`
+    },
+    [t],
+  )
+
+  const renderCertificateHealth = React.useCallback(
+    (label: string, certificate: CredentialHealthCertificate) => {
+      const badgeVariant = !certificate.present ? 'neutral' : certificate.expiringSoon ? 'warning' : 'success'
+      const badgeText = !certificate.present
+        ? t('financial_pl.credentialHealth.missing', 'Missing')
+        : certificate.expiringSoon
+          ? t('financial_pl.credentialHealth.expiringSoon', 'Expiring soon')
+          : t('financial_pl.credentialHealth.valid', 'Valid')
+      const detail = !certificate.present
+        ? t('financial_pl.credentialHealth.notConfigured', 'Not configured')
+        : certificate.notAfter
+          ? `${t('financial_pl.credentialHealth.notAfter', 'Valid to')} ${formatDate(certificate.notAfter)}${formatDays(certificate.daysToExpiry)}`
+          : t('financial_pl.credentialHealth.expiryUnknown', 'Expiry date unavailable')
+      return (
+        <div className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-background p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">{label}</span>
+            <Tag variant={badgeVariant} dot>
+              {badgeText}
+            </Tag>
+          </div>
+          <span className="text-xs text-muted-foreground">{detail}</span>
+        </div>
+      )
+    },
+    [formatDays, t],
+  )
+
   const columns = React.useMemo<ColumnDef<CertificateRow>[]>(
     () => [
       {
@@ -310,6 +387,63 @@ export default function FinancialPlCertificatesPage() {
     <Page>
       <PageBody>
         <div className="flex flex-col gap-3">
+          {healthError ? <ErrorMessage label={healthError} /> : null}
+          {healthLoading && !health ? (
+            <LoadingMessage label={t('financial_pl.credentialHealth.loading', 'Loading credential health…')} />
+          ) : null}
+          {health ? (
+            <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-col gap-1">
+                  <h2 className="text-base font-semibold">{t('financial_pl.credentialHealth.title', 'Credential health')}</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {t('financial_pl.credentialHealth.subtitle', 'Token sunset and certificate expiry summary.')}
+                  </p>
+                </div>
+                <Tag variant={health.warnings.length > 0 ? 'warning' : 'success'} dot>
+                  {health.warnings.length > 0
+                    ? t('financial_pl.credentialHealth.warnings', 'Warnings')
+                    : t('financial_pl.credentialHealth.ok', 'OK')}
+                </Tag>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-background p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">{t('financial_pl.credentialHealth.token', 'Token')}</span>
+                    <Tag
+                      variant={
+                        !health.token.present
+                          ? 'neutral'
+                          : health.token.daysToSunset !== null && health.token.daysToSunset < 60
+                            ? 'warning'
+                            : 'info'
+                      }
+                      dot
+                    >
+                      {!health.token.present
+                        ? t('financial_pl.credentialHealth.missing', 'Missing')
+                        : health.token.daysToSunset !== null && health.token.daysToSunset < 60
+                          ? t('financial_pl.credentialHealth.sunsetSoon', 'Sunset soon')
+                          : t('financial_pl.credentialHealth.configured', 'Configured')}
+                    </Tag>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {health.token.present
+                      ? `${t('financial_pl.credentialHealth.tokenSunset', 'Sunset')} ${formatDate(health.token.sunsetDate)}${formatDays(health.token.daysToSunset)}`
+                      : t('financial_pl.credentialHealth.notConfigured', 'Not configured')}
+                  </span>
+                </div>
+                {renderCertificateHealth(
+                  t('financial_pl.credentialHealth.authCert', 'Authentication certificate'),
+                  health.authCert,
+                )}
+                {renderCertificateHealth(
+                  t('financial_pl.credentialHealth.offlineCert', 'Offline certificate'),
+                  health.offlineCert,
+                )}
+              </div>
+            </div>
+          ) : null}
           {error ? (
             <ErrorMessage label={error} />
           ) : (
@@ -337,7 +471,7 @@ export default function FinancialPlCertificatesPage() {
               refreshButton={{
                 label: t('financial_pl.certificates.refresh', 'Refresh'),
                 onRefresh: refresh,
-                isRefreshing: isLoading,
+                isRefreshing: isLoading || healthLoading,
               }}
               rowActions={(row) =>
                 canManage ? (
