@@ -25,8 +25,9 @@
 import { resolveKsefEnvironment } from '../../config'
 import { KsefClient } from '../ksef-client'
 import { buildFa3Xml, type Fa3Document, type Fa3Party } from '../fa3'
-import { submitInvoiceToKsef } from '../submission-flow'
+import { submitInvoiceToKsef, DEFAULT_POLL_OPTIONS } from '../submission-flow'
 import type { KsefAuthConfig } from '../ksef-auth'
+import { authenticate } from '../ksef-auth'
 
 const TEST_TOKEN = process.env.OM_KSEF_TEST_TOKEN
 const TEST_NIP = process.env.OM_KSEF_TEST_NIP
@@ -363,5 +364,70 @@ certDescribe('KSeF TEST live smoke — certificate (XAdES) auth', () => {
       expect(result.ksefNumber).toBeTruthy()
       expect(result.upoXml && result.upoXml.length > 0).toBe(true)
     }
+  })
+})
+
+/**
+ * SPEC-015 F1 — inbound RECEIVE round-trip (live). Sends a SELF-ADDRESSED invoice
+ * (seller NIP == buyer NIP == context NIP — the FA(3) XSD allows it and the connector's
+ * seller==contextNip invariant holds), then re-authenticates and queries it as Subject2
+ * (buyer) via the new session-less receive endpoints, and downloads its FA(3) XML.
+ * Gated like liveDescribe (OM_KSEF_TEST_TOKEN + OM_KSEF_TEST_NIP).
+ */
+liveDescribe('KSeF TEST live — SPEC-015 inbound receive round-trip', () => {
+  jest.setTimeout(240000)
+  const env = resolveKsefEnvironment(process.env.OM_KSEF_ENVIRONMENT ?? 'test')
+
+  it('sends a self-addressed invoice, then queries + downloads it as Subject2 (buyer)', async () => {
+    const nip = TEST_NIP as string
+    const client = new KsefClient(env)
+    const auth: KsefAuthConfig = { method: 'token', ksefToken: TEST_TOKEN as string, contextNip: nip }
+    const selfAddressed: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: { nip, name: 'Open Mercato Self', countryCode: 'PL', addressLine1: 'ul. Testowa 1, 00-001 Warszawa' },
+        buyer: { nip, name: 'Open Mercato Self', countryCode: 'PL', addressLine1: 'ul. Testowa 1, 00-001 Warszawa' },
+        invoiceNumber: `OM-RECV-${Date.now()}`,
+        issueDate: new Date().toISOString().slice(0, 10),
+        currencyCode: 'PLN',
+        vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+        totalGross: '123.00',
+      },
+      lines: [{ lineNumber: 1, name: 'Usługa testowa', unit: 'szt', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 }],
+    }
+    const sent = await submitInvoiceToKsef(client, { auth, invoiceXml: buildFa3Xml(selfAddressed) })
+    // eslint-disable-next-line no-console
+    console.log('[recv] self-addressed send', { status: sent.status, ksefNumber: sent.ksefNumber, error: sent.errorMessage })
+    expect(sent.status).toBe('accepted')
+    const ksefNumber = sent.ksefNumber as string
+
+    // Receive is session-LESS: re-authenticate for a fresh access token.
+    const certs = await client.getPublicKeyCertificates()
+    const tokenCert = [...certs.filter((c) => c.usage.some((u) => u.toLowerCase().includes('token')))]
+      .sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? ''))[0]
+    const authed = await authenticate(client, tokenCert, auth, DEFAULT_POLL_OPTIONS)
+    expect(authed.ok).toBe(true)
+    const accessToken = (authed as { ok: true; accessToken: string }).accessToken
+
+    const today = new Date().toISOString().slice(0, 10)
+    let found: boolean = false
+    for (let i = 0; i < 8 && !found; i += 1) {
+      const q = await client.queryReceivedInvoices({
+        accessToken,
+        filters: { subjectType: 'Subject2', dateRange: { dateType: 'Invoicing', from: `${today}T00:00:00Z`, to: `${today}T23:59:59Z` } },
+        pageSize: 100,
+      })
+      // eslint-disable-next-line no-console
+      console.log('[recv] Subject2 query', { count: q.invoices.length, hasMore: q.hasMore, isTruncated: q.isTruncated })
+      found = q.invoices.some((inv) => inv.ksefNumber === ksefNumber)
+      if (!found) await new Promise((r) => setTimeout(r, 6000))
+    }
+    expect(found).toBe(true)
+
+    const xml = await client.downloadInvoiceByKsefNumber({ accessToken, ksefNumber })
+    // eslint-disable-next-line no-console
+    console.log('[recv] downloaded FA(3) bytes', xml.length)
+    expect(xml.length).toBeGreaterThan(0)
+    expect(xml).toContain('Faktura')
   })
 })
