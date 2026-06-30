@@ -399,9 +399,14 @@ export const materializePurchaseRecordCommand: CommandHandler<
       return { purchaseRecordId: preflight.linkedPurchaseRecordId }
     }
 
-    const authContext = preflight.fa3Xml
-      ? null
-      : await authenticateKsef(ctx, scope, preflight.contextNip ?? null)
+    let fetchedFa3Xml: string | null = null
+    if (!preflight.fa3Xml) {
+      const liveAuth = await authenticateKsef(ctx, scope, preflight.contextNip ?? null)
+      fetchedFa3Xml = await liveAuth.client.downloadInvoiceByKsefNumber({
+        accessToken: liveAuth.accessToken,
+        ksefNumber: preflight.ksefNumber,
+      })
+    }
 
     const purchaseRecordId = await em.transactional(async (tx: EntityManager) => {
       const received = await findOneWithDecryption(
@@ -419,12 +424,8 @@ export const materializePurchaseRecordCommand: CommandHandler<
       if (!received) throw new CrudHttpError(404, { error: '[internal] received invoice not found' })
       if (received.linkedPurchaseRecordId) return received.linkedPurchaseRecordId
 
-      if (!received.fa3Xml) {
-        const liveAuth = authContext ?? (await authenticateKsef(ctx, scope, received.contextNip ?? null))
-        received.fa3Xml = await liveAuth.client.downloadInvoiceByKsefNumber({
-          accessToken: liveAuth.accessToken,
-          ksefNumber: received.ksefNumber,
-        })
+      if (!received.fa3Xml && fetchedFa3Xml !== null) {
+        received.fa3Xml = fetchedFa3Xml
       }
 
       const purchaseFields = mapReceivedInvoiceToPurchaseRecord(toReceivedInvoiceFields(received))

@@ -18,17 +18,33 @@ jest.mock('@open-mercato/shared/lib/i18n/server', () => ({
   })),
 }))
 
+jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
+  findOneWithDecryption: jest.fn(),
+}))
+
+const mockPollJpkStatus = jest.fn()
+const mockSubmitJpk = jest.fn()
+
+jest.mock('../../lib/jpk/jpk-submission-client', () => ({
+  JPK_STATUS_POLL_TIMEOUT_ERROR: 'status poll timed out',
+  pollJpkStatus: (...args: unknown[]) => mockPollJpkStatus(...args),
+  submitJpk: (...args: unknown[]) => mockSubmitJpk(...args),
+}))
+
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import {
   upsertPurchaseRecordCommand,
   deletePurchaseRecordCommand,
   upsertFilingCommand,
   generateCommand,
+  submitFilingCommand,
 } from '../jpk'
 
 const ORG = '11111111-1111-4111-8111-111111111111'
 const TEN = '22222222-2222-4222-8222-222222222222'
 const REC = '33333333-3333-4333-8333-333333333333'
 const FIL = '44444444-4444-4444-8444-444444444444'
+const ORIGINAL_OM_JPK_MF_CERT_PEM = process.env.OM_JPK_MF_CERT_PEM
 
 type Resolvable = { creds?: Record<string, unknown> | null; em: Record<string, unknown> }
 
@@ -52,6 +68,21 @@ function makeCtx(opts: Resolvable) {
     organizationIds: null,
     request: null,
   } as unknown as Parameters<typeof generateCommand.execute>[1]
+}
+
+function makeSubmitEm(filing: Record<string, unknown>) {
+  const flush = jest.fn(async () => {})
+  const nativeUpdate = jest.fn(async (_entity: unknown, _where: unknown, update: Record<string, unknown>) => {
+    Object.assign(filing, update)
+    return 1
+  })
+  const em: Record<string, unknown> = {
+    nativeUpdate,
+    flush,
+    transactional: jest.fn(async (fn: (tx: Record<string, unknown>) => Promise<unknown>) => fn(em)),
+  }
+  em.fork = () => em
+  return { em, flush, nativeUpdate }
 }
 
 /** A minimal valid purchase-record upsert input (schema-complete: year/month/documentNumber/date). */
@@ -80,6 +111,22 @@ function filingInput(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  jest.clearAllMocks()
+  ;(findOneWithDecryption as jest.Mock).mockReset()
+  mockPollJpkStatus.mockReset()
+  mockSubmitJpk.mockReset()
+  delete process.env.OM_JPK_MF_CERT_PEM
+})
+
+afterAll(() => {
+  if (ORIGINAL_OM_JPK_MF_CERT_PEM === undefined) {
+    delete process.env.OM_JPK_MF_CERT_PEM
+  } else {
+    process.env.OM_JPK_MF_CERT_PEM = ORIGINAL_OM_JPK_MF_CERT_PEM
+  }
+})
 
 describe('JPK commands — tenant/org isolation guard (a foreign id reads null ⇒ 404)', () => {
   it('upsertPurchaseRecordCommand with a parsed.id whose row belongs to another org → 404', async () => {
@@ -221,5 +268,115 @@ describe('JPK generate — terminal/credentials guards', () => {
     await expect(
       generateCommand.execute({ filingId: FIL }, makeCtx({ em, creds: null })),
     ).rejects.toMatchObject({ status: 409 })
+  })
+})
+
+describe('JPK submit — ambiguous MF reference remains resumable', () => {
+  it('keeps a failed submission with a reference in submitting state, then re-polls on the next submit', async () => {
+    process.env.OM_JPK_MF_CERT_PEM = 'MF CERT'
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'generated',
+      generatedXml: '<JPK>payload</JPK>',
+      submissionReference: null,
+      submissionError: null,
+      deletedAt: null,
+      createdAt: new Date('2026-06-30T10:00:00Z'),
+      updatedAt: new Date('2026-06-30T10:00:00Z'),
+    }
+    const { em } = makeSubmitEm(filing)
+    ;(findOneWithDecryption as jest.Mock).mockResolvedValue(filing)
+    mockSubmitJpk.mockResolvedValueOnce({
+      ok: false,
+      referenceNumber: 'JPK-REF-AMBIGUOUS',
+      error: 'JPK blob upload failed with HTTP 502',
+    })
+
+    await expect(
+      submitFilingCommand.execute(
+        { filingId: FIL },
+        makeCtx({
+          em,
+          creds: {
+            environment: 'test',
+            jpkSignerCertPem: 'SIGNER CERT',
+            jpkSignerPrivateKeyPem: 'SIGNER KEY',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 502,
+      body: { code: 'jpk_submit_failed', referenceNumber: 'JPK-REF-AMBIGUOUS' },
+    })
+
+    expect(filing.status).toBe('submitting')
+    expect(filing.submissionReference).toBe('JPK-REF-AMBIGUOUS')
+    expect(filing.submissionError).toBe('JPK blob upload failed with HTTP 502')
+
+    mockPollJpkStatus.mockResolvedValueOnce({
+      ok: true,
+      referenceNumber: 'JPK-REF-AMBIGUOUS',
+      status: '200',
+      upoXml: '<UPO>ok</UPO>',
+    })
+
+    const result = await submitFilingCommand.execute(
+      { filingId: FIL },
+      makeCtx({
+        em,
+        creds: {
+          environment: 'test',
+          jpkSignerCertPem: 'SIGNER CERT',
+          jpkSignerPrivateKeyPem: 'SIGNER KEY',
+        },
+      }),
+    )
+
+    expect(result).toEqual({ filingId: FIL, status: 'submitted', referenceNumber: 'JPK-REF-AMBIGUOUS' })
+    expect(mockPollJpkStatus).toHaveBeenCalledWith('JPK-REF-AMBIGUOUS', { environment: 'test' })
+    expect(mockSubmitJpk).toHaveBeenCalledTimes(1)
+    expect(filing.status).toBe('submitted')
+    expect(filing.upoXml).toBe('<UPO>ok</UPO>')
+  })
+
+  it('names OM_JPK_MF_CERT_PEM when the MF public certificate is missing', async () => {
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'generated',
+      generatedXml: '<JPK>payload</JPK>',
+      submissionReference: null,
+      submissionError: null,
+      deletedAt: null,
+      createdAt: new Date('2026-06-30T10:00:00Z'),
+      updatedAt: new Date('2026-06-30T10:00:00Z'),
+    }
+    const { em } = makeSubmitEm(filing)
+    ;(findOneWithDecryption as jest.Mock).mockResolvedValue(filing)
+
+    await expect(
+      submitFilingCommand.execute(
+        { filingId: FIL },
+        makeCtx({
+          em,
+          creds: {
+            environment: 'test',
+            jpkSignerCertPem: 'SIGNER CERT',
+            jpkSignerPrivateKeyPem: 'SIGNER KEY',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      body: {
+        code: 'jpk_mf_cert_missing',
+        error: expect.stringContaining('OM_JPK_MF_CERT_PEM'),
+      },
+    })
+    expect(filing.status).toBe('generated')
+    expect(mockSubmitJpk).not.toHaveBeenCalled()
   })
 })

@@ -59,6 +59,20 @@ export function resolveJpkGatewayUrl(environment: KsefEnvironment, env: NodeJS.P
 }
 
 /**
+ * Resolve the MF-published JPK gateway public certificate used to wrap the JPK upload AES key.
+ * Operators must configure the correct per-environment certificate via `OM_JPK_MF_CERT_PEM`;
+ * this module intentionally does not bundle a fabricated or stale certificate.
+ */
+export function resolveJpkMfPublicCert(environment: KsefEnvironment, env: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = env.OM_JPK_MF_CERT_PEM
+  if (typeof configured === 'string' && configured.trim().length > 0) return configured.trim()
+  // The environment is part of the resolver signature so future managed cert stores can vary by
+  // MF gateway without changing callers. Today the operator-provided config is required.
+  void environment
+  return null
+}
+
+/**
  * NBP public exchange-rate API base (table A mid-rates), used by the FX auto-source (SPEC-015 F5).
  * The statutory invoice rate is the table-A mid-rate of the last business day BEFORE the tax point.
  */

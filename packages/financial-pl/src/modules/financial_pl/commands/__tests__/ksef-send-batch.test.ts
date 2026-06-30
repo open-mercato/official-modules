@@ -82,9 +82,17 @@ function makeEm(opts: { events?: string[]; existingInvoiceIds?: Set<string> } = 
     events.push('flush')
   })
   const em: Record<string, unknown> = {
-    findOne: jest.fn(async (_entity: unknown, where: { salesInvoiceId?: string }) =>
-      where.salesInvoiceId && opts.existingInvoiceIds?.has(where.salesInvoiceId) ? { id: 'existing-submission' } : null,
-    ),
+    findOne: jest.fn(async (_entity: unknown, where: { salesInvoiceId?: string }) => {
+      if (where.salesInvoiceId && opts.existingInvoiceIds?.has(where.salesInvoiceId)) {
+        return { id: 'existing-submission' }
+      }
+      const active = persisted.find(
+        (row) =>
+          row.salesInvoiceId === where.salesInvoiceId &&
+          ['queued', 'processing', 'accepted', 'offline_issued'].includes(String(row.status)),
+      )
+      return active ?? null
+    }),
     create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({
       id: `sub-${String(data.salesInvoiceId)}`,
       ...data,
@@ -199,6 +207,46 @@ describe('financial_pl.ksef_submission.send_batch', () => {
         }),
       ]),
     )
+  })
+
+  it('keeps rows processing when part upload fails after openBatchSession, so retry stays blocked', async () => {
+    const events: string[] = []
+    const { em, persisted } = makeEm({ events })
+    const { transport, calls } = makeTransport(events)
+    mockPutToAbsoluteUrl.mockRejectedValueOnce(new Error('blob upload down'))
+
+    await expect(sendBatchCommand.execute({ invoiceIds: [INV_1, INV_2] }, makeCtx(em, transport))).rejects.toMatchObject({
+      status: 502,
+      body: { code: 'ksef_batch_send_ambiguous', batchReference: 'BATCH-REF-1' },
+    })
+
+    expect(persisted).toHaveLength(2)
+    expect(persisted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          salesInvoiceId: INV_1,
+          status: 'processing',
+          batchReference: 'BATCH-REF-1',
+          sessionReference: 'BATCH-REF-1',
+          lastErrorCode: 'ksef_batch_send_ambiguous',
+        }),
+        expect.objectContaining({
+          salesInvoiceId: INV_2,
+          status: 'processing',
+          batchReference: 'BATCH-REF-1',
+          sessionReference: 'BATCH-REF-1',
+          lastErrorCode: 'ksef_batch_send_ambiguous',
+        }),
+      ]),
+    )
+    expect(persisted.some((row) => row.status === 'rejected')).toBe(false)
+
+    const openBatchCount = calls.filter((req) => new URL(req.url).pathname.endsWith('/sessions/batch')).length
+    await expect(sendBatchCommand.execute({ invoiceIds: [INV_1, INV_2] }, makeCtx(em, transport))).rejects.toMatchObject({
+      status: 409,
+      body: { code: 'ksef_submission_already_active' },
+    })
+    expect(calls.filter((req) => new URL(req.url).pathname.endsWith('/sessions/batch')).length).toBe(openBatchCount)
   })
 
   it('rejects a self-billed invoice before packaging or opening a batch session', async () => {

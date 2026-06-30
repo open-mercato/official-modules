@@ -6,8 +6,10 @@
  *  - token: `ksefToken` (transitional, sunset 2026-12-31).
  *  - certificate: `certificatePem` + `certificatePrivateKeyPem` (durable; the only
  *    credential from 2027-01-01). Selected when `authMethod==='certificate'`.
- *  - auto: explicit opt-in to prefer certificate material, falling back to token.
+ *  - auto: explicit opt-in to prefer currently-valid certificate material, falling back to token.
  */
+import { X509Certificate } from 'node:crypto'
+
 import type { KsefAuthConfig } from './ksef-auth'
 import type { KsefEnvironmentColumn } from '../data/entities'
 
@@ -40,6 +42,23 @@ type CredentialsService = {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function isCertificateValidNow(certificatePem: string, now: Date): boolean {
+  try {
+    const cert = new X509Certificate(certificatePem)
+    const validFrom = Date.parse(cert.validFrom)
+    const validTo = Date.parse(cert.validTo)
+    const current = now.getTime()
+    return (
+      Number.isFinite(validFrom) &&
+      Number.isFinite(validTo) &&
+      current >= validFrom &&
+      current <= validTo
+    )
+  } catch {
+    return false
+  }
 }
 
 /** Read + normalize the `ksef_pl` credentials for an org scope. Returns `{}` on any failure. */
@@ -87,9 +106,17 @@ export async function readKsefCredentials(
  * back to token when unset, for backward compatibility with existing token orgs.
  * Returns null when the required material for the selected method is missing.
  */
-export function buildKsefAuthConfig(creds: KsefCredentials, contextNip: string): KsefAuthConfig | null {
+export function buildKsefAuthConfig(
+  creds: KsefCredentials,
+  contextNip: string,
+  now: Date = new Date(),
+): KsefAuthConfig | null {
   if (creds.authMethod === 'auto') {
-    if (creds.certificatePem && creds.certificatePrivateKeyPem) {
+    if (
+      creds.certificatePem &&
+      creds.certificatePrivateKeyPem &&
+      isCertificateValidNow(creds.certificatePem, now)
+    ) {
       return {
         method: 'certificate',
         contextNip,

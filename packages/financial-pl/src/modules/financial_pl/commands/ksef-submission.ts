@@ -548,24 +548,42 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
     const claimedIds = claimedSubmissions.map((submission) => submission.id)
     let referenceNumber: string | undefined
 
+    const batchFailureMessage = (err: unknown): string =>
+      err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed'
+
     const markClaimedRejected = async (err: unknown) => {
       const now = new Date()
       const update: Partial<KsefSubmission> = {
         status: 'rejected',
         lastErrorCode: 'ksef_batch_send_failed',
-        lastErrorMessage:
-          err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed',
+        lastErrorMessage: batchFailureMessage(err),
         updatedAt: now,
-      }
-      if (referenceNumber) {
-        update.sessionReference = referenceNumber
-        update.batchReference = referenceNumber
-        update.submittedAt = now
       }
       await em.nativeUpdate(
         KsefSubmission,
         { id: { $in: claimedIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
         update,
+      )
+    }
+
+    const keepClaimedProcessing = async (err: unknown, externalReference: string) => {
+      const now = new Date()
+      await em.nativeUpdate(
+        KsefSubmission,
+        { id: { $in: claimedIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+        {
+          // [internal] Once KSeF has returned a batch reference, upload/close failures are
+          // ambiguous: the part or close may have been accepted. Keep the active rows processing
+          // so the reconcile worker resumes by session reference instead of freeing the unique
+          // guard and allowing the same invoices into a second fiscal batch.
+          status: 'processing',
+          sessionReference: externalReference,
+          batchReference: externalReference,
+          submittedAt: now,
+          lastErrorCode: 'ksef_batch_send_ambiguous',
+          lastErrorMessage: batchFailureMessage(err),
+          updatedAt: now,
+        },
       )
     }
 
@@ -621,10 +639,18 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
       await client.uploadBatchPart(uploadRequest, pkg.encryptedZip)
       await client.closeBatchSession({ accessToken: authResult.accessToken, referenceNumber })
     } catch (err) {
+      if (referenceNumber) {
+        await keepClaimedProcessing(err, referenceNumber)
+        throw new CrudHttpError(502, {
+          error: batchFailureMessage(err),
+          code: 'ksef_batch_send_ambiguous',
+          batchReference: referenceNumber,
+        })
+      }
       await markClaimedRejected(err)
       if (err instanceof CrudHttpError) throw err
       throw new CrudHttpError(502, {
-        error: err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed',
+        error: batchFailureMessage(err),
         code: 'ksef_batch_send_failed',
       })
     }
