@@ -20,6 +20,15 @@ const moneySchema = z.string().regex(/^-?\d+(\.\d{1,2})?$/, 'Amount must be a de
 export const UPR_THRESHOLD_PLN = 450
 export const UPR_THRESHOLD_EUR = 100
 
+// Query schema for the company-lookup route (SPEC-014). Permissive on format — a raw NIP (with
+// dashes/spaces) is accepted here and normalised + checksum-validated in `lib/company-lookup`, so a
+// formatting variant reaches the lookup rather than 400-ing at the boundary. Length-bounded to keep
+// the upstream URL sane.
+export const companyLookupQuerySchema = z.object({
+  nip: z.string().trim().min(1).max(20),
+})
+export type CompanyLookupQuery = z.infer<typeof companyLookupQuerySchema>
+
 // FA(3) XSD string maxima: party Nazwa and the two address lines (AdresL1/AdresL2)
 // are bounded at 512 chars. Enforcing them here raises a localized 422 before send
 // rather than letting KSeF reject the document with a maxLength schema error.

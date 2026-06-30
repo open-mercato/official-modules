@@ -15,7 +15,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
+import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { isValidPolishNip } from '../lib/nip'
+import { normalizeNipDigits } from '../lib/company-lookup'
 import {
   GTU_CODES,
   JPK_PROCEDURE_MARKINGS,
@@ -88,6 +91,8 @@ export type PlVatMetaFormProps = {
 export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps) {
   const t = useT()
   const busy = Boolean(disabled)
+  const [gtuFilter, setGtuFilter] = React.useState('')
+  const [procedureFilter, setProcedureFilter] = React.useState('')
 
   const patch = React.useCallback(
     (next: Partial<InvoiceMeta>) => {
@@ -158,6 +163,11 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
     patchOrderSnapshot({ lines: orderLines.filter((_, i) => i !== index) })
   }
 
+  // Inline taxpayer-NIP checksum feedback (parity with the buyer NIP field) — flag any non-empty value
+  // that isn't a valid NIP at the field, not only via a form-level error on submit (code-jury, DeepSeek).
+  const contextNipInvalid =
+    (value.contextNip ?? '').trim().length > 0 && !isValidPolishNip(normalizeNipDigits(value.contextNip ?? ''))
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
@@ -171,7 +181,13 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
           disabled={busy}
           onChange={(event) => patch({ contextNip: event.target.value.length ? event.target.value : null })}
           placeholder="1234567890"
+          aria-invalid={contextNipInvalid || undefined}
         />
+        {contextNipInvalid ? (
+          <span className="text-xs text-status-error-text">
+            {t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).')}
+          </span>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -238,23 +254,13 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
           <label className={labelClass} htmlFor="financial_pl-consumption-country">
             {t('financial_pl.fields.consumptionCountry', 'Consumption country (OSS)')}
           </label>
-          <Select
-            value={value.consumptionCountryCode || NONE_VALUE}
-            onValueChange={(next) => patch({ consumptionCountryCode: next === NONE_VALUE ? null : next })}
+          <ComboboxInput
+            value={value.consumptionCountryCode ?? ''}
+            onChange={(next) => patch({ consumptionCountryCode: next ? next : null })}
+            suggestions={OSS_CONSUMPTION_COUNTRIES as readonly string[] as string[]}
             disabled={busy}
-          >
-            <SelectTrigger id="financial_pl-consumption-country" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NONE_VALUE}>—</SelectItem>
-              {OSS_CONSUMPTION_COUNTRIES.map((code) => (
-                <SelectItem key={code} value={code}>
-                  {code}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder={t('financial_pl.fields.consumptionCountryPlaceholder', 'Search country…')}
+          />
         </div>
       ) : null}
 
@@ -531,8 +537,19 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
         <legend className="px-1 text-sm font-medium text-foreground">
           {t('financial_pl.fields.gtuGroup', 'GTU markings (JPK)')}
         </legend>
+        <Input
+          value={gtuFilter}
+          disabled={busy}
+          onChange={(event) => setGtuFilter(event.target.value)}
+          placeholder={t('financial_pl.fields.gtuFilter', 'Filter GTU codes…')}
+          aria-label={t('financial_pl.fields.gtuFilter', 'Filter GTU codes')}
+        />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {GTU_CODES.map((code) => (
+          {GTU_CODES.filter((code) => {
+            const q = gtuFilter.trim().toLowerCase()
+            if (!q || gtuCodes.includes(code)) return true
+            return code.toLowerCase().includes(q) || t(`financial_pl.fields.gtu.${code}`, code).toLowerCase().includes(q)
+          }).map((code) => (
             <CheckboxField
               key={code}
               label={t(`financial_pl.fields.gtu.${code}`, code)}
@@ -548,8 +565,19 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
         <legend className="px-1 text-sm font-medium text-foreground">
           {t('financial_pl.fields.procedureGroup', 'JPK procedure markings')}
         </legend>
+        <Input
+          value={procedureFilter}
+          disabled={busy}
+          onChange={(event) => setProcedureFilter(event.target.value)}
+          placeholder={t('financial_pl.fields.procedureFilter', 'Filter procedure markings…')}
+          aria-label={t('financial_pl.fields.procedureFilter', 'Filter procedure markings')}
+        />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {JPK_PROCEDURE_MARKINGS.map((code) => (
+          {JPK_PROCEDURE_MARKINGS.filter((code) => {
+            const q = procedureFilter.trim().toLowerCase()
+            if (!q || procedureMarkings[code]) return true
+            return code.toLowerCase().includes(q) || t(`financial_pl.fields.procedure.${code}`, code).toLowerCase().includes(q)
+          }).map((code) => (
             <CheckboxField
               key={code}
               label={t(`financial_pl.fields.procedure.${code}`, code)}

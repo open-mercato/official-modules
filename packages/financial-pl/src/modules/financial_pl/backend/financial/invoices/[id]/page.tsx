@@ -23,6 +23,7 @@ import { KsefActions } from '../../../../components/KsefActions'
 import { CorrectionForm } from '../../../../components/CorrectionForm'
 import { PlVatMetaForm, type InvoiceMeta, type ProcedureMarkings } from '../../../../components/PlVatMetaForm'
 import type { InvoiceLineInput } from '../../../../components/InvoiceLinesField'
+import { buyerFromMetadata } from '../../../../components/BuyerFields'
 import type { InvoiceKindColumn } from '../../../../data/entities'
 import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../lib/jpk-markings-codes'
 
@@ -361,6 +362,8 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
 
   const { invoice, lines, meta, submission } = data
   const currency = invoice.currencyCode ?? ''
+  const buyer = buyerFromMetadata(invoice.metadata)
+  const hasBuyer = Boolean(buyer.companyName || buyer.nip || buyer.addressLine1)
   const submissionStatus = submission?.status ?? null
   const editLocked = submissionStatus != null && EDIT_LOCK_STATUSES.has(submissionStatus)
   const isAccepted = submissionStatus === 'accepted'
@@ -431,6 +434,34 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
                 {formatAmount(invoice.grandTotalGrossAmount, currency)}
               </SummaryField>
             </div>
+
+            {hasBuyer ? (
+              <div className="mt-4 border-t border-border pt-4">
+                <div className="text-xs text-muted-foreground">
+                  {t('financial_pl.invoices.detail.buyer', 'Buyer (Nabywca)')}
+                </div>
+                <div className="mt-1 text-sm text-foreground">
+                  {buyer.companyName ? <div className="font-medium">{buyer.companyName}</div> : null}
+                  {buyer.nip ? (
+                    <div className="text-muted-foreground">
+                      {t('financial_pl.buyer.nip', 'Buyer NIP')}: {buyer.nip}
+                    </div>
+                  ) : null}
+                  {buyer.addressLine1 || buyer.postalCode || buyer.city ? (
+                    <div className="text-muted-foreground">
+                      {[
+                        buyer.addressLine1,
+                        buyer.addressLine2,
+                        [buyer.postalCode, buyer.city].filter(Boolean).join(' '),
+                        buyer.countryCode,
+                      ]
+                        .filter((part) => part && part.trim())
+                        .join(', ')}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </section>
 
           {/* KSeF panel */}

@@ -17,6 +17,9 @@ import {
   type InvoiceLineInput,
 } from '../../../../../components/InvoiceLinesField'
 import { PlVatMetaForm, type InvoiceMeta } from '../../../../../components/PlVatMetaForm'
+import { BuyerFields, buyerToSnapshot, type BuyerValue } from '../../../../../components/BuyerFields'
+import { isValidPolishNip } from '../../../../../lib/nip'
+import { normalizeNipDigits } from '../../../../../lib/company-lookup'
 
 /** Header fields edited directly through the core sales invoice contract. */
 type InvoiceHeaderValues = {
@@ -27,11 +30,16 @@ type InvoiceHeaderValues = {
   orderId: string
 }
 
-/** Full controlled value of the invoice editor (header + lines + PL-VAT meta). */
+/** Full controlled value of the invoice editor (header + buyer + lines + PL-VAT meta). */
 export type InvoiceFormValue = {
   header: InvoiceHeaderValues
+  /** Buyer (Nabywca) — persisted to core SalesInvoice `metadata.buyerSnapshot`. */
+  buyer: BuyerValue
   lines: InvoiceLineInput[]
   meta: InvoiceMeta
+  /** The core invoice `metadata` loaded in edit mode — carried so `buyerSnapshot` merges without
+   * clobbering other keys. `null`/absent in create mode. */
+  metadata?: Record<string, unknown> | null
   /** Present in edit mode — the meta row's updatedAt for optimistic locking, if known. */
   metaUpdatedAt?: string | null
 }
@@ -60,12 +68,14 @@ export function emptyHeader(): InvoiceHeaderValues {
 export function emptyInvoiceFormValue(): InvoiceFormValue {
   return {
     header: emptyHeader(),
+    buyer: { countryCode: 'PL' },
     lines: [withComputedTotals(
-      { name: '', quantity: '1', quantityUnit: '', unitPriceNet: '0', taxRate: '23', currencyCode: DEFAULT_CURRENCY, kind: 'product' },
+      { name: '', quantity: '1', quantityUnit: 'szt.', unitPriceNet: '0', taxRate: '23', currencyCode: DEFAULT_CURRENCY, kind: 'product' },
       DEFAULT_CURRENCY,
       1,
     )],
     meta: {},
+    metadata: null,
   }
 }
 
@@ -107,8 +117,13 @@ function buildLinesPayload(lines: InvoiceLineInput[], currencyCode: string): Arr
 /** Map the controlled PL-VAT meta value to the invoice-meta PUT body (keyed by salesInvoiceId). */
 function buildMetaPayload(salesInvoiceId: string, meta: InvoiceMeta): Record<string, unknown> {
   const body: Record<string, unknown> = { salesInvoiceId, ...meta }
-  // Drop client-only empties that the schema would reject (e.g. partial NIP cleared to '').
-  if (body.contextNip === '') body.contextNip = null
+  // Normalise the taxpayer NIP to bare digits before the meta PUT: the schema is ^[0-9]{10}$, so a
+  // dashed/spaced value (e.g. 525-234-40-78 — which the client checksum check accepts) would otherwise
+  // 422 server-side (code-jury r2, Codex). Empty / non-digit input ⇒ null (no taxpayer NIP).
+  if (typeof body.contextNip === 'string') {
+    const digits = body.contextNip.replace(/\D/g, '')
+    body.contextNip = digits ? digits : null
+  }
   if (body.consumptionCountryCode === '') body.consumptionCountryCode = null
   if (body.exchangeRate === '') body.exchangeRate = null
   if (body.exchangeRateDate === '') body.exchangeRateDate = null
@@ -167,6 +182,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   const setMeta = React.useCallback((meta: InvoiceMeta) => {
     setValue((prev) => ({ ...prev, meta }))
   }, [])
+  const setBuyer = React.useCallback((buyer: BuyerValue) => {
+    setValue((prev) => ({ ...prev, buyer }))
+  }, [])
 
   // --- Submit handler shared by create + edit -----------------------------------------------
   // Header values come straight from the CrudForm builtin fields (passed in by `onSubmit`) so the
@@ -181,6 +199,69 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     if (value.lines.some((line) => !line.name.trim())) {
       throw createCrudFormError(t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.'))
     }
+
+    // --- Commercial-grade validations (SPEC-014) — block save before a 422 at KSeF send --------
+    const issue = header.issueDate.trim()
+    const due = header.dueDate.trim()
+    if (issue && due && due < issue) {
+      throw createCrudFormError(t('financial_pl.validation.dueBeforeIssue', 'The due date cannot be earlier than the issue date.'))
+    }
+    for (const line of value.lines) {
+      const qty = Number(line.quantity)
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw createCrudFormError(t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.'))
+      }
+      const price = Number(line.unitPriceNet)
+      if (!Number.isFinite(price) || price < 0) {
+        throw createCrudFormError(t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.'))
+      }
+      // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
+      // rate (e.g. "Other…" chosen but left empty) must NOT silently persist as 0%: a real 0% line is
+      // the explicit "0%" pick. Custom rates are numeric-only — zw/np/oo/text are rejected here;
+      // exemption / reverse-charge live in the Polish-VAT section (code-jury, Codex + Kimi).
+      const rateText = (line.taxRate ?? '').trim()
+      const rate = Number(rateText)
+      if (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100) {
+        throw createCrudFormError(t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.'))
+      }
+    }
+    const buyer = value.buyer ?? {}
+    // Any NON-EMPTY NIP field must be a valid Polish NIP — reject letters/garbage that normalise to ''
+    // (else buyerToSnapshot / buildMetaPayload would silently drop it) as well as a wrong checksum
+    // (code-jury r2, Codex). A blank field is fine (buyer NIP is optional outside UPR).
+    const buyerNipRaw = (buyer.nip ?? '').trim()
+    const buyerNip = normalizeNipDigits(buyerNipRaw)
+    if (buyerNipRaw && !isValidPolishNip(buyerNip)) {
+      throw createCrudFormError(t('financial_pl.validation.nipChecksumBuyer', 'The buyer NIP is invalid (checksum failed).'))
+    }
+    const contextNipRaw = (typeof value.meta.contextNip === 'string' ? value.meta.contextNip : '').trim()
+    const contextNip = normalizeNipDigits(contextNipRaw)
+    if (contextNipRaw && !isValidPolishNip(contextNip)) {
+      throw createCrudFormError(t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).'))
+    }
+    // Buyer presence: a non-UPR invoice needs a name + address (matches `buildBuyer`'s 422 rule); a
+    // UPR (simplified) invoice may carry a NIP-only buyer.
+    const kind = value.meta.invoiceKind ?? 'vat'
+    const hasBuyerName = Boolean(buyer.companyName && buyer.companyName.trim())
+    const hasBuyerAddress = Boolean(buyer.addressLine1 && buyer.addressLine1.trim())
+    if (kind === 'upr') {
+      // Mirror buildBuyer(uprNipOnly): a UPR buyer needs EITHER a full name + address OR a NIP — a
+      // name-only / address-only UPR buyer with no NIP still 422s at send (code-jury, Codex).
+      if (!(hasBuyerName && hasBuyerAddress) && !buyerNip) {
+        throw createCrudFormError(t('financial_pl.validation.buyerRequiredUpr', 'A simplified-invoice (UPR) buyer needs either a full name + address or at least a NIP.'))
+      }
+    } else if (!hasBuyerName || !hasBuyerAddress) {
+      throw createCrudFormError(t('financial_pl.validation.buyerRequired', 'The buyer needs a name and an address (line 1).'))
+    }
+
+    // Merge the buyer snapshot into the preserved core invoice metadata (never clobber other keys).
+    const buyerSnapshot = buyerToSnapshot(buyer)
+    const mergedMetadata: Record<string, unknown> = { ...(value.metadata ?? {}) }
+    if (buyerSnapshot) mergedMetadata.buyerSnapshot = buyerSnapshot
+    else delete mergedMetadata.buyerSnapshot
+    const metadataPayload: Record<string, unknown> =
+      Object.keys(mergedMetadata).length ? { metadata: mergedMetadata } : {}
+
     const headerPayload = buildInvoiceHeaderPayload(header)
 
     if (isEdit && invoiceId) {
@@ -190,7 +271,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           apiCall<CreateResponse>('/api/sales/invoices', {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: invoiceId, ...headerPayload, lines: linesPayload }),
+            body: JSON.stringify({ id: invoiceId, ...headerPayload, ...metadataPayload, lines: linesPayload }),
           }),
         context: buildMutationContext('updateInvoice', invoiceId),
         mutationPayload: { id: invoiceId, ...headerPayload },
@@ -221,7 +302,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         apiCall<CreateResponse>('/api/sales/invoices', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ...headerPayload, lines: linesPayload }),
+          body: JSON.stringify({ ...headerPayload, ...metadataPayload, lines: linesPayload }),
         }),
       context: buildMutationContext('createInvoice', null),
       mutationPayload: { ...headerPayload },
@@ -262,7 +343,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     }
     // Switch to edit mode on the new invoice — never re-POST.
     router.push(`/backend/financial/invoices/${encodeURIComponent(newId)}/edit`)
-  }, [buildMutationContext, invoiceId, isEdit, readOnly, router, runMutation, t, value.lines, value.meta])
+  }, [buildMutationContext, invoiceId, isEdit, readOnly, router, runMutation, t, value.buyer, value.lines, value.meta, value.metadata])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => [
     {
@@ -270,6 +351,14 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       title: t('financial_pl.invoices.form.sections.header', 'Invoice details'),
       column: 1,
       fields: ['invoiceNumber', 'issueDate', 'dueDate', 'currencyCode', 'orderId'],
+    },
+    {
+      id: 'buyer',
+      title: t('financial_pl.invoices.form.sections.buyer', 'Buyer (Nabywca)'),
+      column: 1,
+      component: () => (
+        <BuyerFields value={value.buyer} onChange={setBuyer} disabled={readOnly} />
+      ),
     },
     {
       id: 'lines',
@@ -300,7 +389,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         <PlVatMetaForm value={value.meta} onChange={setMeta} disabled={readOnly} />
       ),
     },
-  ], [readOnly, setLines, setMeta, t, value.lines, value.meta])
+  ], [readOnly, setBuyer, setLines, setMeta, t, value.buyer, value.lines, value.meta])
 
   return (
     <div className="flex flex-col gap-4">

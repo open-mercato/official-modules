@@ -13,6 +13,7 @@ import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/u
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { InvoiceForm, IssueCorrectionLink, type InvoiceFormValue } from './InvoiceForm'
 import { withComputedTotals, type InvoiceLineInput } from '../../../../../components/InvoiceLinesField'
+import { buyerFromMetadata } from '../../../../../components/BuyerFields'
 import type { InvoiceMeta, ProcedureMarkings } from '../../../../../components/PlVatMetaForm'
 import type { InvoiceKindColumn } from '../../../../../data/entities'
 import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../../lib/jpk-markings-codes'
@@ -32,6 +33,7 @@ type InvoiceDetailResponse = {
     dueDate?: string | null
     currencyCode?: string | null
     orderId?: string | null
+    metadata?: Record<string, unknown> | null
   } | null
   lines?: Array<{
     name?: string | null
@@ -182,8 +184,10 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       currencyCode,
       orderId: toStr(data.invoice?.orderId),
     },
+    buyer: buyerFromMetadata(data.invoice?.metadata),
     lines: lines.length ? lines : [],
     meta: data.meta ? toFormMeta(wireMeta) : {},
+    metadata: data.invoice?.metadata ?? null,
     metaUpdatedAt: updatedAt ?? null,
   }
 }

@@ -21,8 +21,23 @@ Polish VAT metadata layered onto the OSS `sales` invoices via the sanctioned ext
 - **Per-organization configuration**: NIP, KSeF token, environment, and seller identity are
   stored per-org in the encrypted `integrations` credential store (`ksef_pl` provider) and
   edited at `/backend/integrations/ksef_pl`.
-- **UI**: KSeF status badge + "Send to KSeF" / "Retry" actions and PL-VAT meta fields injected
-  into the core sales-invoice host via UMES widget injection.
+- **Operator backoffice** (module-owned backend pages under `/backend/financial/*`, SPEC-013):
+  Invoices list / create / detail / edit, an invoice **KSeF panel** (status, Send, Retry, Download
+  UPO/PDF, Issue offline, Issue correction), the full **PL-VAT metadata editor**, plus **JPK** and
+  **Certificates** pages. Works standalone on released `@open-mercato/core` (no injection host
+  required). Editing a KSeF-`accepted` invoice is blocked **server-side** by a fail-closed API
+  interceptor on core `sales.invoices` `PUT`/`DELETE` (an additive conditional-409 — part of the
+  module's effective contract once installed).
+- **Commercial-grade invoice editor** (SPEC-014): a **Buyer (Nabywca)** section persisted to the
+  core invoice `metadata.buyerSnapshot` (the exact keys the FA(3) `buildBuyer` resolver reads, so
+  the buyer flows straight into `Podmiot2`); a **"Look up" by NIP** that autofills the buyer's name +
+  working address + VAT status from the Ministry of Finance *Wykaz podatników VAT* (Biała lista)
+  register via `GET /api/financial_pl/ksef/company-lookup`. That route is a **read-only, fail-open
+  server proxy** to `wl-api.mf.gov.pl` (no API key; bounded timeout; only the public NIP being
+  invoiced leaves the system; bank-account numbers are not exposed) — if MF is unreachable the
+  editor silently falls back to manual entry. Plus inline NIP-checksum / date-order / amount /
+  buyer-required validation, line **VAT-rate** (23/8/5/0 + custom) and **unit** pickers, and
+  searchable **GTU / procedure-marking** and **OSS consumption-country** fields.
 
 ## Configuration
 
