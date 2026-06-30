@@ -5,6 +5,9 @@ import {
   jpkFilingUpsertSchema,
   jpkGenerateSchema,
   ksefInvoiceListQuerySchema,
+  receiveSyncSchema,
+  nbpRateQuerySchema,
+  batchSendSchema,
 } from '../validators'
 
 // Valid seller/buyer (10-digit + checksum-valid NIPs reused across the FA(3) test suite).
@@ -401,5 +404,24 @@ describe('ksefInvoiceListQuerySchema (SPEC-013 — invoices list query)', () => 
     expect(ksefInvoiceListQuerySchema.parse({ status: ' accepted ' }).status).toBe('accepted')
     expect(ksefInvoiceListQuerySchema.safeParse({ status: '   ' }).success).toBe(false)
     expect(ksefInvoiceListQuerySchema.safeParse({ status: 'x'.repeat(65) }).success).toBe(false)
+  })
+})
+
+describe('SPEC-015 route validators', () => {
+  it('receiveSyncSchema accepts a valid sync window and rejects a bad date', () => {
+    expect(
+      receiveSyncSchema.safeParse({ dateFrom: '2026-06-01', dateTo: '2026-06-30', dateType: 'PermanentStorage' }).success,
+    ).toBe(true)
+    expect(receiveSyncSchema.safeParse({ dateFrom: '2026/06/01', dateTo: '2026-06-30' }).success).toBe(false)
+  })
+
+  it('nbpRateQuerySchema accepts a 3-letter currency and rejects a 4-letter currency', () => {
+    expect(nbpRateQuerySchema.safeParse({ currency: 'EUR', date: '2026-06-30' }).success).toBe(true)
+    expect(nbpRateQuerySchema.safeParse({ currency: 'EURO', date: '2026-06-30' }).success).toBe(false)
+  })
+
+  it('batchSendSchema accepts invoice UUIDs and rejects an empty array', () => {
+    expect(batchSendSchema.safeParse({ invoiceIds: ['550e8400-e29b-41d4-a716-446655440000'] }).success).toBe(true)
+    expect(batchSendSchema.safeParse({ invoiceIds: [] }).success).toBe(false)
   })
 })

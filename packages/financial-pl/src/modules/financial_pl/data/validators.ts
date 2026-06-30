@@ -728,3 +728,32 @@ export type JpkGenerateInput = z.infer<typeof jpkGenerateSchema>
 export type KsefCertificateEnrollInput = z.infer<typeof ksefCertificateEnrollSchema>
 export type KsefCertificateRevokeInput = z.infer<typeof ksefCertificateRevokeSchema>
 export type InvoiceMetaPutInput = z.infer<typeof invoiceMetaPutSchema>
+
+// SPEC-015 F1 — inbound receiving
+export const receivedInvoicesListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+})
+export type ReceivedInvoicesListQuery = z.infer<typeof receivedInvoicesListQuerySchema>
+
+export const receiveSyncSchema = z.object({
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dateType: z.enum(['Issue', 'Invoicing', 'PermanentStorage']).default('Invoicing'),
+})
+export type ReceiveSyncInput = z.infer<typeof receiveSyncSchema>
+
+// SPEC-015 F2 — JPK submit
+export const jpkSubmitSchema = z.object({ filingId: z.string().uuid() })
+export type JpkSubmitInput = z.infer<typeof jpkSubmitSchema>
+
+// SPEC-015 F5 — NBP rate
+export const nbpRateQuerySchema = z.object({
+  currency: z.string().regex(/^[A-Za-z]{3}$/),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+})
+export type NbpRateQuery = z.infer<typeof nbpRateQuerySchema>
+
+// SPEC-015 F6 — batch send
+export const batchSendSchema = z.object({ invoiceIds: z.array(z.string().uuid()).min(1).max(10000) })
+export type BatchSendInput = z.infer<typeof batchSendSchema>
