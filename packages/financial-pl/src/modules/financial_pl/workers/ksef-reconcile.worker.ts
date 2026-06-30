@@ -538,7 +538,12 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
 
   const batchProcessing = orphanedProcessing.filter((candidate) => candidate.mode === 'batch' && Boolean(candidate.batchReference))
   const batchProcessingIds = new Set(batchProcessing.map((candidate) => candidate.id))
-  for (const group of groupBatchRows(batchProcessing)) {
+  // `orphanedProcessing` is field-projected (em.find `{ fields }`), so its element type is a partial
+  // `Loaded<KsefSubmission, …>` not the full entity. The batch reconcile only READS the projected
+  // fields and WRITES via `em.nativeUpdate` (never mutates the entity instance), so these are
+  // runtime-correct managed rows — widen the static type to the entity for grouping/reconcile.
+  const batchRows = batchProcessing as unknown as KsefSubmission[]
+  for (const group of groupBatchRows(batchRows)) {
     const result = await reconcileBatchGroup({ em, ctx, rows: group, organizationId, tenantId, cutoff, maxAttempts, now })
     batchAccepted += result.accepted
     batchRejected += result.rejected
