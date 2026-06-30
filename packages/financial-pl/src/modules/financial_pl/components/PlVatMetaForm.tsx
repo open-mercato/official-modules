@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidPolishNip } from '../lib/nip'
 import { normalizeNipDigits } from '../lib/company-lookup'
@@ -76,29 +77,43 @@ const OSS_CONSUMPTION_COUNTRIES = [
 const NONE_VALUE = '__none__'
 
 const labelClass = 'text-sm font-medium text-foreground'
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export type PlVatMetaFormProps = {
   value: InvoiceMeta
   onChange: (next: InvoiceMeta) => void
   disabled?: boolean
+  currencyCode?: string
+  taxPointDate?: string
 }
+
+type NbpLookupState = 'idle' | 'loading' | 'unavailable'
+
+type NbpRateLookupResult =
+  | { ok: true; currency: string; rate: string; tableDate: string }
+  | { ok: false; reason: 'invalid_currency' | 'unavailable' | 'not_found' }
 
 /**
  * Controlled PL-VAT metadata editor rendering the FULL `invoiceMetaPutSchema` field
  * set. Pure controlled component: the parent owns persistence (M8 — no internal
  * no-op retry / save mutation). DS tokens + `@open-mercato/ui` primitives only.
  */
-export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps) {
+export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPointDate }: PlVatMetaFormProps) {
   const t = useT()
   const busy = Boolean(disabled)
   const [gtuFilter, setGtuFilter] = React.useState('')
   const [procedureFilter, setProcedureFilter] = React.useState('')
+  const [nbpLookupState, setNbpLookupState] = React.useState<NbpLookupState>('idle')
+  const valueRef = React.useRef(value)
+  React.useEffect(() => {
+    valueRef.current = value
+  }, [value])
 
   const patch = React.useCallback(
     (next: Partial<InvoiceMeta>) => {
-      onChange({ ...value, ...next })
+      onChange({ ...valueRef.current, ...next })
     },
-    [onChange, value],
+    [onChange],
   )
 
   const invoiceKind = value.invoiceKind ?? 'vat'
@@ -106,6 +121,64 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
   const procedureMarkings = value.procedureMarkings ?? {}
   const advancePayments = value.advancePayments ?? []
   const advanceRefs = value.advanceRefs ?? []
+  const normalizedCurrencyCode = (currencyCode ?? '').trim().toUpperCase()
+  const normalizedTaxPointDate = (taxPointDate ?? '').trim()
+  const hasNbpCurrency = /^[A-Z]{3}$/.test(normalizedCurrencyCode)
+  const hasNbpDate = DATE_ONLY_RE.test(normalizedTaxPointDate)
+  const nbpInputsReady = hasNbpCurrency && normalizedCurrencyCode !== 'PLN' && hasNbpDate
+  const nbpLookupBusy = nbpLookupState === 'loading'
+  const nbpDisabledReason = !hasNbpCurrency
+    ? t('financial_pl.fields.nbpMissingCurrency', 'Set the invoice currency first')
+    : normalizedCurrencyCode === 'PLN'
+      ? t('financial_pl.fields.nbpPlnSkipped', 'PLN invoices do not need an NBP rate')
+      : !hasNbpDate
+        ? t('financial_pl.fields.nbpMissingDate', 'Set the invoice issue date first')
+        : undefined
+  const nbpButtonTitle = nbpInputsReady
+    ? t('financial_pl.fields.fetchNbpRate', 'Fetch NBP rate')
+    : nbpDisabledReason
+  const nbpInputsRef = React.useRef({ currency: normalizedCurrencyCode, date: normalizedTaxPointDate })
+  const nbpRequestIdRef = React.useRef(0)
+
+  React.useEffect(() => {
+    nbpInputsRef.current = { currency: normalizedCurrencyCode, date: normalizedTaxPointDate }
+    nbpRequestIdRef.current += 1
+    setNbpLookupState('idle')
+  }, [normalizedCurrencyCode, normalizedTaxPointDate])
+
+  const fetchNbpRate = React.useCallback(async () => {
+    if (busy || nbpLookupBusy || !nbpInputsReady) return
+
+    const requestedCurrency = normalizedCurrencyCode
+    const requestedDate = normalizedTaxPointDate
+    const requestId = nbpRequestIdRef.current + 1
+    nbpRequestIdRef.current = requestId
+    setNbpLookupState('loading')
+
+    try {
+      const res = await apiCall<NbpRateLookupResult>(
+        `/api/financial_pl/ksef/nbp-rate?currency=${encodeURIComponent(requestedCurrency)}&date=${encodeURIComponent(requestedDate)}`,
+      )
+      const latest = nbpInputsRef.current
+      if (
+        nbpRequestIdRef.current !== requestId ||
+        latest.currency !== requestedCurrency ||
+        latest.date !== requestedDate
+      ) {
+        return
+      }
+
+      if (res.ok && res.result?.ok) {
+        patch({ exchangeRate: res.result.rate, exchangeRateDate: res.result.tableDate })
+        setNbpLookupState('idle')
+        return
+      }
+
+      setNbpLookupState('unavailable')
+    } catch {
+      if (nbpRequestIdRef.current === requestId) setNbpLookupState('unavailable')
+    }
+  }, [busy, nbpInputsReady, nbpLookupBusy, normalizedCurrencyCode, normalizedTaxPointDate, patch])
 
   const toggleGtu = (code: GtuCode, next: boolean) => {
     const set = new Set(gtuCodes)
@@ -269,14 +342,40 @@ export function PlVatMetaForm({ value, onChange, disabled }: PlVatMetaFormProps)
           <label className={labelClass} htmlFor="financial_pl-exchange-rate">
             {t('financial_pl.fields.exchangeRate', 'Exchange rate (to PLN)')}
           </label>
-          <Input
-            id="financial_pl-exchange-rate"
-            inputMode="decimal"
-            value={value.exchangeRate ?? ''}
-            disabled={busy}
-            onChange={(event) => patch({ exchangeRate: event.target.value.length ? event.target.value : null })}
-            placeholder="4.3210"
-          />
+          <div className="flex flex-col gap-1 sm:flex-row">
+            <Input
+              id="financial_pl-exchange-rate"
+              inputMode="decimal"
+              value={value.exchangeRate ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                patch({ exchangeRate: event.target.value.length ? event.target.value : null })
+                if (nbpLookupState !== 'idle') setNbpLookupState('idle')
+              }}
+              placeholder="4.3210"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 whitespace-nowrap"
+              disabled={busy || nbpLookupBusy || !nbpInputsReady}
+              title={nbpButtonTitle}
+              onClick={() => void fetchNbpRate()}
+            >
+              {nbpLookupBusy ? (
+                <Loader2 className="mr-1 size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 size-4" />
+              )}
+              {t('financial_pl.fields.fetchNbpRate', 'Fetch NBP rate')}
+            </Button>
+          </div>
+          {nbpLookupState === 'unavailable' ? (
+            <span className="text-xs text-muted-foreground">
+              {t('financial_pl.fields.nbpUnavailable', 'NBP rate unavailable — enter manually')}
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-col gap-1.5">
           <label className={labelClass} htmlFor="financial_pl-exchange-rate-date">

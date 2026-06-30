@@ -385,9 +385,21 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       id: 'plvat',
       title: t('financial_pl.invoices.form.sections.plVat', 'Polish VAT'),
       column: 1,
-      component: () => (
-        <PlVatMetaForm value={value.meta} onChange={setMeta} disabled={readOnly} />
-      ),
+      component: (ctx) => {
+        const liveCurrency =
+          (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
+          DEFAULT_CURRENCY
+        const liveIssueDate = typeof ctx.values.issueDate === 'string' ? ctx.values.issueDate.trim() : ''
+        return (
+          <PlVatMetaForm
+            value={value.meta}
+            onChange={setMeta}
+            disabled={readOnly}
+            currencyCode={liveCurrency}
+            taxPointDate={liveIssueDate}
+          />
+        )
+      },
     },
   ], [readOnly, setBuyer, setLines, setMeta, t, value.buyer, value.lines, value.meta])
 

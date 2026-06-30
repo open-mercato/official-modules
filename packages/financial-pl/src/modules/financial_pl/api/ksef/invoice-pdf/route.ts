@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { createPrivateKey } from 'node:crypto'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
@@ -18,6 +19,7 @@ import { buildInvoicePdfModel } from '../../../lib/invoice-pdf-model'
 import { renderInvoicePdf } from '../../../lib/invoice-pdf'
 import { generateQrPng } from '../../../lib/invoice-qr'
 import { buildKodIUrl } from '../../../lib/ksef-qr'
+import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../../../lib/ksef-qr-cert'
 import { loadInvoiceFontBytes } from '../../../lib/fonts/liberation-sans-regular.font'
 import { resolveKsefEnvironment } from '../../../config'
 
@@ -41,10 +43,18 @@ type KsefCredentialDetails = {
   contextNip?: string
   environment?: string
   seller?: { name?: string; addressLine1?: string; addressLine2?: string }
+  offlineCertificatePem?: string
+  offlineCertificatePrivateKeyPem?: string
+  offlineCertificateSerialNumber?: string
 }
 
 function credString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function detectKodIIAlgorithm(privateKeyPem: string): KsefKodIIAlgorithm {
+  const type = createPrivateKey(privateKeyPem).asymmetricKeyType
+  return type === 'ec' ? 'EC' : 'RSA'
 }
 
 /**
@@ -70,6 +80,9 @@ async function readKsefCredentials(
         addressLine1: credString(creds.sellerAddressLine1),
         addressLine2: credString(creds.sellerAddressLine2),
       },
+      offlineCertificatePem: credString(creds.offlineCertificatePem),
+      offlineCertificatePrivateKeyPem: credString(creds.offlineCertificatePrivateKeyPem),
+      offlineCertificateSerialNumber: credString(creds.offlineCertificateSerialNumber),
     }
   } catch {
     return {}
@@ -218,21 +231,58 @@ export async function GET(req: Request) {
     const environment = acceptedSubmission?.environment
       ? resolveKsefEnvironment(acceptedSubmission.environment).environment
       : resolveKsefEnvironment(credentials.environment).environment
+    const invoiceXmlForQr = registeredXml ?? buildFa3Xml(doc)
     const kodIUrl = buildKodIUrl({
       environment,
       sellerNip,
       issueDate: doc.model.issueDate,
-      invoiceXml: registeredXml ?? buildFa3Xml(doc),
+      invoiceXml: invoiceXmlForQr,
     })
     const qrPng = await generateQrPng(kodIUrl)
+
+    let qrIiPng: Uint8Array | undefined
+    const isOfflineIssued = ksefStatus === 'offline_issued' && !ksefNumber
+    if (
+      isOfflineIssued &&
+      credentials.offlineCertificatePem &&
+      credentials.offlineCertificatePrivateKeyPem &&
+      credentials.offlineCertificateSerialNumber
+    ) {
+      try {
+        const kodIIUrl = await buildKodIIUrl({
+          environment,
+          contextType: 'Nip',
+          contextValue: credentials.contextNip ?? sellerNip,
+          sellerNip,
+          certSerial: credentials.offlineCertificateSerialNumber,
+          invoiceXml: invoiceXmlForQr,
+          offlineCertificatePrivateKeyPem: credentials.offlineCertificatePrivateKeyPem,
+          algorithm: detectKodIIAlgorithm(credentials.offlineCertificatePrivateKeyPem),
+        })
+        qrIiPng = await generateQrPng(kodIIUrl)
+      } catch (err) {
+        console.error('[internal] financial_pl.ksef invoice-pdf KOD II failed', err)
+      }
+    }
 
     const model = buildInvoicePdfModel(doc, {
       ksefNumber,
       ksefStatus,
       notice: translate('financial_pl.pdf.visualizationNotice', VISUALIZATION_NOTICE_DEFAULT),
+      ...(qrIiPng
+        ? {
+            hasKodII: true,
+            qrOfflineLabel: translate('financial_pl.labels.qrOffline', 'OFFLINE'),
+            qrCertyfikatLabel: translate('financial_pl.labels.qrCertyfikat', 'CERTYFIKAT'),
+          }
+        : {}),
     })
 
-    const bytes = await renderInvoicePdf(model, { fontBytes: loadInvoiceFontBytes(), qrPng })
+    const bytes = await renderInvoicePdf(model, {
+      fontBytes: loadInvoiceFontBytes(),
+      qrPng,
+      ...(qrIiPng ? { qrIiPng } : {}),
+    })
 
     // Sanitize the invoice number for the header filename (strip quotes/control
     // chars/path separators) to prevent Content-Disposition header injection.
