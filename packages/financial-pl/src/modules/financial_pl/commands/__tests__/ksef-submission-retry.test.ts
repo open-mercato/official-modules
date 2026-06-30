@@ -69,6 +69,15 @@ describe('retryCommand — recovery routing (H6: offline submissions retry throu
     expect(emitted.map((e) => e.event)).toEqual(['financial_pl.ksef_submission.offline_send_requested'])
   })
 
+  it('a rejected niedostepnosc (offline) submission also re-routes to send_offline, not the online queue', async () => {
+    const submission: Record<string, unknown> = {
+      id: SUB, organizationId: ORG, tenantId: TEN, status: 'rejected', mode: 'niedostepnosc', updatedAt: new Date(),
+    }
+    await retryCommand.execute({ id: SUB }, makeCtx(makeEm(submission)))
+    expect(submission.status).toBe('offline_issued')
+    expect(emitted.map((e) => e.event)).toEqual(['financial_pl.ksef_submission.offline_send_requested'])
+  })
+
   it('a rejected ONLINE submission resets to queued and emits the online queued event', async () => {
     const submission: Record<string, unknown> = {
       id: SUB, organizationId: ORG, tenantId: TEN, status: 'rejected', mode: 'online', updatedAt: new Date(),

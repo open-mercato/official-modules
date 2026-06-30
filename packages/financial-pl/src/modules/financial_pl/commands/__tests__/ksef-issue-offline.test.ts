@@ -122,6 +122,19 @@ describe('financial_pl.ksef_submission.issue_offline (SPEC-010)', () => {
     })
   })
 
+  it('rejects (400 offline_mode_invalid) when niedostepnosc omits unavailabilityEndsAt', async () => {
+    await expect(
+      issueOfflineCommand.execute(
+        { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, mode: 'niedostepnosc' },
+        makeCtx({ creds: { contextNip: '5260001246' } }),
+      ),
+    ).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ params: expect.objectContaining({ code: 'offline_mode_invalid' }) }),
+      ]),
+    })
+  })
+
   it('rejects (409 offline_certificate_required) when no Offline certificate is enrolled', async () => {
     await expect(
       issueOfflineCommand.execute(
@@ -187,6 +200,46 @@ describe('financial_pl.ksef_submission.issue_offline (SPEC-010)', () => {
     expect(String(row.kodIiUrl)).toContain('/certificate/Nip/')
     expect(row.offlineIssuedAt).toBeInstanceOf(Date)
     expect(row.offlineSendDeadlineAt).toBeInstanceOf(Date)
+  })
+
+  it('persists niedostepnosc with the next-business-day-after-unavailability deadline', async () => {
+    const now = Date.now()
+    const { certPem, keyPem } = await rsaCertAndKey(new Date(now - 86_400_000), new Date(now + 31_536_000_000))
+    const created: Record<string, unknown>[] = []
+    const em: Record<string, unknown> = {
+      findOne: jest.fn(async () => null),
+      create: jest.fn((_e: unknown, data: Record<string, unknown>) => {
+        const row = { id: 'NEW', ...data }
+        created.push(row)
+        return row
+      }),
+      persist: () => ({ flush: async () => {} }),
+    }
+    const result = await issueOfflineCommand.execute(
+      {
+        organizationId: ORG,
+        tenantId: TEN,
+        salesInvoiceId: INV,
+        mode: 'niedostepnosc',
+        unavailabilityEndsAt: '2026-02-06T10:00:00.000Z',
+      },
+      makeCtx({
+        creds: {
+          contextNip: '5260001246',
+          environment: 'test',
+          offlineCertificatePem: certPem,
+          offlineCertificatePrivateKeyPem: keyPem,
+          offlineCertificateSerialNumber: '0A',
+        },
+        em,
+      }),
+    )
+
+    expect(result.status).toBe('offline_issued')
+    expect(result.deadline).toBe('2026-02-09T00:00:00.000Z')
+    const row = created[0]
+    expect(row.mode).toBe('niedostepnosc')
+    expect((row.offlineSendDeadlineAt as Date).toISOString()).toBe('2026-02-09T00:00:00.000Z')
   })
 
   it('rejects (422 self_billing_unsupported) a self-billed invoice before building KOD II / persisting a row', async () => {

@@ -407,14 +407,15 @@ export const ksefSubmissionRetrySchema = z.object({
   id: z.string().uuid(),
 })
 
-/** Offline issuance mode (SPEC-010): self-initiated (offline24) or MF-announced failure (awaryjny). */
-export const ksefOfflineModeSchema = z.enum(['offline24', 'awaryjny'])
+/** Offline issuance mode (SPEC-010/F3): self-initiated, MF failure, or MF-announced unavailability. */
+export const ksefOfflineModeSchema = z.enum(['offline24', 'awaryjny', 'niedostepnosc'])
 
 /**
  * Issue-offline input (SPEC-010 §Offline issuance + jury delta #1). The deadline source
  * is explicit: `awaryjny` REQUIRES a `failureEndsAt` (the MF-BIP-announced failure-end the
- * operator enters; deadline = +7 business days); `offline24` MUST NOT carry one (deadline =
- * next business day). A mismatch (offline24 with failureEndsAt, or awaryjny without it) is
+ * operator enters; deadline = +7 business days); `niedostepnosc` REQUIRES an
+ * `unavailabilityEndsAt` (deadline = next business day after the announced period ends);
+ * `offline24` MUST NOT carry either timestamp (deadline = next business day). Mismatches are
  * rejected with `offline_mode_invalid` so the deadline is never silently mis-computed.
  */
 export const ksefIssueOfflineSchema = z
@@ -423,8 +424,10 @@ export const ksefIssueOfflineSchema = z
     tenantId: z.string().uuid().optional(),
     salesInvoiceId: z.string().uuid(),
     mode: ksefOfflineModeSchema,
-    /** Required for `awaryjny`, forbidden for `offline24` — the MF-announced failure-end (ISO datetime). */
+    /** Required for `awaryjny`, forbidden for `offline24`/`niedostepnosc` — the MF-announced failure-end (ISO datetime). */
     failureEndsAt: z.string().datetime().optional(),
+    /** Required for `niedostepnosc`, forbidden for `offline24`/`awaryjny` — the MF-announced unavailability-end (ISO datetime). */
+    unavailabilityEndsAt: z.string().datetime().optional(),
   })
   .superRefine((input, ctx) => {
     if (input.mode === 'awaryjny' && !input.failureEndsAt) {
@@ -435,12 +438,44 @@ export const ksefIssueOfflineSchema = z
         message: 'An awaryjny (emergency) offline issue requires the announced failure-end timestamp.',
       })
     }
+    if (input.mode === 'awaryjny' && input.unavailabilityEndsAt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailabilityEndsAt'],
+        params: { code: 'offline_mode_invalid' },
+        message: 'An awaryjny (emergency) offline issue must not carry an unavailability-end timestamp.',
+      })
+    }
     if (input.mode === 'offline24' && input.failureEndsAt) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['failureEndsAt'],
         params: { code: 'offline_mode_invalid' },
         message: 'An offline24 issue must not carry a failure-end timestamp (its deadline is the next business day).',
+      })
+    }
+    if (input.mode === 'offline24' && input.unavailabilityEndsAt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailabilityEndsAt'],
+        params: { code: 'offline_mode_invalid' },
+        message: 'An offline24 issue must not carry an unavailability-end timestamp (its deadline is the next business day).',
+      })
+    }
+    if (input.mode === 'niedostepnosc' && !input.unavailabilityEndsAt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailabilityEndsAt'],
+        params: { code: 'offline_mode_invalid' },
+        message: 'A niedostepnosc offline issue requires the announced unavailability-end timestamp.',
+      })
+    }
+    if (input.mode === 'niedostepnosc' && input.failureEndsAt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['failureEndsAt'],
+        params: { code: 'offline_mode_invalid' },
+        message: 'A niedostepnosc offline issue must not carry a failure-end timestamp.',
       })
     }
   })

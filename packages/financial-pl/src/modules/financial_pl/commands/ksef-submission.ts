@@ -15,12 +15,14 @@ import {
   sendFromCreditMemoSchema,
   ksefIssueOfflineSchema,
   ksefRecomputeOfflineDeadlineSchema,
+  batchSendSchema,
   type KsefSubmissionSendInput,
   type KsefSubmissionRetryInput,
   type SendFromInvoiceInput,
   type SendFromCreditMemoInput,
   type KsefIssueOfflineInput,
   type KsefRecomputeOfflineDeadlineInput,
+  type BatchSendInput,
 } from '../data/validators'
 import { buildFa3XmlFromInput } from '../lib/build-submission'
 import {
@@ -29,14 +31,21 @@ import {
 } from '../lib/resolve-fa3-from-invoice'
 import { resolveFa3FromCreditMemo } from '../lib/resolve-fa3-from-credit-memo'
 import { emitFinancialPlEvent } from '../events'
-import { resolveKsefEnvironment } from '../config'
-import { readKsefCredentials as readKsefCredentialsFull } from '../lib/credentials'
+import { FA3_SCHEMA, resolveKsefEnvironment } from '../config'
+import {
+  buildKsefAuthConfig,
+  readKsefCredentials as readKsefCredentialsFull,
+  type ResolverContext,
+} from '../lib/credentials'
+import { KsefClient, type KsefPublicKeyCertificate, type KsefTransport } from '../lib/ksef-client'
+import { authenticate } from '../lib/ksef-auth'
 import { assertCertificateValidNow, CertificateValidityError } from '../lib/cert-enrollment'
 import { buildKodIUrl } from '../lib/ksef-qr'
 import { chooseRecovery } from '../lib/recovery'
 import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
 import { isInvoiceIssued } from '../lib/invoice-status'
+import { buildBatchPackage } from '../lib/batch-package'
 
 type CredentialsService = {
   getRaw: (
@@ -60,6 +69,9 @@ type KsefCredentialDetails = {
   environment?: string
   seller?: { name?: string; addressLine1?: string; addressLine2?: string }
 }
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+const AUTH_POLL = { authMaxAttempts: 20, authDelayMs: 1500, wait } as const
 
 function credString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
@@ -93,6 +105,32 @@ function requireScope(input: { organizationId?: string; tenantId?: string }): { 
     throw new CrudHttpError(400, { error: 'Organization scope is required' })
   }
   return { organizationId: input.organizationId, tenantId: input.tenantId }
+}
+
+function commandResolver(ctx: CommandRuntimeContext): ResolverContext {
+  return {
+    resolve: <T = unknown>(name: string): T => ctx.container.resolve(name) as T,
+  }
+}
+
+function resolveOptional<T>(ctx: CommandRuntimeContext, name: string): T | undefined {
+  try {
+    return ctx.container.resolve(name) as T | undefined
+  } catch {
+    return undefined
+  }
+}
+
+function selectCertificate(
+  certs: KsefPublicKeyCertificate[],
+  usageNeedle: string,
+): KsefPublicKeyCertificate | undefined {
+  const matches = certs.filter(
+    (cert) =>
+      cert.certificate.trim().length > 0 &&
+      cert.usage.some((usage) => usage.toLowerCase().includes(usageNeedle)),
+  )
+  return [...matches].sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? ''))[0]
 }
 
 /**
@@ -294,10 +332,10 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
       return { submissionId: submission.id }
     }
 
-    // Offline-issued (offline24 / awaryjny) submissions retry through the DEFERRED OFFLINE send
+    // Offline-issued (offline24 / awaryjny / niedostepnosc) submissions retry through the DEFERRED OFFLINE send
     // path — never the online queue — so offlineMode and the statutory send-by deadline are
     // preserved. (A 'processing' offline row that already reached KSeF is routed to repoll above.)
-    const isOfflineMode = submission.mode === 'offline24' || submission.mode === 'awaryjny'
+    const isOfflineMode = submission.mode === 'offline24' || submission.mode === 'awaryjny' || submission.mode === 'niedostepnosc'
     if (isOfflineMode) {
       submission.status = 'offline_issued'
       submission.lastErrorCode = null
@@ -393,6 +431,162 @@ export const sendFromInvoiceCommand: CommandHandler<SendFromInvoiceInput, { subm
   },
 }
 
+export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: string; count: number }> = {
+  id: 'financial_pl.ksef_submission.send_batch',
+  async execute(input, ctx) {
+    const parsed = batchSendSchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
+
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const queryEngine = ctx.container.resolve('queryEngine') as ResolveFa3QueryEngine
+    const { translate } = await resolveTranslations()
+
+    const details = await readKsefCredentials(ctx, scope)
+    const contextNip = details.contextNip
+    if (!contextNip) {
+      throw new CrudHttpError(409, {
+        error: translate('financial_pl.errors.credentials_missing', 'KSeF credentials are not configured for this organization.'),
+        code: 'ksef_credentials_missing',
+      })
+    }
+
+    const creds = await readKsefCredentialsFull(commandResolver(ctx), scope)
+    const auth = buildKsefAuthConfig(creds, contextNip)
+    if (!auth) {
+      throw new CrudHttpError(409, {
+        error: '[internal] KSeF credentials are not configured for this organization (token or certificate).',
+        code: 'ksef_auth_missing',
+      })
+    }
+
+    const environmentConfig = resolveKsefEnvironment(creds.environment ?? details.environment)
+    const client = new KsefClient(environmentConfig, resolveOptional<KsefTransport>(ctx, 'ksefTransport'))
+    let accessToken: string
+    let mfPublicKeyPem: string
+    try {
+      const certs = await client.getPublicKeyCertificates()
+      const symmetricCert = selectCertificate(certs, 'symmetric')
+      if (!symmetricCert?.certificate) {
+        throw new CrudHttpError(502, {
+          error: '[internal] KSeF public keys unavailable',
+          code: 'ksef_public_keys_unavailable',
+        })
+      }
+      mfPublicKeyPem = symmetricCert.certificate
+      const authResult = await authenticate(client, selectCertificate(certs, 'token'), auth, AUTH_POLL)
+      if (!authResult.ok) {
+        throw new CrudHttpError(502, { error: authResult.errorMessage, code: 'ksef_auth_failed' })
+      }
+      accessToken = authResult.accessToken
+    } catch (err) {
+      if (err instanceof CrudHttpError) throw err
+      throw new CrudHttpError(502, {
+        error: err instanceof Error ? `[internal] KSeF batch authentication failed: ${err.message}` : '[internal] KSeF batch authentication failed',
+        code: 'ksef_batch_auth_failed',
+      })
+    }
+
+    const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted', 'offline_issued']
+    const batchInvoices: Array<{ invoiceId: string; fileName: string; xml: string }> = []
+    for (const invoiceId of [...new Set(parsed.invoiceIds)]) {
+      const existing = await em.findOne(KsefSubmission, {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        documentKind: 'invoice',
+        salesInvoiceId: invoiceId,
+        status: { $in: activeStatuses },
+        deletedAt: null,
+      })
+      if (existing) continue
+
+      const invoicePayload = await resolveFa3FromSalesInvoice(
+        { queryEngine, contextNip, translate, seller: details.seller },
+        {
+          salesInvoiceId: invoiceId,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+        },
+      )
+      assertNotSelfBilled(invoicePayload)
+      batchInvoices.push({
+        invoiceId,
+        fileName: `${invoiceId}.xml`,
+        xml: buildFa3XmlFromInput(invoicePayload),
+      })
+    }
+
+    if (batchInvoices.length === 0) {
+      throw new CrudHttpError(409, {
+        error: '[internal] no invoices are eligible for a new KSeF batch submission',
+        code: 'ksef_batch_no_eligible_invoices',
+      })
+    }
+
+    const pkg = buildBatchPackage(
+      batchInvoices.map((invoice) => ({ fileName: invoice.fileName, xml: invoice.xml })),
+      mfPublicKeyPem,
+    )
+
+    let referenceNumber: string
+    try {
+      const session = await client.openBatchSession({
+        accessToken,
+        formCode: {
+          systemCode: FA3_SCHEMA.systemCode,
+          schemaVersion: FA3_SCHEMA.schemaVersion,
+          value: FA3_SCHEMA.formCode,
+        },
+        encryption: pkg.encryption,
+        batchFile: pkg.batchFile,
+        fileParts: pkg.fileParts,
+      })
+      referenceNumber = session.referenceNumber
+      const uploadRequest = session.partUploadRequests[0]
+      if (!uploadRequest) {
+        throw new CrudHttpError(502, {
+          error: '[internal] KSeF batch session did not return a part upload request',
+          code: 'ksef_batch_upload_request_missing',
+        })
+      }
+      await client.uploadBatchPart(uploadRequest, pkg.encryptedZip)
+      await client.closeBatchSession({ accessToken, referenceNumber })
+    } catch (err) {
+      if (err instanceof CrudHttpError) throw err
+      throw new CrudHttpError(502, {
+        error: err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed',
+        code: 'ksef_batch_send_failed',
+      })
+    }
+
+    const now = new Date()
+    const submissions = batchInvoices.map((invoice) =>
+      em.create(KsefSubmission, {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        salesInvoiceId: invoice.invoiceId,
+        documentKind: 'invoice',
+        creditMemoId: null,
+        environment: environmentConfig.environment,
+        mode: 'batch',
+        status: 'processing',
+        contextNip,
+        invoiceXml: invoice.xml,
+        sessionReference: referenceNumber,
+        batchReference: referenceNumber,
+        attemptCount: 1,
+        submittedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    await em.persist(submissions).flush()
+
+    return { batchReference: referenceNumber, count: submissions.length }
+  },
+}
+
 export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, { submissionId: string }> = {
   id: 'financial_pl.ksef_submission.send_from_credit_memo',
   async execute(input, ctx) {
@@ -458,7 +652,7 @@ function detectKodIIAlgorithm(privateKeyPem: string): KsefKodIIAlgorithm {
 }
 
 /**
- * Issue an invoice OFFLINE (offline24 / awaryjny) — SPEC-010. Builds the byte-stable FA(3)
+ * Issue an invoice OFFLINE (offline24 / awaryjny / niedostepnosc) — SPEC-010/F3. Builds the byte-stable FA(3)
  * XML now, computes KOD I (labelled OFFLINE) + the cert-signed KOD II, computes the statutory
  * send-to-KSeF deadline, and persists a `KsefSubmission` with `status='offline_issued'` and NO
  * KSeF number yet (the worker sends it within the deadline and reconciles the retroactive
@@ -466,6 +660,7 @@ function detectKodIIAlgorithm(privateKeyPem: string): KsefKodIIAlgorithm {
  * valid now (409 `offline_certificate_invalid`, jury delta #3). The extended active-unique index
  * prevents a duplicate active row for the same invoice (jury delta #2).
  */
+// [internal] Total-awaria is represented by issuedOutsideKsef + the JPK BFK marking, not by an OfflineSendMode.
 export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submissionId: string; status: 'offline_issued'; deadline: string }> = {
   id: 'financial_pl.ksef_submission.issue_offline',
   async execute(input, ctx) {
@@ -556,6 +751,7 @@ export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submis
       issuedAt: now,
       mode: parsed.mode,
       failureEndsAt: parsed.failureEndsAt ? new Date(parsed.failureEndsAt) : null,
+      unavailabilityEndsAt: parsed.unavailabilityEndsAt ? new Date(parsed.unavailabilityEndsAt) : null,
     })
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
@@ -665,5 +861,6 @@ registerCommand(sendCommand)
 registerCommand(retryCommand)
 registerCommand(sendFromInvoiceCommand)
 registerCommand(sendFromCreditMemoCommand)
+registerCommand(sendBatchCommand)
 registerCommand(issueOfflineCommand)
 registerCommand(recomputeOfflineDeadlineCommand)

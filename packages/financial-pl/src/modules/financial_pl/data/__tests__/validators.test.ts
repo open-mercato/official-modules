@@ -5,6 +5,7 @@ import {
   jpkFilingUpsertSchema,
   jpkGenerateSchema,
   ksefInvoiceListQuerySchema,
+  ksefIssueOfflineSchema,
   receiveSyncSchema,
   nbpRateQuerySchema,
   batchSendSchema,
@@ -423,5 +424,19 @@ describe('SPEC-015 route validators', () => {
   it('batchSendSchema accepts invoice UUIDs and rejects an empty array', () => {
     expect(batchSendSchema.safeParse({ invoiceIds: ['550e8400-e29b-41d4-a716-446655440000'] }).success).toBe(true)
     expect(batchSendSchema.safeParse({ invoiceIds: [] }).success).toBe(false)
+  })
+
+  it('ksefIssueOfflineSchema accepts niedostepnosc only with unavailabilityEndsAt', () => {
+    const base = { salesInvoiceId: '550e8400-e29b-41d4-a716-446655440000', mode: 'niedostepnosc' as const }
+
+    expect(ksefIssueOfflineSchema.safeParse({ ...base, unavailabilityEndsAt: '2026-02-06T10:00:00.000Z' }).success).toBe(true)
+    expect(ksefIssueOfflineSchema.safeParse(base).success).toBe(false)
+    expect(
+      ksefIssueOfflineSchema.safeParse({
+        ...base,
+        unavailabilityEndsAt: '2026-02-06T10:00:00.000Z',
+        failureEndsAt: '2026-02-06T10:00:00.000Z',
+      }).success,
+    ).toBe(false)
   })
 })
