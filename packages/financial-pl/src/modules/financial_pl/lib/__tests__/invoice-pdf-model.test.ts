@@ -36,6 +36,40 @@ describe('buildInvoicePdfModel', () => {
     expect(m.ksef.label).toBe('OFFLINE')
   })
 
+  it('maps a transfer payment block for the PDF view', () => {
+    const doc = invoiceDoc()
+    doc.model.payment = {
+      formaCode: '6',
+      terminDate: '2026-07-14',
+      bankAccount: 'PL61109010140000071219812874',
+    }
+    const m = buildInvoicePdfModel(doc, { ksefNumber: null, ksefStatus: 'queued', notice: 'x' })
+    expect(m.payment).toMatchObject({
+      methodLabel: 'Przelew',
+      term: '2026-07-14',
+      account: 'PL61109010140000071219812874',
+    })
+  })
+
+  it('maps cash and marks the payment as paid when paidDate is set', () => {
+    const doc = invoiceDoc()
+    doc.model.payment = { formaCode: '1', paidDate: '2026-07-01' }
+    const m = buildInvoicePdfModel(doc, { ksefNumber: null, ksefStatus: 'queued', notice: 'x' })
+    expect(m.payment).toMatchObject({ methodLabel: 'Gotówka', paid: true })
+  })
+
+  it('uses other payment description when no FormaPlatnosci code is set', () => {
+    const doc = invoiceDoc()
+    doc.model.payment = { otherDescription: 'Za pobraniem' }
+    const m = buildInvoicePdfModel(doc, { ksefNumber: null, ksefStatus: 'queued', notice: 'x' })
+    expect(m.payment?.methodLabel).toBe('Za pobraniem')
+  })
+
+  it('omits the payment key when the FA(3) model has no payment block', () => {
+    const m = buildInvoicePdfModel(invoiceDoc(), { ksefNumber: null, ksefStatus: 'queued', notice: 'x' })
+    expect('payment' in m).toBe(false)
+  })
+
   it('handles a KOR correction with negative amounts', () => {
     const doc = invoiceDoc()
     doc.model.invoiceKind = 'KOR'

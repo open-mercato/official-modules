@@ -4,7 +4,7 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { z } from 'zod'
-import { CrudForm, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
+import { CrudForm, type CrudFormGroup, type CrudFormGroupComponentProps } from '@open-mercato/ui/backend/CrudForm'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@open-mercato/ui/primitives/accordion'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
@@ -19,6 +19,12 @@ import {
 } from '../../../../../components/InvoiceLinesField'
 import { PlVatMetaForm, type InvoiceMeta } from '../../../../../components/PlVatMetaForm'
 import { BuyerFields, buyerToSnapshot, type BuyerValue } from '../../../../../components/BuyerFields'
+import {
+  PaymentFields,
+  PAYMENT_METHODS,
+  type PaymentMethod,
+  type PaymentValue,
+} from '../../../../../components/PaymentFields'
 import { isValidPolishNip } from '../../../../../lib/nip'
 import { normalizeNipDigits } from '../../../../../lib/company-lookup'
 
@@ -27,6 +33,7 @@ type InvoiceHeaderValues = {
   invoiceNumber: string
   issueDate: string
   dueDate: string
+  saleDate?: string
   currencyCode: string
   orderId: string
 }
@@ -37,6 +44,8 @@ export type InvoiceFormValue = {
   /** Buyer (Nabywca) — persisted to core SalesInvoice `metadata.buyerSnapshot`. */
   buyer: BuyerValue
   lines: InvoiceLineInput[]
+  /** Payment & settlement — persisted to core SalesInvoice `metadata.payment`. */
+  payment?: PaymentValue
   meta: InvoiceMeta
   /** Invoice note (Uwagi) — persisted in core SalesInvoice `metadata.notes`. */
   notes?: string
@@ -45,6 +54,11 @@ export type InvoiceFormValue = {
   metadata?: Record<string, unknown> | null
   /** Present in edit mode — the meta row's updatedAt for optimistic locking, if known. */
   metaUpdatedAt?: string | null
+}
+
+type ControlledInvoiceFormValue = Omit<InvoiceFormValue, 'header' | 'payment'> & {
+  header: InvoiceHeaderValues & { saleDate: string }
+  payment: PaymentValue
 }
 
 export type InvoiceFormProps = {
@@ -58,14 +72,256 @@ export type InvoiceFormProps = {
 }
 
 const DEFAULT_CURRENCY = 'PLN'
+const DEFAULT_TERM_DAYS = 14
 const ADVANCE_INVOICE_KINDS = new Set(['zal', 'roz', 'kor_zal', 'kor_roz'])
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+type PaymentMetadata = {
+  method: PaymentMethod
+  methodOther?: string
+  termDays?: number
+  bankAccount?: string
+  bankName?: string
+  swift?: string
+  paid?: true
+  paidDate?: string
+}
+
+function todayInput(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function addDays(dateInput: string, days: number): string {
+  const date = dateInput.trim()
+  if (!date || !Number.isFinite(days)) return date
+  const parts = date.split('-').map((part) => Number(part))
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return date
+  const [year, month, day] = parts
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return date
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + Math.trunc(days))
+  return parsed.toISOString().slice(0, 10)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isPaymentMethod(value: unknown): value is PaymentMethod {
+  return typeof value === 'string' && (PAYMENT_METHODS as readonly string[]).includes(value)
+}
+
+function cleanOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function cleanOptionalNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
+}
+
+function defaultPayment(): PaymentValue {
+  return { method: 'transfer', termDays: DEFAULT_TERM_DAYS }
+}
+
+function normalizePaymentValue(value: Partial<PaymentValue> | undefined): PaymentValue {
+  const method = isPaymentMethod(value?.method) ? value.method : 'transfer'
+  const payment: PaymentValue = { method }
+  const termDays = cleanOptionalNumber(value?.termDays)
+  if (termDays !== undefined) payment.termDays = termDays
+  const methodOther = cleanOptionalString(value?.methodOther)
+  if (methodOther) payment.methodOther = methodOther
+  if (method === 'transfer') {
+    const bankAccount = cleanOptionalString(value?.bankAccount)
+    const bankName = cleanOptionalString(value?.bankName)
+    const swift = cleanOptionalString(value?.swift)
+    if (bankAccount) payment.bankAccount = bankAccount
+    if (bankName) payment.bankName = bankName
+    if (swift) payment.swift = swift
+  }
+  if (value?.paid) {
+    payment.paid = true
+    const paidDate = cleanOptionalString(value.paidDate)
+    if (paidDate) payment.paidDate = paidDate
+  }
+  return payment
+}
+
+function paymentFromMetadata(metadata: Record<string, unknown> | null | undefined): PaymentValue | undefined {
+  const source = metadata?.payment
+  if (!isRecord(source)) return undefined
+  return normalizePaymentValue({
+    method: isPaymentMethod(source.method) ? source.method : undefined,
+    methodOther: cleanOptionalString(source.methodOther),
+    termDays: cleanOptionalNumber(source.termDays),
+    bankAccount: cleanOptionalString(source.bankAccount),
+    bankName: cleanOptionalString(source.bankName),
+    swift: cleanOptionalString(source.swift),
+    paid: source.paid === true,
+    paidDate: cleanOptionalString(source.paidDate),
+  })
+}
+
+function metadataDate(metadata: Record<string, unknown> | null | undefined, key: string): string {
+  const value = metadata?.[key]
+  return typeof value === 'string' && value.trim() ? value.slice(0, 10) : ''
+}
+
+function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boolean): ControlledInvoiceFormValue {
+  const payment = normalizePaymentValue(
+    initialValue.payment ?? paymentFromMetadata(initialValue.metadata) ?? defaultPayment(),
+  )
+  const issueDate = initialValue.header.issueDate || todayInput()
+  const saleDate = initialValue.header.saleDate || metadataDate(initialValue.metadata, 'saleDate') || issueDate
+  const dueDate = initialValue.header.dueDate || (isEdit ? '' : addDays(issueDate, payment.termDays ?? DEFAULT_TERM_DAYS))
+  return {
+    ...initialValue,
+    header: {
+      ...initialValue.header,
+      issueDate,
+      dueDate,
+      saleDate,
+      currencyCode: initialValue.header.currencyCode || DEFAULT_CURRENCY,
+    },
+    payment,
+  }
+}
+
+function buildPaymentMetadata(payment: PaymentValue): PaymentMetadata {
+  const clean: PaymentMetadata = { method: payment.method }
+  const termDays = cleanOptionalNumber(payment.termDays)
+  if (termDays !== undefined) clean.termDays = termDays
+  if (payment.method === 'other') {
+    const methodOther = cleanOptionalString(payment.methodOther)
+    if (methodOther) clean.methodOther = methodOther
+  }
+  if (payment.method === 'transfer') {
+    const bankAccount = cleanOptionalString(payment.bankAccount)
+    const bankName = cleanOptionalString(payment.bankName)
+    const swift = cleanOptionalString(payment.swift)
+    if (bankAccount) clean.bankAccount = bankAccount
+    if (bankName) clean.bankName = bankName
+    if (swift) clean.swift = swift
+  }
+  if (payment.paid) {
+    clean.paid = true
+    const paidDate = cleanOptionalString(payment.paidDate)
+    if (paidDate) clean.paidDate = paidDate
+  }
+  return clean
+}
+
+function formString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+type PaymentGroupProps = {
+  ctx: CrudFormGroupComponentProps
+  payment: PaymentValue
+  onChange: (payment: PaymentValue) => void
+  disabled?: boolean
+  dueTouched: React.MutableRefObject<boolean>
+  saleTouched: React.MutableRefObject<boolean>
+  lastAutoDue: React.MutableRefObject<string>
+  lastAutoSale: React.MutableRefObject<string>
+}
+
+function PaymentGroup({
+  ctx,
+  payment,
+  onChange,
+  disabled,
+  dueTouched,
+  saleTouched,
+  lastAutoDue,
+  lastAutoSale,
+}: PaymentGroupProps) {
+  const issueDate = formString(ctx.values.issueDate)
+  const dueDate = formString(ctx.values.dueDate)
+  const saleDate = formString(ctx.values.saleDate)
+  const setFormValue = ctx.setValue
+
+  React.useEffect(() => {
+    if (!dueTouched.current && lastAutoDue.current && dueDate !== lastAutoDue.current) {
+      dueTouched.current = true
+    }
+  }, [dueDate, dueTouched, lastAutoDue])
+
+  React.useEffect(() => {
+    if (!saleTouched.current && lastAutoSale.current && saleDate !== lastAutoSale.current) {
+      saleTouched.current = true
+    }
+  }, [lastAutoSale, saleDate, saleTouched])
+
+  const deriveDue = React.useCallback(
+    (termDays: number | undefined) => {
+      if (dueTouched.current || !issueDate || termDays === undefined) return
+      const nextDue = addDays(issueDate, termDays)
+      lastAutoDue.current = nextDue
+      if (dueDate !== nextDue) setFormValue('dueDate', nextDue)
+    },
+    [dueDate, dueTouched, issueDate, lastAutoDue, setFormValue],
+  )
+
+  React.useEffect(() => {
+    if (!issueDate) return
+    if (!saleTouched.current) {
+      lastAutoSale.current = issueDate
+      if (saleDate !== issueDate) setFormValue('saleDate', issueDate)
+    }
+    // Re-derive the due date only while it is untouched AND a payment term is set. Clearing the
+    // term leaves the due date manual (jury C1/D-note) — an issue-date change must NOT silently
+    // re-apply the default 14-day term over the operator's no-term/manual choice.
+    if (!dueTouched.current && payment.termDays !== undefined) {
+      const nextDue = addDays(issueDate, payment.termDays)
+      lastAutoDue.current = nextDue
+      if (dueDate !== nextDue) setFormValue('dueDate', nextDue)
+    }
+  }, [
+    dueDate,
+    dueTouched,
+    issueDate,
+    lastAutoDue,
+    lastAutoSale,
+    payment.termDays,
+    saleDate,
+    saleTouched,
+    setFormValue,
+  ])
+
+  return (
+    <PaymentFields
+      value={payment}
+      onChange={(next) => {
+        onChange(next)
+        if (next.termDays !== payment.termDays) deriveDue(next.termDays)
+      }}
+      disabled={disabled}
+    />
+  )
+}
+
 /** Build a fresh, empty header for create mode with sensible defaults. */
 export function emptyHeader(): InvoiceHeaderValues {
-  const today = new Date().toISOString().slice(0, 10)
-  return { invoiceNumber: '', issueDate: today, dueDate: today, currencyCode: DEFAULT_CURRENCY, orderId: '' }
+  const today = todayInput()
+  return {
+    invoiceNumber: '',
+    issueDate: today,
+    dueDate: addDays(today, DEFAULT_TERM_DAYS),
+    saleDate: today,
+    currencyCode: DEFAULT_CURRENCY,
+    orderId: '',
+  }
 }
 
 /** Build a default create-mode value with one starter line and empty meta. */
@@ -78,6 +334,7 @@ export function emptyInvoiceFormValue(): InvoiceFormValue {
       DEFAULT_CURRENCY,
       1,
     )],
+    payment: defaultPayment(),
     meta: {},
     notes: '',
     metadata: null,
@@ -206,8 +463,9 @@ type CreateResponse = { invoiceId?: string; id?: string }
  * - CREATE: POST /api/sales/invoices (header + lines) → read the new id → PUT invoice-meta →
  *   navigate to the new invoice's edit page (switch to edit mode; never re-POST so a failed meta
  *   step is retried in place, avoiding duplicate-create).
- * - EDIT: PUT /api/sales/invoices (id + header + FULL lines[]; core uses replace semantics) → PUT
- *   invoice-meta.
+ * - EDIT: PUT /api/sales/invoices (id + header + metadata) → PUT invoice-meta. Core 0.6.5
+ *   `sales.invoices.update` ignores `lines`, so edit mode keeps lines read-only and does not send
+ *   them; in-place line editing awaits an upstream core command.
  *
  * All writes go through `useGuardedMutation().runMutation(...)` with a real `retryLastMutation`
  * injected into the mutation context so conflict-resolution widgets can re-drive the save.
@@ -220,10 +478,21 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     hasMeaningfulPlVatMeta(initialValue.meta) ? ['plvat'] : [],
   )
 
-  const [value, setValue] = React.useState<InvoiceFormValue>(initialValue)
+  const [value, setValue] = React.useState<ControlledInvoiceFormValue>(() =>
+    normalizeInvoiceFormValue(initialValue, isEdit),
+  )
+  const dueTouched = React.useRef(isEdit)
+  const saleTouched = React.useRef(isEdit)
+  const lastAutoDue = React.useRef(value.header.dueDate)
+  const lastAutoSale = React.useRef(value.header.saleDate)
   React.useEffect(() => {
-    setValue(initialValue)
-  }, [initialValue])
+    const nextValue = normalizeInvoiceFormValue(initialValue, isEdit)
+    setValue(nextValue)
+    dueTouched.current = isEdit
+    saleTouched.current = isEdit
+    lastAutoDue.current = nextValue.header.dueDate
+    lastAutoSale.current = nextValue.header.saleDate
+  }, [initialValue, isEdit])
 
   const { runMutation, retryLastMutation } = useGuardedMutation<{
     formId: string
@@ -254,6 +523,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   const setBuyer = React.useCallback((buyer: BuyerValue) => {
     setValue((prev) => ({ ...prev, buyer }))
   }, [])
+  const setPayment = React.useCallback((payment: PaymentValue) => {
+    setValue((prev) => ({ ...prev, payment }))
+  }, [])
 
   // --- Submit handler shared by create + edit -----------------------------------------------
   // Header values come straight from the CrudForm builtin fields (passed in by `onSubmit`) so the
@@ -262,11 +534,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     if (readOnly) return
     const effectiveCurrency = header.currencyCode.trim().toUpperCase() || DEFAULT_CURRENCY
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency)
-    if (linesPayload.length < 1) {
-      throw createCrudFormError(t('financial_pl.invoices.form.linesRequired', 'Add at least one invoice line.'))
-    }
-    if (value.lines.some((line) => !line.name.trim())) {
-      throw createCrudFormError(t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.'))
+    if (!isEdit) {
+      if (linesPayload.length < 1) {
+        throw createCrudFormError(t('financial_pl.invoices.form.linesRequired', 'Add at least one invoice line.'))
+      }
+      if (value.lines.some((line) => !line.name.trim())) {
+        throw createCrudFormError(t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.'))
+      }
     }
 
     // --- Commercial-grade validations (SPEC-014) — block save before a 422 at KSeF send --------
@@ -275,23 +549,25 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     if (issue && due && due < issue) {
       throw createCrudFormError(t('financial_pl.validation.dueBeforeIssue', 'The due date cannot be earlier than the issue date.'))
     }
-    for (const line of value.lines) {
-      const qty = Number(line.quantity)
-      if (!Number.isFinite(qty) || qty <= 0) {
-        throw createCrudFormError(t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.'))
-      }
-      const price = Number(line.unitPriceNet)
-      if (!Number.isFinite(price) || price < 0) {
-        throw createCrudFormError(t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.'))
-      }
-      // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
-      // rate (e.g. "Other…" chosen but left empty) must NOT silently persist as 0%: a real 0% line is
-      // the explicit "0%" pick. Custom rates are numeric-only — zw/np/oo/text are rejected here;
-      // exemption / reverse-charge live in the Polish-VAT section (code-jury, Codex + Kimi).
-      const rateText = (line.taxRate ?? '').trim()
-      const rate = Number(rateText)
-      if (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100) {
-        throw createCrudFormError(t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.'))
+    if (!isEdit) {
+      for (const line of value.lines) {
+        const qty = Number(line.quantity)
+        if (!Number.isFinite(qty) || qty <= 0) {
+          throw createCrudFormError(t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.'))
+        }
+        const price = Number(line.unitPriceNet)
+        if (!Number.isFinite(price) || price < 0) {
+          throw createCrudFormError(t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.'))
+        }
+        // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
+        // rate (e.g. "Other…" chosen but left empty) must NOT silently persist as 0%: a real 0% line is
+        // the explicit "0%" pick. Custom rates are numeric-only — zw/np/oo/text are rejected here;
+        // exemption / reverse-charge live in the Polish-VAT section (code-jury, Codex + Kimi).
+        const rateText = (line.taxRate ?? '').trim()
+        const rate = Number(rateText)
+        if (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100) {
+          throw createCrudFormError(t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.'))
+        }
       }
     }
     const buyer = value.buyer ?? {}
@@ -322,6 +598,17 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     } else if (!hasBuyerName || !hasBuyerAddress) {
       throw createCrudFormError(t('financial_pl.validation.buyerRequired', 'The buyer needs a name and an address (line 1).'))
     }
+    if (
+      (value.payment.paid && !cleanOptionalString(value.payment.paidDate)) ||
+      (value.payment.method === 'other' && !cleanOptionalString(value.payment.methodOther))
+    ) {
+      throw createCrudFormError(
+        t(
+          'financial_pl.errors.payment_invalid',
+          "Complete the payment details: a paid invoice needs a payment date, and 'Other' needs a description.",
+        ),
+      )
+    }
 
     // Merge the buyer snapshot into the preserved core invoice metadata (never clobber other keys).
     const buyerSnapshot = buyerToSnapshot(buyer)
@@ -331,6 +618,12 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const notes = (header.notes ?? '').trim()
     if (notes) mergedMetadata.notes = notes
     else delete mergedMetadata.notes
+    const cleanPayment = buildPaymentMetadata(value.payment)
+    if (cleanPayment) mergedMetadata.payment = cleanPayment
+    else delete mergedMetadata.payment
+    const saleDate = (header.saleDate ?? '').trim()
+    if (saleDate) mergedMetadata.saleDate = saleDate
+    else delete mergedMetadata.saleDate
     const hadMetadata = value.metadata != null && Object.keys(value.metadata).length > 0
     const metadataPayload: Record<string, unknown> =
       Object.keys(mergedMetadata).length || hadMetadata ? { metadata: mergedMetadata } : {}
@@ -338,13 +631,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const headerPayload = buildInvoiceHeaderPayload(header)
 
     if (isEdit && invoiceId) {
-      // EDIT — replace semantics: always send the FULL lines[] (core deletes + recreates).
+      // EDIT — core 0.6.5 ignores lines, so only persist header + metadata here.
       const invoiceCall = await runMutation({
         operation: () =>
           apiCall<CreateResponse>('/api/sales/invoices', {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: invoiceId, ...headerPayload, ...metadataPayload, lines: linesPayload }),
+            body: JSON.stringify({ id: invoiceId, ...headerPayload, ...metadataPayload }),
           }),
         context: buildMutationContext('updateInvoice', invoiceId),
         mutationPayload: { id: invoiceId, ...headerPayload },
@@ -420,14 +713,27 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     }
     // Switch to edit mode on the new invoice — never re-POST.
     router.push(`/backend/financial/invoices/${encodeURIComponent(newId)}/edit`)
-  }, [buildMutationContext, invoiceId, isEdit, readOnly, router, runMutation, t, value.buyer, value.lines, value.meta, value.metadata])
+  }, [
+    buildMutationContext,
+    invoiceId,
+    isEdit,
+    readOnly,
+    router,
+    runMutation,
+    t,
+    value.buyer,
+    value.lines,
+    value.meta,
+    value.metadata,
+    value.payment,
+  ])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => [
     {
       id: 'header',
       title: t('financial_pl.invoices.form.sections.header', 'Invoice details'),
       column: 1,
-      fields: ['invoiceNumber', 'issueDate', 'dueDate', 'currencyCode', 'orderId', 'notes'],
+      fields: ['invoiceNumber', 'issueDate', 'dueDate', 'saleDate', 'currencyCode', 'orderId', 'notes'],
     },
     {
       id: 'buyer',
@@ -449,14 +755,41 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
           DEFAULT_CURRENCY
         return (
-          <InvoiceLinesField
-            value={value.lines}
-            onChange={setLines}
-            currencyCode={liveCurrency}
-            disabled={readOnly}
-          />
+          <div className="flex flex-col gap-3">
+            {isEdit ? (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  'financial_pl.invoices.form.linesReadOnlyOnEdit',
+                  "Line items can't be changed after the invoice is created (core limitation). To change them, create a new invoice or issue a correction (KOR). All other fields remain editable.",
+                )}
+              </p>
+            ) : null}
+            <InvoiceLinesField
+              value={value.lines}
+              onChange={setLines}
+              currencyCode={liveCurrency}
+              disabled={readOnly || isEdit}
+            />
+          </div>
         )
       },
+    },
+    {
+      id: 'payment',
+      title: t('financial_pl.invoices.form.sections.payment', 'Płatność / Payment'),
+      column: 1,
+      component: (ctx) => (
+        <PaymentGroup
+          ctx={ctx}
+          payment={value.payment}
+          onChange={setPayment}
+          disabled={readOnly}
+          dueTouched={dueTouched}
+          saleTouched={saleTouched}
+          lastAutoDue={lastAutoDue}
+          lastAutoSale={lastAutoSale}
+        />
+      ),
     },
     {
       id: 'plvat',
@@ -487,7 +820,20 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         )
       },
     },
-  ], [initialPlVatAccordionValue, readOnly, setBuyer, setLines, setMeta, t, value.buyer, value.lines, value.meta])
+  ], [
+    initialPlVatAccordionValue,
+    isEdit,
+    readOnly,
+    setBuyer,
+    setLines,
+    setMeta,
+    setPayment,
+    t,
+    value.buyer,
+    value.lines,
+    value.meta,
+    value.payment,
+  ])
 
   return (
     <div className="flex flex-col gap-4">
@@ -520,6 +866,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
             type: 'date',
           },
           {
+            id: 'saleDate',
+            label: t('financial_pl.invoices.form.fields.saleDate', 'Sale date (Data sprzedaży)'),
+            type: 'date',
+          },
+          {
             id: 'currencyCode',
             label: t('financial_pl.invoices.form.fields.currencyCode', 'Currency'),
             type: 'text',
@@ -542,6 +893,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           invoiceNumber: value.header.invoiceNumber,
           issueDate: value.header.issueDate,
           dueDate: value.header.dueDate,
+          saleDate: value.header.saleDate,
           currencyCode: value.header.currencyCode,
           orderId: value.header.orderId,
           notes: value.notes ?? '',
@@ -550,6 +902,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           invoiceNumber: z.string().optional(),
           issueDate: z.string().optional(),
           dueDate: z.string().optional(),
+          saleDate: z.string().optional(),
           currencyCode: z.string().trim().min(1),
           orderId: z.string().optional(),
           notes: z.string().optional(),
@@ -561,6 +914,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
             invoiceNumber: String(values.invoiceNumber ?? ''),
             issueDate: String(values.issueDate ?? ''),
             dueDate: String(values.dueDate ?? ''),
+            saleDate: String(values.saleDate ?? ''),
             currencyCode: String(values.currencyCode ?? DEFAULT_CURRENCY),
             orderId: String(values.orderId ?? ''),
             notes: String(values.notes ?? ''),

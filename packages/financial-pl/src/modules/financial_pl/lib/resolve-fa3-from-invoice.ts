@@ -1,7 +1,7 @@
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { getEuStandardVatRate } from '../config'
-import { fa3InvoiceSchema, type Fa3InvoiceInput } from '../data/validators'
+import { fa3InvoiceSchema, invoicePaymentSchema, type Fa3InvoiceInput } from '../data/validators'
 import {
   assertMappedVatRates,
   buildAnnotations,
@@ -279,6 +279,15 @@ export async function resolveFa3FromSalesInvoice(
     p15 = settlement.residualGross
   }
 
+  // SPEC-017 F1: optional payment block from metadata.payment. Fail-open: a malformed stored
+  // payment must not block a send; just omit the <Platnosc> node. TerminPlatnosci = invoice due date.
+  const rawPayment = asRecord(invoice.metadata).payment
+  const parsedPayment = rawPayment !== undefined ? invoicePaymentSchema.safeParse(rawPayment) : null
+  const payment =
+    parsedPayment && parsedPayment.success
+      ? { ...parsedPayment.data, terminDate: parsedPayment.data.terminDate ?? toIsoDate(invoice.due_date) ?? undefined }
+      : undefined
+
   const fa3Invoice: Fa3InvoiceInput = {
     invoiceNumber: asString(invoice.invoice_number) ?? salesInvoiceId,
     issueDate,
@@ -295,6 +304,7 @@ export async function resolveFa3FromSalesInvoice(
     ...(advancePayments && advancePayments.length > 0 ? { advancePayments } : {}),
     ...(advanceInvoiceRefs ? { advanceInvoiceRefs } : {}),
     ...(exchangeRate ? { exchangeRate } : {}),
+    ...(payment ? { payment } : {}),
   }
 
   return fa3InvoiceSchema.parse(fa3Invoice)

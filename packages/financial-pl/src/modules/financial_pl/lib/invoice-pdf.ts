@@ -37,6 +37,11 @@ const L = {
   ksefNumber: 'Numer KSeF',
   notes: 'Uwagi',
   correctionReason: 'Przyczyna korekty',
+  payment: 'Płatność',
+  paymentMethod: 'Sposób płatności',
+  paymentTerm: 'Termin płatności',
+  paymentPaid: 'Zapłacono',
+  paymentAccount: 'Nr konta',
 } as const
 
 const A4 = { w: 595.28, h: 841.89 }
@@ -57,6 +62,9 @@ const NOTE_FONT_SIZE = 8
 const NOTE_LINE_HEIGHT = 10
 const NOTE_LABEL_GAP = 13
 const NOTE_AFTER_GAP = 4
+const PAYMENT_LINE_HEIGHT = 11
+const PAYMENT_LABEL_GAP = 13
+const PAYMENT_AFTER_GAP = 8
 
 function clip(font: PDFFont, text: string, size: number, maxWidth: number): string {
   if (font.widthOfTextAtSize(text, size) <= maxWidth) return text
@@ -115,6 +123,20 @@ function noteLineCapacity(topY: number, bottomY: number): number {
   return Math.max(0, Math.floor((topY - bottomY - NOTE_LABEL_GAP - NOTE_AFTER_GAP) / NOTE_LINE_HEIGHT))
 }
 
+function paymentBlockLines(payment: NonNullable<InvoicePdfModel['payment']>): string[] {
+  const lines = [`${L.paymentMethod}: ${payment.methodLabel}`]
+  if (payment.term) lines.push(`${L.paymentTerm}: ${payment.term}`)
+  if (payment.paid) lines.push(L.paymentPaid)
+  if (payment.account) {
+    lines.push(`${L.paymentAccount}: ${payment.account}${payment.bankName ? ` (${payment.bankName})` : ''}`)
+  }
+  return lines
+}
+
+function paymentBlockHeight(model: InvoicePdfModel): number {
+  return model.payment ? PAYMENT_LABEL_GAP + paymentBlockLines(model.payment).length * PAYMENT_LINE_HEIGHT + PAYMENT_AFTER_GAP : 0
+}
+
 function partyBottomY(p: InvoicePdfModel['seller'], partyTopY: number): number {
   let yy = partyTopY
   yy -= 14
@@ -127,7 +149,7 @@ function partyBottomY(p: InvoicePdfModel['seller'], partyTopY: number): number {
 
 function firstTableY(model: InvoicePdfModel): number {
   const partyTopY = A4.h - M - 56
-  return Math.min(partyBottomY(model.seller, partyTopY), partyBottomY(model.buyer, partyTopY)) - 14
+  return Math.min(partyBottomY(model.seller, partyTopY), partyBottomY(model.buyer, partyTopY)) - 14 - paymentBlockHeight(model)
 }
 
 function estimateSinglePageYBeforeNotes(model: InvoicePdfModel): number {
@@ -203,9 +225,20 @@ export async function renderInvoicePdf(
       if (p.addressLine2) { text(clip(font, p.addressLine2, 9, colW), x, yy, 9); yy -= 12 }
       return yy
     }
+    const drawPaymentBlock = (yy: number): number => {
+      if (!model.payment) return yy
+      text(L.payment, M, yy, 9, GREY)
+      yy -= PAYMENT_LABEL_GAP
+      for (const line of paymentBlockLines(model.payment)) {
+        text(clip(font, line, 8, TABLE_RIGHT), M, yy, 8, DARK)
+        yy -= PAYMENT_LINE_HEIGHT
+      }
+      return yy - PAYMENT_AFTER_GAP
+    }
     const yLeft = drawParty(L.seller, M, model.seller)
     const yRight = drawParty(L.buyer, M + colW + 20, model.buyer)
     y = Math.min(yLeft, yRight) - 14
+    if (model.payment) y = drawPaymentBlock(y)
 
     // Line table header
     const x0 = M
@@ -406,6 +439,16 @@ export async function renderInvoicePdf(
     yy -= NOTE_AFTER_GAP
     return { y: yy, nextIndex: endIndex }
   }
+  const drawPaymentBlock = (yy: number): number => {
+    if (!model.payment) return yy
+    text(L.payment, x0, yy, 9, GREY)
+    yy -= PAYMENT_LABEL_GAP
+    for (const line of paymentBlockLines(model.payment)) {
+      text(clip(font, line, 8, TABLE_RIGHT), x0, yy, 8, DARK)
+      yy -= PAYMENT_LINE_HEIGHT
+    }
+    return yy - PAYMENT_AFTER_GAP
+  }
 
   let noteIndex = 0
   for (let pageIndex = 0; pageIndex < linePageCount; pageIndex += 1) {
@@ -431,6 +474,7 @@ export async function renderInvoicePdf(
       const yLeft = drawParty(L.seller, M, model.seller)
       const yRight = drawParty(L.buyer, M + colW + 20, model.buyer)
       y = Math.min(yLeft, yRight) - 14
+      if (model.payment) y = drawPaymentBlock(y)
     }
 
     y = drawTableHeader(y)

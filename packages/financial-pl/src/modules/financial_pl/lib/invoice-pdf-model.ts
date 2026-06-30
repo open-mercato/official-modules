@@ -61,9 +61,21 @@ export type InvoicePdfModel = {
   ksefCert?: { label: string }
   /** Optional operator-visible invoice remarks, rendered only when non-empty. */
   notes?: string
+  /** Optional payment block (Płatność), rendered only when present. */
+  payment?: { methodLabel: string; term?: string; account?: string; bankName?: string; paid?: boolean }
   correctionReason?: string
   /** The "this is a visualization" footer notice (translated by the caller). */
   notice: string
+}
+
+const FORMA_LABEL_PL: Record<string, string> = {
+  '1': 'Gotówka',
+  '2': 'Karta',
+  '3': 'Bon',
+  '4': 'Czek',
+  '5': 'Kredyt',
+  '6': 'Przelew',
+  '7': 'Płatność mobilna',
 }
 
 function toCents(value: string): bigint {
@@ -164,6 +176,17 @@ export function buildInvoicePdfModel(
   // KOD I keeps its existing label logic: the assigned number, else the OFFLINE
   // label (the i18n qrOffline translation when supplied, else the document constant).
   const offlineLabel = opts.qrOfflineLabel ?? 'OFFLINE'
+  const pay = model.payment
+  const paymentView =
+    pay && (pay.formaCode || pay.otherDescription || pay.terminDate || pay.paidDate || pay.bankAccount)
+      ? {
+          methodLabel: pay.formaCode ? (FORMA_LABEL_PL[pay.formaCode] ?? 'Inny') : (pay.otherDescription ?? 'Inny'),
+          ...(pay.terminDate ? { term: pay.terminDate } : {}),
+          ...(pay.bankAccount ? { account: pay.bankAccount } : {}),
+          ...(pay.bankName ? { bankName: pay.bankName } : {}),
+          paid: Boolean(pay.paidDate),
+        }
+      : undefined
   return {
     title: isKor ? 'FAKTURA KORYGUJĄCA' : 'FAKTURA',
     invoiceNumber: model.invoiceNumber,
@@ -180,6 +203,7 @@ export function buildInvoicePdfModel(
     ksef: { number, label: number ?? offlineLabel, status: opts.ksefStatus },
     ...(opts.hasKodII ? { ksefCert: { label: opts.qrCertyfikatLabel ?? 'CERTYFIKAT' } } : {}),
     ...(notes ? { notes } : {}),
+    ...(paymentView ? { payment: paymentView } : {}),
     correctionReason: model.correction?.reason,
     notice: opts.notice,
   }

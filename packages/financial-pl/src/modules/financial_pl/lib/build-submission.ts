@@ -1,5 +1,25 @@
-import { buildFa3Xml, type Fa3Document } from './fa3'
-import type { Fa3InvoiceInput } from '../data/validators'
+import { PAYMENT_METHOD_FORMA_CODE, type Fa3InvoiceInput, type InvoicePaymentInput } from '../data/validators'
+import { buildFa3Xml, type Fa3Document, type Fa3Payment } from './fa3'
+
+function mapPaymentInputToModel(p: InvoicePaymentInput): Fa3Payment {
+  const common = {
+    terminDate: p.terminDate ?? undefined,
+    paidDate: p.paid ? (p.paidDate ?? undefined) : undefined,
+    bankAccount: p.bankAccount ?? undefined,
+    bankName: p.bankName ?? undefined,
+    swift: p.swift ?? undefined,
+  }
+  if (p.method === 'other') {
+    return {
+      ...common,
+      otherDescription: p.methodOther ?? undefined,
+    }
+  }
+  return {
+    ...common,
+    formaCode: PAYMENT_METHOD_FORMA_CODE[p.method],
+  }
+}
 
 /** Build the FA(3) XML document from a validated invoice payload. */
 export function buildFa3XmlFromInput(input: Fa3InvoiceInput, opts: { systemInfo?: string } = {}): string {
@@ -29,6 +49,7 @@ export function buildFa3XmlFromInput(input: Fa3InvoiceInput, opts: { systemInfo?
       advanceInvoiceRefs: input.advanceInvoiceRefs,
       order: input.order,
       selfBilling: input.selfBilling,
+      payment: input.payment ? mapPaymentInputToModel(input.payment) : undefined,
     },
     lines: input.lines,
   }

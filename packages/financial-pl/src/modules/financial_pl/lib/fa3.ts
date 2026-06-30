@@ -116,6 +116,21 @@ export type Fa3Order = {
   lines: Fa3OrderLine[]
 }
 
+/** FA(3) <Platnosc> payment block. */
+export type Fa3Payment = {
+  /** FormaPlatnosci code '1'..'7'; mutually exclusive with `otherDescription`. */
+  formaCode?: string
+  /** PlatnoscInna free-text (OpisPlatnosci); set instead of `formaCode` for method 'other'. */
+  otherDescription?: string
+  /** TerminPlatnosci/Termin (the invoice due date), YYYY-MM-DD. */
+  terminDate?: string
+  /** Zaplacono=1 + DataZaplaty when paid (both required together). */
+  paidDate?: string
+  bankAccount?: string
+  bankName?: string
+  swift?: string
+}
+
 /** A received-advance payment row (→ `ZaliczkaCzesciowa`) for a ZAL invoice. */
 export type Fa3AdvancePayment = {
   /** P_6Z — the date the advance was received (YYYY-MM-DD). */
@@ -204,6 +219,8 @@ export type Fa3InvoiceModel = {
   advanceInvoiceRefs?: Fa3AdvanceInvoiceRef[]
   /** Zamowienie — order block carried by an advance (ZAL / KOR_ZAL). */
   order?: Fa3Order
+  /** Platnosc — optional payment and settlement block. */
+  payment?: Fa3Payment
 }
 
 export type Fa3Document = {
@@ -580,6 +597,28 @@ function renderZamowienie(order: Fa3Order): string {
   ].join('')
 }
 
+function renderPlatnosc(p: Fa3Payment): string {
+  const parts: string[] = ['<Platnosc>']
+  if (p.paidDate) parts.push(el('Zaplacono', '1'), el('DataZaplaty', p.paidDate))
+  if (p.terminDate) parts.push('<TerminPlatnosci>' + el('Termin', p.terminDate) + '</TerminPlatnosci>')
+  if (p.formaCode) parts.push(el('FormaPlatnosci', p.formaCode))
+  else if (p.otherDescription) parts.push(el('PlatnoscInna', '1'), el('OpisPlatnosci', p.otherDescription))
+  if (p.bankAccount) {
+    const rb: string[] = ['<RachunekBankowy>', el('NrRB', p.bankAccount)]
+    if (p.swift) rb.push(el('SWIFT', p.swift))
+    if (p.bankName) rb.push(el('NazwaBanku', p.bankName))
+    rb.push('</RachunekBankowy>')
+    parts.push(rb.join(''))
+  }
+  parts.push('</Platnosc>')
+  return parts.join('')
+}
+
+/** True when the payment block has any emittable content. */
+function hasPlatnoscContent(p: Fa3Payment | undefined): p is Fa3Payment {
+  return !!p && !!(p.paidDate || p.terminDate || p.formaCode || p.otherDescription || p.bankAccount)
+}
+
 export function buildFa3Xml(doc: Fa3Document): string {
   const { model, lines } = doc
   // FaWiersz is optional for an advance (ZAL / KOR_ZAL) that carries its detail in the
@@ -629,6 +668,7 @@ export function buildFa3Xml(doc: Fa3Document): string {
       ? renderFakturaZaliczkowa(model.advanceInvoiceRefs)
       : '',
     ...lines.map(renderLine),
+    hasPlatnoscContent(model.payment) ? renderPlatnosc(model.payment) : '',
     // Zamowienie (order block) sits after FaWiersz per the XSD.
     model.order ? renderZamowienie(model.order) : '',
     '</Fa>',

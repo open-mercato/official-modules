@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from '@open-mercato/ui/primitives/table'
+import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-badge'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -112,6 +113,19 @@ type InvoiceDetailResponse = {
 
 type FeatureCheckResponse = { ok: boolean; granted?: string[]; userId?: string }
 
+type InvoicePaymentMethod = 'cash' | 'card' | 'voucher' | 'cheque' | 'credit' | 'transfer' | 'mobile' | 'other'
+
+type InvoicePaymentMetadata = {
+  method: InvoicePaymentMethod | string
+  methodOther?: string
+  termDays?: number
+  bankAccount?: string
+  bankName?: string
+  swift?: string
+  paid?: boolean
+  paidDate?: string
+}
+
 // Features the page evaluates against the current user; the result drives client-side gating
 // (KSeF actions, edit lock, correction section). Server routes enforce the same independently.
 const PAGE_FEATURES = [
@@ -143,6 +157,7 @@ const PROCEDURE_FLAG_MAP: ReadonlyArray<[keyof InvoiceMetaDetail, JpkProcedureMa
 
 const INVOICE_KINDS: ReadonlySet<string> = new Set(['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'])
 const TYP_DOKUMENTU: ReadonlySet<string> = new Set(['RO', 'WEW', 'FP'])
+const PAYMENT_PAID_STATUS_MAP: StatusMap<'paid'> = { paid: 'success' }
 
 /** Project the wire meta shape into the controlled `InvoiceMeta` value the form renders. */
 function toFormMeta(meta: InvoiceMetaDetail): InvoiceMeta {
@@ -189,6 +204,43 @@ function toLineInput(line: InvoiceLineDetail, currencyFallback: string): Invoice
     lineNumber: line.lineNumber ?? undefined,
     kind: line.kind && LINE_KINDS.has(line.kind) ? (line.kind as InvoiceLineInput['kind']) : undefined,
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function paymentFromMetadata(metadata: Record<string, unknown> | null | undefined): InvoicePaymentMetadata | null {
+  const source = asRecord(metadata?.payment)
+  if (!source) return null
+  const payment: InvoicePaymentMetadata = { method: optionalString(source.method) ?? '' }
+  const methodOther = optionalString(source.methodOther)
+  const termDays = optionalNumber(source.termDays)
+  const bankAccount = optionalString(source.bankAccount)
+  const bankName = optionalString(source.bankName)
+  const swift = optionalString(source.swift)
+  const paidDate = optionalString(source.paidDate)
+  if (methodOther) payment.methodOther = methodOther
+  if (termDays !== undefined) payment.termDays = termDays
+  if (bankAccount) payment.bankAccount = bankAccount
+  if (bankName) payment.bankName = bankName
+  if (swift) payment.swift = swift
+  if (source.paid === true) payment.paid = true
+  if (paidDate) payment.paidDate = paidDate
+  return payment
 }
 
 function formatDate(iso: string | null | undefined, fallback = '—'): string {
@@ -367,6 +419,8 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
   const buyer = buyerFromMetadata(invoice.metadata)
   const hasBuyer = Boolean(buyer.companyName || buyer.nip || buyer.addressLine1)
   const invoiceNote = typeof invoice.metadata?.notes === 'string' ? invoice.metadata.notes : null
+  const saleDate = typeof invoice.metadata?.saleDate === 'string' ? invoice.metadata.saleDate : null
+  const payment = paymentFromMetadata(invoice.metadata)
   const hasInvoiceNote = Boolean(invoiceNote && invoiceNote.trim().length > 0)
   const submissionStatus = submission?.status ?? null
   const editLocked = submissionStatus != null && EDIT_LOCK_STATUSES.has(submissionStatus)
@@ -383,6 +437,21 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
     : null
 
   const correctionLines = lines.map((line) => toLineInput(line, currency))
+  const paymentMethodLabel = payment?.method
+    ? payment.method === 'other' && payment.methodOther
+      ? `${t(`financial_pl.invoices.form.payment.methods.${payment.method}`, payment.method)} (${payment.methodOther})`
+      : t(`financial_pl.invoices.form.payment.methods.${payment.method}`, payment.method)
+    : '—'
+  const paymentTermText = payment
+    ? [
+        payment.termDays !== undefined
+          ? `${payment.termDays} ${t('financial_pl.invoices.detail.payment.days', 'days')}`
+          : null,
+        invoice.dueDate ? formatDate(invoice.dueDate) : null,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join(' / ') || '—'
+    : '—'
 
   return (
     <Page>
@@ -421,9 +490,12 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
               <SummaryField label={t('financial_pl.invoices.detail.issueDate', 'Issue date')}>
                 {formatDate(invoice.issueDate)}
+              </SummaryField>
+              <SummaryField label={t('financial_pl.invoices.detail.saleDate', 'Sale date')}>
+                {formatDate(saleDate)}
               </SummaryField>
               <SummaryField label={t('financial_pl.invoices.detail.dueDate', 'Due date')}>
                 {formatDate(invoice.dueDate)}
@@ -562,6 +634,42 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
               </p>
             )}
           </SectionCard>
+
+          {payment ? (
+            <SectionCard title={t('financial_pl.invoices.detail.payment.title', 'Payment')}>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <SummaryField label={t('financial_pl.invoices.detail.payment.method', 'Payment method')}>
+                  {paymentMethodLabel}
+                </SummaryField>
+                <SummaryField label={t('financial_pl.invoices.detail.payment.term', 'Payment term / due date')}>
+                  {paymentTermText}
+                </SummaryField>
+                <SummaryField label={t('financial_pl.invoices.detail.payment.bankAccount', 'Bank account')}>
+                  <span className="flex flex-col gap-1">
+                    <span>{payment.bankAccount ?? '—'}</span>
+                    {payment.bankName ? <span className="text-muted-foreground">{payment.bankName}</span> : null}
+                    {payment.swift ? (
+                      <span className="text-muted-foreground">
+                        {t('financial_pl.invoices.detail.payment.swift', 'SWIFT')}: {payment.swift}
+                      </span>
+                    ) : null}
+                  </span>
+                </SummaryField>
+                {payment.paid ? (
+                  <SummaryField label={t('financial_pl.invoices.detail.payment.paid', 'Paid')}>
+                    <span className="flex flex-col items-start gap-1">
+                      <StatusBadge variant={PAYMENT_PAID_STATUS_MAP.paid} dot>
+                        {t('financial_pl.invoices.detail.payment.paidBadge', 'Paid')}
+                      </StatusBadge>
+                      {payment.paidDate ? (
+                        <span className="text-muted-foreground">{formatDate(payment.paidDate)}</span>
+                      ) : null}
+                    </span>
+                  </SummaryField>
+                ) : null}
+              </div>
+            </SectionCard>
+          ) : null}
 
           {hasInvoiceNote ? (
             <SectionCard title={t('financial_pl.invoices.detail.notes', 'Notes (Uwagi)')}>

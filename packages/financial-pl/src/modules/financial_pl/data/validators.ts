@@ -172,6 +172,52 @@ export const fa3AdvanceRefSchema = z
     message: 'An advance reference requires either a KSeF number or an invoice number.',
   })
 
+/** FA(3) FormaPlatnosci canonical method set (codes 1-7) + `other` (-> PlatnoscInna+OpisPlatnosci). */
+export const PAYMENT_METHODS = ['cash', 'card', 'voucher', 'cheque', 'credit', 'transfer', 'mobile', 'other'] as const
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number]
+/** method -> FA(3) FormaPlatnosci code. `other` has no code (emits PlatnoscInna+OpisPlatnosci). */
+export const PAYMENT_METHOD_FORMA_CODE: Record<Exclude<PaymentMethod, 'other'>, string> = {
+  cash: '1',
+  card: '2',
+  voucher: '3',
+  cheque: '4',
+  credit: '5',
+  transfer: '6',
+  mobile: '7',
+}
+
+export const invoicePaymentSchema = z
+  .object({
+    method: z.enum(PAYMENT_METHODS),
+    methodOther: z.string().max(256).nullish(),
+    termDays: z.number().int().min(0).max(3650).nullish(),
+    terminDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    bankAccount: z.string().max(64).nullish(),
+    bankName: z.string().max(256).nullish(),
+    swift: z.string().max(32).nullish(),
+    paid: z.boolean().optional(),
+    paidDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  })
+  // Conditional validity (jury K4): paid => paidDate; other => methodOther. These keep the
+  // FA(3) <Platnosc> schema-valid (Zaplacono needs DataZaplaty; PlatnoscInna needs OpisPlatnosci).
+  .superRefine((p, ctx) => {
+    if (p.paid && !p.paidDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['paidDate'],
+        message: 'paidDate is required when paid is true.',
+      })
+    }
+    if (p.method === 'other' && !(p.methodOther && p.methodOther.trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['methodOther'],
+        message: 'methodOther is required when method is "other".',
+      })
+    }
+  })
+export type InvoicePaymentInput = z.infer<typeof invoicePaymentSchema>
+
 export const fa3InvoiceSchema = z
   .object({
     invoiceNumber: z.string().min(1).max(256),
@@ -204,6 +250,8 @@ export const fa3InvoiceSchema = z
      * (art. 106e ust. 11); a pure-OSS FX invoice needs no rate (jury resolution 1).
      */
     exchangeRate: z.string().min(1).optional(),
+    /** FA(3) <Platnosc> payment block (optional). */
+    payment: invoicePaymentSchema.optional(),
   })
   // Send scope, enforced on the schema so BOTH the direct `POST /ksef/submissions`
   // (explicit FA(3) payload) path and the resolvers' final parse reject anything the
