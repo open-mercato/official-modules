@@ -1,5 +1,8 @@
 import { resolveKsefEnvironment } from '../../config'
+import { putToAbsoluteUrl } from '../http-put'
 import { KsefClient, KsefApiError, createFetchTransport, type KsefTransport, type KsefTransportRequest } from '../ksef-client'
+
+jest.mock('../http-put', () => ({ putToAbsoluteUrl: jest.fn() }))
 
 function recordingTransport(
   handler: (req: KsefTransportRequest) => { status?: number; body?: unknown; text?: string },
@@ -18,8 +21,13 @@ function recordingTransport(
 }
 
 const env = resolveKsefEnvironment('test')
+const mockedPutToAbsoluteUrl = putToAbsoluteUrl as jest.MockedFunction<typeof putToAbsoluteUrl>
 
 describe('KsefClient', () => {
+  beforeEach(() => {
+    mockedPutToAbsoluteUrl.mockReset()
+  })
+
   it('requests an anonymous challenge (no body) and prefers the integer timestampMs', async () => {
     const { transport, calls } = recordingTransport(() => ({
       body: { challenge: 'CH', timestamp: '2020-01-01T00:00:00.000Z', timestampMs: 1750000000000 },
@@ -94,6 +102,101 @@ describe('KsefClient', () => {
     })
   })
 
+  it('opens a batch session and maps the part upload requests', async () => {
+    const { transport, calls } = recordingTransport(() => ({
+      body: {
+        referenceNumber: 'BATCH1',
+        partUploadRequests: [
+          {
+            ordinalNumber: 1,
+            url: 'https://blob.example/upload-1',
+            method: 'PUT',
+            headers: { 'x-ms-blob-type': 'BlockBlob', ignored: 123 },
+          },
+        ],
+      },
+    }))
+    const client = new KsefClient(env, transport)
+    const result = await client.openBatchSession({
+      accessToken: 'ACCESS',
+      formCode: { systemCode: 'FA (3)', schemaVersion: '1-0E', value: 'FA' },
+      encryption: { encryptedSymmetricKey: 'WRAPPED', initializationVector: 'IV' },
+      batchFile: { fileSize: 100, fileHash: 'ZIP-HASH' },
+      fileParts: [{ ordinalNumber: 1, fileName: 'part-1.zip.enc', fileSize: 100, fileHash: 'PART-HASH' }],
+    })
+
+    expect(result).toEqual({
+      referenceNumber: 'BATCH1',
+      partUploadRequests: [
+        {
+          ordinalNumber: 1,
+          url: 'https://blob.example/upload-1',
+          method: 'PUT',
+          headers: { 'x-ms-blob-type': 'BlockBlob' },
+        },
+      ],
+    })
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/sessions/batch')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+    expect(JSON.parse(calls[0].body as string)).toEqual({
+      formCode: { systemCode: 'FA (3)', schemaVersion: '1-0E', value: 'FA' },
+      encryption: { encryptedSymmetricKey: 'WRAPPED', initializationVector: 'IV' },
+      batchFile: { fileSize: 100, fileHash: 'ZIP-HASH' },
+      fileParts: [{ ordinalNumber: 1, fileName: 'part-1.zip.enc', fileSize: 100, fileHash: 'PART-HASH' }],
+    })
+  })
+
+  it('uploads a batch part through the absolute-url PUT helper with response headers', async () => {
+    mockedPutToAbsoluteUrl.mockResolvedValue({ ok: true, status: 201 })
+    const client = new KsefClient(env, recordingTransport(() => ({ body: {} })).transport)
+    const bytes = new Uint8Array([1, 2, 3])
+
+    await client.uploadBatchPart(
+      {
+        ordinalNumber: 1,
+        url: 'https://blob.example/upload-1',
+        method: 'PATCH',
+        headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-MD5': 'abc=' },
+      },
+      bytes,
+    )
+
+    expect(mockedPutToAbsoluteUrl).toHaveBeenCalledWith('https://blob.example/upload-1', bytes, {
+      'x-ms-blob-type': 'BlockBlob',
+      'Content-MD5': 'abc=',
+    })
+  })
+
+  it('throws KsefApiError when a batch part upload fails', async () => {
+    mockedPutToAbsoluteUrl.mockResolvedValue({ ok: false, status: 403, bodyText: 'denied' })
+    const client = new KsefClient(env, recordingTransport(() => ({ body: {} })).transport)
+
+    await expect(
+      client.uploadBatchPart({ ordinalNumber: 1, url: 'https://blob.example/upload-1', method: 'PUT' }, Buffer.from('x')),
+    ).rejects.toMatchObject({ status: 403, body: 'denied' })
+  })
+
+  it('closes a batch session by reference number', async () => {
+    const { transport, calls } = recordingTransport(() => ({ body: {} }))
+    const client = new KsefClient(env, transport)
+    await client.closeBatchSession({ accessToken: 'ACCESS', referenceNumber: 'BATCH1' })
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/sessions/batch/BATCH1/close')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+  })
+
+  it('returns parsed session invoices JSON', async () => {
+    const body = { invoices: [{ ksefNumber: 'KSEF-NO' }] }
+    const { transport, calls } = recordingTransport(() => ({ body }))
+    const client = new KsefClient(env, transport)
+
+    await expect(client.getSessionInvoices({ accessToken: 'ACCESS', referenceNumber: 'BATCH1' })).resolves.toEqual(body)
+    expect(calls[0].method).toBe('GET')
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/sessions/BATCH1/invoices')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+  })
+
   it('parses invoice status code and ksefNumber', async () => {
     const { transport } = recordingTransport(() => ({ body: { status: { code: 200 }, ksefNumber: 'KSEF-NO' } }))
     const client = new KsefClient(env, transport)
@@ -125,6 +228,87 @@ describe('KsefClient', () => {
     const upo = await client.getInvoiceUpoByKsefNumber({ accessToken: 'A', sessionReference: 'ORIG-SESSION', ksefNumber: 'ORIG-NO' })
     expect(upo).toBe('<UPO-ORIG/>')
     expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/sessions/ORIG-SESSION/invoices/ksef/ORIG-NO/upo')
+    expect(calls[0].headers.Accept).toBe('application/xml')
+  })
+
+  it('queries received invoice metadata with filters and default paging', async () => {
+    const filters = {
+      subjectType: 'Subject2' as const,
+      dateRange: { dateType: 'PermanentStorage' as const, from: '2026-02-01T00:00:00Z', to: '2026-02-28T23:59:59Z' },
+      sellerNip: '1111111111',
+      invoiceTypes: ['VAT'],
+      invoicingMode: 'Online' as const,
+    }
+    const { transport, calls } = recordingTransport(() => ({
+      body: {
+        hasMore: true,
+        isTruncated: false,
+        permanentStorageHwmDate: '2026-03-01T00:00:00Z',
+        invoices: [
+          {
+            ksefNumber: 'KSEF-1',
+            invoiceNumber: 'FV/1/2026',
+            issueDate: '2026-02-10',
+            acquisitionDate: '2026-02-11T10:00:00Z',
+            seller: { nip: '1111111111', name: 'Seller' },
+            buyer: { identifier: { type: 'Nip', value: '2222222222' }, name: 'Buyer' },
+            netAmount: 100,
+            grossAmount: 123,
+            vatAmount: 23,
+            currency: 'PLN',
+            invoiceType: 'VAT',
+            invoicingMode: 'Online',
+            isSelfInvoicing: false,
+            invoiceHash: 'HASH',
+            hashOfCorrectedInvoice: 'CORRECTED',
+          },
+        ],
+      },
+    }))
+    const client = new KsefClient(env, transport)
+
+    const result = await client.queryReceivedInvoices({ accessToken: 'ACCESS', filters })
+
+    expect(result).toEqual({
+      hasMore: true,
+      isTruncated: false,
+      permanentStorageHwmDate: '2026-03-01T00:00:00Z',
+      invoices: [
+        {
+          ksefNumber: 'KSEF-1',
+          invoiceNumber: 'FV/1/2026',
+          issueDate: '2026-02-10',
+          acquisitionDate: '2026-02-11T10:00:00Z',
+          seller: { nip: '1111111111', name: 'Seller' },
+          buyer: { identifier: { type: 'Nip', value: '2222222222' }, name: 'Buyer' },
+          netAmount: 100,
+          grossAmount: 123,
+          vatAmount: 23,
+          currency: 'PLN',
+          invoiceType: 'VAT',
+          invoicingMode: 'Online',
+          isSelfInvoicing: false,
+          invoiceHash: 'HASH',
+          hashOfCorrectedInvoice: 'CORRECTED',
+        },
+      ],
+    })
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].url).toBe(
+      'https://api-test.ksef.mf.gov.pl/v2/invoices/query/metadata?pageOffset=0&pageSize=10&sortOrder=Asc',
+    )
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+    expect(JSON.parse(calls[0].body as string)).toEqual(filters)
+  })
+
+  it('downloads a received invoice by KSeF number as raw XML', async () => {
+    const { transport, calls } = recordingTransport(() => ({ text: '<Faktura/>' }))
+    const client = new KsefClient(env, transport)
+
+    await expect(client.downloadInvoiceByKsefNumber({ accessToken: 'ACCESS', ksefNumber: 'KSEF/1' })).resolves.toBe('<Faktura/>')
+    expect(calls[0].method).toBe('GET')
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/invoices/ksef/KSEF%2F1')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
     expect(calls[0].headers.Accept).toBe('application/xml')
   })
 

@@ -13,6 +13,7 @@
  * object and a bare-string form so it stays resilient across minor schema revisions.
  */
 import { FA3_SCHEMA, type KsefEnvironment, type KsefEnvironmentConfig } from '../config'
+import { putToAbsoluteUrl } from './http-put'
 
 export type KsefTransportRequest = {
   method: 'GET' | 'POST' | 'DELETE'
@@ -149,6 +150,58 @@ export type KsefStatusResult = {
   originalSessionReference?: string
 }
 
+export type ReceivedInvoiceMetadata = {
+  ksefNumber: string
+  invoiceNumber?: string
+  issueDate?: string
+  invoicingDate?: string
+  acquisitionDate?: string
+  permanentStorageDate?: string
+  seller?: { nip?: string; name?: string }
+  buyer?: { identifier?: { type?: string; value?: string }; name?: string }
+  netAmount?: number
+  grossAmount?: number
+  vatAmount?: number
+  currency?: string
+  invoiceType?: string
+  invoicingMode?: string
+  isSelfInvoicing?: boolean
+  invoiceHash?: string
+  hashOfCorrectedInvoice?: string
+}
+
+export type QueryReceivedInvoicesResult = {
+  hasMore: boolean
+  isTruncated: boolean
+  permanentStorageHwmDate?: string
+  invoices: ReceivedInvoiceMetadata[]
+}
+
+export type ReceivedInvoiceFilters = {
+  subjectType: 'Subject1' | 'Subject2' | 'Subject3' | 'SubjectAuthorized'
+  dateRange: {
+    dateType: 'Issue' | 'Invoicing' | 'PermanentStorage'
+    from: string
+    to?: string
+    restrictToPermanentStorageHwmDate?: boolean
+  }
+  sellerNip?: string
+  invoiceTypes?: string[]
+  invoicingMode?: 'Online' | 'Offline'
+}
+
+export type BatchPartUploadRequest = {
+  ordinalNumber: number
+  url: string
+  method: string
+  headers?: Record<string, string>
+}
+
+export type OpenBatchSessionResult = {
+  referenceNumber: string
+  partUploadRequests: BatchPartUploadRequest[]
+}
+
 /**
  * Default per-request timeout (ms) for live KSeF HTTP calls. The MF TEST gateway
  * can be slow or stall; without an abort a hung connection would block the queue
@@ -220,6 +273,18 @@ function pickNumber(record: Record<string, unknown>, ...keys: string[]): number 
   return undefined
 }
 
+function pickBoolean(record: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'boolean') return value
+  }
+  return undefined
+}
+
+function hasDefinedValue(record: Record<string, unknown>): boolean {
+  return Object.values(record).some((value) => value !== undefined)
+}
+
 const KSEF_CONTEXT_NIP_TYPE = 'Nip'
 
 /**
@@ -256,6 +321,58 @@ function pickStringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function mapReceivedInvoiceMetadata(raw: unknown): ReceivedInvoiceMetadata {
+  const record = asRecord(raw)
+  const sellerRecord = asRecord(record.seller)
+  const buyerRecord = asRecord(record.buyer)
+  const buyerIdentifierRecord = asRecord(buyerRecord.identifier)
+  const seller = {
+    nip: pickString(sellerRecord, 'nip', 'identifier', 'taxIdentifier'),
+    name: pickString(sellerRecord, 'name'),
+  }
+  const buyerIdentifier = {
+    type: pickString(buyerIdentifierRecord, 'type'),
+    value: pickString(buyerIdentifierRecord, 'value'),
+  }
+  const buyer = {
+    identifier: hasDefinedValue(buyerIdentifier) ? buyerIdentifier : undefined,
+    name: pickString(buyerRecord, 'name'),
+  }
+  return {
+    ksefNumber: pickString(record, 'ksefNumber', 'ksefReferenceNumber') ?? '',
+    invoiceNumber: pickString(record, 'invoiceNumber'),
+    issueDate: pickString(record, 'issueDate'),
+    invoicingDate: pickString(record, 'invoicingDate'),
+    acquisitionDate: pickString(record, 'acquisitionDate'),
+    permanentStorageDate: pickString(record, 'permanentStorageDate'),
+    seller: hasDefinedValue(seller) ? seller : undefined,
+    buyer: hasDefinedValue(buyer) ? buyer : undefined,
+    netAmount: pickNumber(record, 'netAmount'),
+    grossAmount: pickNumber(record, 'grossAmount'),
+    vatAmount: pickNumber(record, 'vatAmount'),
+    currency: pickString(record, 'currency'),
+    invoiceType: pickString(record, 'invoiceType'),
+    invoicingMode: pickString(record, 'invoicingMode'),
+    isSelfInvoicing: pickBoolean(record, 'isSelfInvoicing'),
+    invoiceHash: pickString(record, 'invoiceHash'),
+    hashOfCorrectedInvoice: pickString(record, 'hashOfCorrectedInvoice'),
+  }
+}
+
+function mapBatchPartUploadRequest(raw: unknown): BatchPartUploadRequest {
+  const record = asRecord(raw)
+  const headers = asRecord(record.headers)
+  const stringHeaders = Object.fromEntries(
+    Object.entries(headers).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  )
+  return {
+    ordinalNumber: pickNumber(record, 'ordinalNumber') ?? 0,
+    url: pickString(record, 'url') ?? '',
+    method: pickString(record, 'method') ?? '',
+    headers: Object.keys(stringHeaders).length > 0 ? stringHeaders : undefined,
+  }
 }
 
 export class KsefClient {
@@ -466,6 +583,51 @@ export class KsefClient {
     )
   }
 
+  async openBatchSession(params: {
+    accessToken: string
+    formCode: { systemCode: string; schemaVersion: string; value: string }
+    encryption: { encryptedSymmetricKey: string; initializationVector: string }
+    batchFile: { fileSize: number; fileHash: string }
+    fileParts: Array<{ ordinalNumber: number; fileName: string; fileSize: number; fileHash: string }>
+  }): Promise<OpenBatchSessionResult> {
+    const { json } = await this.request('POST', '/sessions/batch', {
+      token: params.accessToken,
+      json: {
+        formCode: params.formCode,
+        encryption: params.encryption,
+        batchFile: params.batchFile,
+        fileParts: params.fileParts,
+      },
+    })
+    const record = asRecord(json)
+    const referenceNumber = pickString(record, 'referenceNumber', 'sessionReferenceNumber')
+    if (!referenceNumber) throw new KsefApiError('KSeF open-batch-session response missing referenceNumber', 502, json)
+    const uploadRequests = record.partUploadRequests
+    return {
+      referenceNumber,
+      partUploadRequests: Array.isArray(uploadRequests) ? uploadRequests.map(mapBatchPartUploadRequest) : [],
+    }
+  }
+
+  async uploadBatchPart(req: BatchPartUploadRequest, encryptedBytes: Uint8Array | Buffer): Promise<void> {
+    const result = await putToAbsoluteUrl(req.url, encryptedBytes, req.headers ?? {})
+    if (!result.ok) {
+      throw new KsefApiError(
+        `KSeF batch part upload failed with ${result.status}`,
+        result.status,
+        result.bodyText ?? '',
+      )
+    }
+  }
+
+  async closeBatchSession(params: { accessToken: string; referenceNumber: string }): Promise<void> {
+    await this.request(
+      'POST',
+      `/sessions/batch/${encodeURIComponent(params.referenceNumber)}/close`,
+      { token: params.accessToken },
+    )
+  }
+
   async getSessionStatus(params: { accessToken: string; sessionReference: string }): Promise<KsefStatusResult> {
     const { json } = await this.request(
       'GET',
@@ -478,6 +640,15 @@ export class KsefClient {
       code: pickNumber(statusRecord, 'code') ?? pickNumber(record, 'code') ?? 0,
       description: pickString(statusRecord, 'description'),
     }
+  }
+
+  async getSessionInvoices(params: { accessToken: string; referenceNumber: string }): Promise<unknown> {
+    const { json } = await this.request(
+      'GET',
+      `/sessions/${encodeURIComponent(params.referenceNumber)}/invoices`,
+      { token: params.accessToken },
+    )
+    return json
   }
 
   async getInvoiceStatus(params: {
@@ -536,6 +707,41 @@ export class KsefClient {
     const { text } = await this.request(
       'GET',
       `/sessions/${encodeURIComponent(params.sessionReference)}/invoices/ksef/${encodeURIComponent(params.ksefNumber)}/upo`,
+      { token: params.accessToken, accept: 'application/xml' },
+    )
+    return text
+  }
+
+  async queryReceivedInvoices(params: {
+    accessToken: string
+    filters: ReceivedInvoiceFilters
+    pageOffset?: number
+    pageSize?: number
+    sortOrder?: 'Asc' | 'Desc'
+  }): Promise<QueryReceivedInvoicesResult> {
+    const query = new URLSearchParams({
+      pageOffset: String(params.pageOffset ?? 0),
+      pageSize: String(params.pageSize ?? 10),
+      sortOrder: params.sortOrder ?? 'Asc',
+    })
+    const { json } = await this.request('POST', `/invoices/query/metadata?${query.toString()}`, {
+      token: params.accessToken,
+      json: params.filters,
+    })
+    const record = asRecord(json)
+    const invoices = Array.isArray(record.invoices) ? record.invoices.map(mapReceivedInvoiceMetadata) : []
+    return {
+      hasMore: pickBoolean(record, 'hasMore') ?? false,
+      isTruncated: pickBoolean(record, 'isTruncated') ?? false,
+      permanentStorageHwmDate: pickString(record, 'permanentStorageHwmDate'),
+      invoices,
+    }
+  }
+
+  async downloadInvoiceByKsefNumber(params: { accessToken: string; ksefNumber: string }): Promise<string> {
+    const { text } = await this.request(
+      'GET',
+      `/invoices/ksef/${encodeURIComponent(params.ksefNumber)}`,
       { token: params.accessToken, accept: 'application/xml' },
     )
     return text
