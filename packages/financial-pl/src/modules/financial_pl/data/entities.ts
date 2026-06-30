@@ -9,7 +9,7 @@ export type KsefSubmissionStatusColumn =
   | 'rejected'
   | 'offline_issued'
 
-export type KsefSubmissionMode = 'online' | 'batch' | 'offline24' | 'awaryjny'
+export type KsefSubmissionMode = 'online' | 'batch' | 'offline24' | 'awaryjny' | 'niedostepnosc'
 export type KsefEnvironmentColumn = 'test' | 'demo' | 'prod'
 /** Which sales document this submission carries: a standard invoice or a correction (credit memo → FA(3) KOR). */
 export type KsefSubmissionDocumentKind = 'invoice' | 'credit_memo'
@@ -119,6 +119,9 @@ export class KsefSubmission {
 
   @Property({ name: 'session_reference', type: 'text', nullable: true })
   sessionReference?: string | null
+
+  @Property({ name: 'batch_reference', type: 'text', nullable: true })
+  batchReference?: string | null
 
   @Property({ name: 'invoice_reference', type: 'text', nullable: true })
   invoiceReference?: string | null
@@ -530,6 +533,137 @@ export class JpkVatFiling {
 
   @Property({ name: 'generated_at', type: Date, nullable: true })
   generatedAt?: Date | null
+
+  @Property({ name: 'submission_reference', type: 'text', nullable: true })
+  submissionReference?: string | null
+
+  @Property({ name: 'submitted_at', type: Date, nullable: true })
+  submittedAt?: Date | null
+
+  @Property({ name: 'upo_xml', type: 'text', nullable: true })
+  upoXml?: string | null
+
+  @Property({ name: 'submission_error', type: 'text', nullable: true })
+  submissionError?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'financial_pl_received_invoice' })
+@Index({ name: 'financial_pl_received_invoice_scope_idx', properties: ['organizationId', 'tenantId'] })
+@Index({
+  name: 'financial_pl_received_invoice_active_unique',
+  expression:
+    `create unique index "financial_pl_received_invoice_active_unique" on "financial_pl_received_invoice" ("organization_id", "tenant_id", coalesce("context_nip", ''), "ksef_number") where "deleted_at" is null`,
+})
+export class ReceivedInvoice {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'context_nip', type: 'text', nullable: true })
+  contextNip?: string | null
+
+  @Property({ name: 'ksef_number', type: 'text' })
+  ksefNumber!: string
+
+  @Property({ name: 'issuer_nip', type: 'text', nullable: true })
+  issuerNip?: string | null
+
+  @Property({ name: 'issuer_name', type: 'text', nullable: true })
+  issuerName?: string | null
+
+  @Property({ name: 'buyer_identifier_type', type: 'text', nullable: true })
+  buyerIdentifierType?: string | null
+
+  @Property({ name: 'buyer_identifier_value', type: 'text', nullable: true })
+  buyerIdentifierValue?: string | null
+
+  @Property({ name: 'issue_date', type: 'date', nullable: true })
+  issueDate?: Date | null
+
+  @Property({ name: 'acquisition_date', type: 'date', nullable: true })
+  acquisitionDate?: Date | null
+
+  @Property({ name: 'invoice_type', type: 'text', nullable: true })
+  invoiceType?: string | null
+
+  @Property({ name: 'currency', type: 'text', nullable: true })
+  currency?: string | null
+
+  @Property({ name: 'net_amount', type: 'text', nullable: true })
+  netAmount?: string | null
+
+  @Property({ name: 'gross_amount', type: 'text', nullable: true })
+  grossAmount?: string | null
+
+  @Property({ name: 'vat_amount', type: 'text', nullable: true })
+  vatAmount?: string | null
+
+  @Property({ name: 'invoice_hash', type: 'text', nullable: true })
+  invoiceHash?: string | null
+
+  @Property({ name: 'corrected_ksef_number', type: 'text', nullable: true })
+  correctedKsefNumber?: string | null
+
+  @Property({ name: 'fa3_xml', type: 'text', nullable: true })
+  fa3Xml?: string | null
+
+  @Property({ name: 'linked_purchase_record_id', type: 'uuid', nullable: true })
+  linkedPurchaseRecordId?: string | null
+
+  @Property({ name: 'fetched_at', type: Date, onCreate: () => new Date() })
+  fetchedAt: Date = new Date()
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'financial_pl_receive_cursor' })
+@Index({
+  name: 'financial_pl_receive_cursor_active_unique',
+  expression:
+    `create unique index "financial_pl_receive_cursor_active_unique" on "financial_pl_receive_cursor" ("organization_id", "tenant_id", coalesce("context_nip", ''), "subject_type") where "deleted_at" is null`,
+})
+export class ReceiveCursor {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'context_nip', type: 'text', nullable: true })
+  contextNip?: string | null
+
+  @Property({ name: 'subject_type', type: 'text' })
+  subjectType!: string
+
+  @Property({ name: 'permanent_storage_hwm_date', type: 'text', nullable: true })
+  permanentStorageHwmDate?: string | null
+
+  @Property({ name: 'last_synced_at', type: Date, nullable: true })
+  lastSyncedAt?: Date | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

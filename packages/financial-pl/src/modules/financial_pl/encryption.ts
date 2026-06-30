@@ -16,7 +16,11 @@ export const defaultEncryptionMaps: ModuleEncryptionMap[] = [
     // Entity-id is toSnake(className) — the JpkVatFiling CLASS, not its table name
     // (financial_pl_jpk_filing) — matching how KsefSubmission → ksef_submission resolves.
     entityId: 'financial_pl:jpk_vat_filing',
-    fields: [{ field: 'generated_xml' }],
+    fields: [{ field: 'generated_xml' }, { field: 'upo_xml' }],
+  },
+  {
+    entityId: 'financial_pl:received_invoice',
+    fields: [{ field: 'fa3_xml' }],
   },
 ]
 

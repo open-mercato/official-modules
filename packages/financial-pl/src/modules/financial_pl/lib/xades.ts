@@ -148,6 +148,33 @@ export async function signAuthTokenRequest(input: SignAuthTokenRequestInput): Pr
 }
 
 /**
+ * Produce an enveloped XAdES-BES signature over the MF JPK InitUpload metadata.
+ * xadesjs adds the SignedProperties reference for the qualifying properties; the
+ * explicit reference below signs the whole document, yielding the two-reference
+ * JPK form required by SPEC-015 F2.
+ */
+export async function signJpkInitUpload(
+  metadataXml: string,
+  opts: { certificatePem: string; privateKeyPem: string },
+): Promise<string> {
+  ensureEngine()
+  const certDerBase64 = certificatePemToDerBase64(opts.certificatePem)
+  const { key, algorithm } = await importSigningKey(opts.privateKeyPem)
+
+  const doc = xadesjs.Parse(metadataXml)
+  const signed = new xadesjs.SignedXml()
+  await signed.Sign(algorithm, key as unknown as CryptoKey, doc, {
+    references: [{ uri: '', hash: 'SHA-256', transforms: ['enveloped', 'c14n'] }],
+    x509: [certDerBase64],
+    signingCertificate: certDerBase64,
+  })
+  const root = doc.documentElement
+  if (!root) throw new Error('[internal] JPK InitUpload XML has no root element')
+  root.appendChild(signed.XmlSignature.GetXml() as unknown as Node)
+  return new XMLSerializer().serializeToString(doc)
+}
+
+/**
  * Verify a signed AuthTokenRequest using the certificate embedded in KeyInfo
  * (used by unit tests; KSeF performs the authoritative check server-side).
  */

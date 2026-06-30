@@ -92,6 +92,16 @@ export function rsaOaepEncrypt(plaintext: Buffer, publicKey: KeyObject | string)
   )
 }
 
+/**
+ * RSA PKCS#1 v1.5 key transport for the MF JPK gateway (SPEC-015 F2). Encrypts the raw AES session
+ * key bytes with the MF JPK public certificate using PKCS#1 v1.5 padding (the JPK InitUpload metadata
+ * labels this algorithm=RSA mode=ECB padding=PKCS#1). Distinct from the KSeF OAEP path above.
+ */
+export function rsaPkcs1v15WrapKey(aesKey: Buffer, publicCertPem: string): Buffer {
+  const key = new X509Certificate(publicCertPem).publicKey
+  return publicEncrypt({ key, padding: cryptoConstants.RSA_PKCS1_PADDING }, aesKey)
+}
+
 /** Wrap the session AES key for the MF SymmetricKeyEncryption public key (Base64). */
 export function wrapSymmetricKey(material: SymmetricKeyMaterial, publicKey: KeyObject | string): string {
   return rsaOaepEncrypt(material.key, publicKey).toString('base64')

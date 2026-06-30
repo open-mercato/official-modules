@@ -41,6 +41,31 @@ export function resolveKsefQrHost(environment: KsefEnvironment, env: NodeJS.Proc
   return env.OM_KSEF_QR_HOST ?? KSEF_QR_HOSTS[environment]
 }
 
+/**
+ * MF JPK_VAT submission gateway (e-dokumenty) — a system SEPARATE from KSeF (SPEC-015 F2).
+ * JPK_V7M/V7K(3) is transmitted here (InitUploadSigned → Azure-SAS PUT → FinishUpload → Status/UPO),
+ * NOT via the KSeF API. Only `test`/`prod` gateways exist (no KSeF-style `demo`); a non-prod KSeF
+ * environment maps to the JPK TEST gateway, which accepts self-signed XAdES + fictitious data.
+ */
+const JPK_GATEWAY_URLS: Record<'test' | 'prod', string> = {
+  test: 'https://test-e-dokumenty.mf.gov.pl',
+  prod: 'https://e-dokumenty.mf.gov.pl',
+}
+
+/** Resolve the MF JPK gateway base URL (overridable via OM_JPK_GATEWAY_URL). PROD only when the KSeF env is `prod`. */
+export function resolveJpkGatewayUrl(environment: KsefEnvironment, env: NodeJS.ProcessEnv = process.env): string {
+  if (env.OM_JPK_GATEWAY_URL) return env.OM_JPK_GATEWAY_URL
+  return environment === 'prod' ? JPK_GATEWAY_URLS.prod : JPK_GATEWAY_URLS.test
+}
+
+/**
+ * NBP public exchange-rate API base (table A mid-rates), used by the FX auto-source (SPEC-015 F5).
+ * The statutory invoice rate is the table-A mid-rate of the last business day BEFORE the tax point.
+ */
+export function resolveNbpApiBase(env: NodeJS.ProcessEnv = process.env): string {
+  return env.OM_NBP_API_BASE ?? 'https://api.nbp.pl/api'
+}
+
 /** FA(3) structured-invoice schema identifiers (KSeF 2.0, effective 2026). */
 export const FA3_SCHEMA = {
   formCode: 'FA',

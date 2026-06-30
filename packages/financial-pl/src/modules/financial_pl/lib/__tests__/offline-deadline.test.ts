@@ -89,6 +89,22 @@ describe('computeOfflineSendDeadline — awaryjny (failure end + 7 business days
   })
 })
 
+describe('computeOfflineSendDeadline — niedostepnosc (unavailability end + next business day)', () => {
+  it('uses the next business day after the announced unavailability period ends', () => {
+    const deadline = computeOfflineSendDeadline(
+      { issuedAt: day('2026-05-15'), mode: 'niedostepnosc', unavailabilityEndsAt: day('2026-02-06') },
+      {},
+    )
+    expect(iso(deadline)).toBe('2026-02-09')
+  })
+
+  it('requires unavailabilityEndsAt for niedostepnosc', () => {
+    expect(() => computeOfflineSendDeadline({ issuedAt: day('2026-02-06'), mode: 'niedostepnosc' }, {})).toThrow(
+      'computeOfflineSendDeadline: niedostepnosc mode requires unavailabilityEndsAt',
+    )
+  })
+})
+
 describe('computeOfflineSendDeadline — offline24 overtaken by an announced failure', () => {
   it('recomputes to the awaryjny rule (failure end + 7bd) when a window is supplied', () => {
     // Same invoice issued offline24, but a failure window is later announced.

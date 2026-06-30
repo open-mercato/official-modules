@@ -2,15 +2,16 @@
  * Per-organization KSeF credential resolution. Credentials live (encrypted) in
  * the platform IntegrationCredentialsService under the `ksef_pl` integration id,
  * scoped by (organizationId, tenantId) — there is NO shared/agency credential
- * (confirmed per-org-only model). Both auth methods are supported:
+ * (confirmed per-org-only model). Supported auth methods:
  *  - token: `ksefToken` (transitional, sunset 2026-12-31).
  *  - certificate: `certificatePem` + `certificatePrivateKeyPem` (durable; the only
  *    credential from 2027-01-01). Selected when `authMethod==='certificate'`.
+ *  - auto: explicit opt-in to prefer certificate material, falling back to token.
  */
 import type { KsefAuthConfig } from './ksef-auth'
 import type { KsefEnvironmentColumn } from '../data/entities'
 
-export type KsefAuthMethod = 'token' | 'certificate'
+export type KsefAuthMethod = 'token' | 'certificate' | 'auto'
 
 export type KsefCredentials = {
   authMethod?: KsefAuthMethod
@@ -51,7 +52,14 @@ export async function readKsefCredentials(
       creds.environment === 'test' || creds.environment === 'demo' || creds.environment === 'prod'
         ? (creds.environment as KsefEnvironmentColumn)
         : undefined
-    const authMethod = creds.authMethod === 'certificate' ? 'certificate' : creds.authMethod === 'token' ? 'token' : undefined
+    const authMethod =
+      creds.authMethod === 'certificate'
+        ? 'certificate'
+        : creds.authMethod === 'token'
+          ? 'token'
+          : creds.authMethod === 'auto'
+            ? 'auto'
+            : undefined
     return {
       authMethod,
       ksefToken: asString(creds.ksefToken),
@@ -75,6 +83,19 @@ export async function readKsefCredentials(
  * Returns null when the required material for the selected method is missing.
  */
 export function buildKsefAuthConfig(creds: KsefCredentials, contextNip: string): KsefAuthConfig | null {
+  if (creds.authMethod === 'auto') {
+    if (creds.certificatePem && creds.certificatePrivateKeyPem) {
+      return {
+        method: 'certificate',
+        contextNip,
+        certificatePem: creds.certificatePem,
+        privateKeyPem: creds.certificatePrivateKeyPem,
+      }
+    }
+    if (!creds.ksefToken) return null
+    return { method: 'token', ksefToken: creds.ksefToken, contextNip }
+  }
+
   // Auth method is EXPLICIT: certificate auth is used ONLY when the operator has
   // activated it (authMethod === 'certificate'). It is NEVER inferred from the mere
   // presence of certificate material — enrollment stores the cert+key but does not

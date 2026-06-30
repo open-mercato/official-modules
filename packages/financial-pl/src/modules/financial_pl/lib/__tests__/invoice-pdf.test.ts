@@ -1,3 +1,5 @@
+import { createHash } from 'crypto'
+import { PDFDocument } from 'pdf-lib'
 import { renderInvoicePdf } from '../invoice-pdf'
 import { generateQrPng } from '../invoice-qr'
 import { loadInvoiceFontBytes } from '../fonts/liberation-sans-regular.font'
@@ -19,8 +21,37 @@ function sampleDoc(): Fa3Document {
   }
 }
 
+function sampleDocWithLineCount(lineCount: number): Fa3Document {
+  return {
+    model: {
+      createdAt: '2026-02-01T10:00:00Z',
+      seller: { nip: '2481632647', name: 'Łąka Źródło Sp. z o.o.', countryCode: 'PL', addressLine1: 'ul. Żółw 1, Gdańsk' },
+      buyer: { nip: '3755747347', name: 'Ćma Ńiań S.A.', countryCode: 'PL', addressLine1: 'ul. Óśmin 2, Kraków' },
+      invoiceNumber: 'OM-PDF-1', issueDate: '2026-02-01', currencyCode: 'PLN',
+      vatBreakdown: [{ rate: 23, net: String(lineCount) + '.00', vat: (lineCount * 0.23).toFixed(2) }], totalGross: (lineCount * 1.23).toFixed(2),
+    },
+    lines: Array.from({ length: lineCount }, (_, i) => ({
+      lineNumber: i + 1,
+      name: 'Usługa testowa ąęćńóśźżł ' + (i + 1),
+      unit: 'szt',
+      quantity: '1',
+      unitNetPrice: '1.00',
+      netValue: '1.00',
+      vatRate: 23,
+    })),
+  }
+}
+
 function sampleModel(ksefNumber: string | null) {
   return buildInvoicePdfModel(sampleDoc(), { ksefNumber, ksefStatus: ksefNumber ? 'accepted' : 'queued', notice: 'Wizualizacja faktury ustrukturyzowanej; dokumentem źródłowym jest faktura w KSeF.' })
+}
+
+function sampleModelWithLineCount(lineCount: number) {
+  return buildInvoicePdfModel(sampleDocWithLineCount(lineCount), {
+    ksefNumber: '2481632647-20260201-ABC-09',
+    ksefStatus: 'accepted',
+    notice: 'Wizualizacja faktury ustrukturyzowanej; dokumentem źródłowym jest faktura w KSeF.',
+  })
 }
 
 // Offline-issued invoice: no KSeF number (KOD I labelled OFFLINE) + a cert-signed KOD II.
@@ -86,6 +117,23 @@ describe('renderInvoicePdf', () => {
     const dual = await renderInvoicePdf(offlineModel, { fontBytes: loadInvoiceFontBytes(), qrPng, qrIiPng })
     expect(isPdf(dual)).toBe(true)
     expect(Buffer.compare(Buffer.from(single), Buffer.from(dual))).not.toBe(0)
+  })
+
+  it('paginates a long line-items table', async () => {
+    const url = buildKodIUrl({ environment: 'test', sellerNip: '2481632647', issueDate: '2026-02-01', invoiceXml: '<Faktura/>' })
+    const qrPng = await generateQrPng(url)
+    const bytes = await renderInvoicePdf(sampleModelWithLineCount(100), { fontBytes: loadInvoiceFontBytes(), qrPng })
+    const pdf = await PDFDocument.load(bytes)
+    expect(isPdf(bytes)).toBe(true)
+    expect(pdf.getPageCount()).toBeGreaterThan(1)
+  })
+
+  it('keeps a 40-line invoice byte-identical to the pre-pagination renderer', async () => {
+    const url = buildKodIUrl({ environment: 'test', sellerNip: '2481632647', issueDate: '2026-02-01', invoiceXml: '<Faktura/>' })
+    const qrPng = await generateQrPng(url)
+    const bytes = await renderInvoicePdf(sampleModelWithLineCount(40), { fontBytes: loadInvoiceFontBytes(), qrPng })
+    expect(bytes.length).toBe(32415)
+    expect(createHash('sha256').update(Buffer.from(bytes)).digest('hex')).toBe('eac37d2fbd4c753f9683c4881800bbdb904a93ddcac7b0e829f66d48074a818f')
   })
 })
 

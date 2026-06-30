@@ -1,4 +1,4 @@
-import { buildKsefAuthConfig } from '../credentials'
+import { buildKsefAuthConfig, readKsefCredentials } from '../credentials'
 
 describe('buildKsefAuthConfig — auth method is EXPLICIT (no back-door cert activation)', () => {
   const NIP = '2481632647'
@@ -24,6 +24,14 @@ describe('buildKsefAuthConfig — auth method is EXPLICIT (no back-door cert act
     expect(cfg).toEqual({ method: 'token', ksefToken: 'TKN', contextNip: NIP })
   })
 
+  it('keeps token when authMethod=token and cert material is present', () => {
+    const cfg = buildKsefAuthConfig(
+      { authMethod: 'token', ksefToken: 'TKN', certificatePem: 'CERT', certificatePrivateKeyPem: 'KEY' },
+      NIP,
+    )
+    expect(cfg).toEqual({ method: 'token', ksefToken: 'TKN', contextNip: NIP })
+  })
+
   it('uses certificate ONLY when explicitly activated (authMethod=certificate) with material', () => {
     const cfg = buildKsefAuthConfig(
       { authMethod: 'certificate', certificatePem: 'CERT', certificatePrivateKeyPem: 'KEY' },
@@ -40,5 +48,31 @@ describe('buildKsefAuthConfig — auth method is EXPLICIT (no back-door cert act
   it('returns null when token is selected but no token is configured', () => {
     expect(buildKsefAuthConfig({ authMethod: 'token' }, NIP)).toBeNull()
     expect(buildKsefAuthConfig({}, NIP)).toBeNull()
+  })
+
+  it('prefers certificate when authMethod=auto and certificate material is present', () => {
+    const cfg = buildKsefAuthConfig(
+      { authMethod: 'auto', ksefToken: 'TKN', certificatePem: 'CERT', certificatePrivateKeyPem: 'KEY' },
+      NIP,
+    )
+    expect(cfg).toEqual({ method: 'certificate', contextNip: NIP, certificatePem: 'CERT', privateKeyPem: 'KEY' })
+  })
+
+  it('falls back to token when authMethod=auto and certificate material is incomplete', () => {
+    const cfg = buildKsefAuthConfig({ authMethod: 'auto', ksefToken: 'TKN', certificatePem: 'CERT' }, NIP)
+    expect(cfg).toEqual({ method: 'token', ksefToken: 'TKN', contextNip: NIP })
+  })
+
+  it('returns null when authMethod=auto has no usable credentials', () => {
+    expect(buildKsefAuthConfig({ authMethod: 'auto' }, NIP)).toBeNull()
+  })
+
+  it('normalizes authMethod=auto from stored credentials', async () => {
+    const service = { getRaw: async () => ({ authMethod: 'auto' }) }
+    const creds = await readKsefCredentials(
+      { resolve: <T = unknown>(_name: string): T => service as T },
+      { organizationId: 'org_1', tenantId: 'tenant_1' },
+    )
+    expect(creds.authMethod).toBe('auto')
   })
 })

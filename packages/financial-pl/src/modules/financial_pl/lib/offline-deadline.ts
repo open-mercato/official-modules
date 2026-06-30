@@ -3,11 +3,14 @@
  *
  * Pure + deterministic — no I/O, no clock reads beyond the supplied `issuedAt`.
  *
- * Two legal modes (art. 106nda / art. 106nf):
+ * Three legal modes (art. 106nda / art. 106nf / art. 106nh):
  * - `offline24`: send by the **next business day** after issuance.
  * - `awaryjny` (MF-announced failure): send within **7 business days** from the
  *   **end** of the announced failure window. An `offline24` invoice overtaken by
  *   a later-announced failure switches to this rule (supply `failureEndsAt`).
+ * - `niedostepnosc` (MF-announced unavailability): send by the **next business
+ *   day** after the announced unavailability period ends (supply
+ *   `unavailabilityEndsAt`).
  *
  * Business days skip Saturdays, Sundays, and Polish public holidays. The holiday
  * set is computed locally via `polishPublicHolidays` (Anonymous Gregorian /
@@ -162,7 +165,7 @@ function addBusinessDays(date: Date, count: number, holidays: ReadonlySet<string
   return cursor
 }
 
-export type OfflineSendMode = 'offline24' | 'awaryjny'
+export type OfflineSendMode = 'offline24' | 'awaryjny' | 'niedostepnosc'
 
 export type ComputeOfflineSendDeadlineParams = {
   issuedAt: Date
@@ -173,6 +176,11 @@ export type ComputeOfflineSendDeadlineParams = {
    * switches the deadline to the awaryjny rule.
    */
   failureEndsAt?: Date | null
+  /**
+   * The MF-BIP-announced unavailability-period-end timestamp. Required for
+   * `niedostepnosc`; its Warsaw calendar day anchors the next-business-day rule.
+   */
+  unavailabilityEndsAt?: Date | null
   /**
    * ISO `YYYY-MM-DD` non-working days. When omitted, the computed Polish public
    * holidays for the relevant years are used, merged with `OM_KSEF_PL_HOLIDAYS`.
@@ -186,15 +194,28 @@ export type ComputeOfflineSendDeadlineParams = {
  * - `offline24` (no failure window): the **next business day** after `issuedAt`.
  * - `awaryjny`, or `offline24` overtaken by a supplied `failureEndsAt`:
  *   `failureEndsAt` + **7 business days**.
+ * - `niedostepnosc`: the **next business day** after `unavailabilityEndsAt`.
  *
  * The returned Date is the UTC-midnight start of the deadline business day. Pure
- * and deterministic for a fixed `(issuedAt, mode, failureEndsAt, holidays)`.
+ * and deterministic for a fixed `(issuedAt, mode, failureEndsAt,
+ * unavailabilityEndsAt, holidays)`.
  */
 export function computeOfflineSendDeadline(
   params: ComputeOfflineSendDeadlineParams,
   env: NodeJS.ProcessEnv = process.env,
 ): Date {
-  const { issuedAt, mode, failureEndsAt, holidays } = params
+  const { issuedAt, mode, failureEndsAt, unavailabilityEndsAt, holidays } = params
+
+  if (mode === 'niedostepnosc') {
+    if (!unavailabilityEndsAt) {
+      throw new Error('computeOfflineSendDeadline: niedostepnosc mode requires unavailabilityEndsAt')
+    }
+    const anchor = warsawCalendarDay(unavailabilityEndsAt)
+    const holidaySet: ReadonlySet<string> = holidays
+      ? new Set(holidays)
+      : new Set(defaultHolidays(anchor.getUTCFullYear(), anchor.getUTCFullYear() + 1, env))
+    return nextBusinessDay(anchor, holidaySet)
+  }
 
   // A supplied failure window always governs (awaryjny, or offline24 overtaken
   // by an announced failure). offline24 with no failure window → next-business-day.
