@@ -23,6 +23,9 @@ export type KsefCredentials = {
   offlineCertificatePem?: string
   offlineCertificatePrivateKeyPem?: string
   offlineCertificateSerialNumber?: string
+  /** Dedicated JPK signer credential. Do not reuse the KSeF Authentication certificate. */
+  jpkSignerCertPem?: string
+  jpkSignerPrivateKeyPem?: string
   environment?: KsefEnvironmentColumn
 }
 
@@ -69,6 +72,8 @@ export async function readKsefCredentials(
       offlineCertificatePem: asString(creds.offlineCertificatePem),
       offlineCertificatePrivateKeyPem: asString(creds.offlineCertificatePrivateKeyPem),
       offlineCertificateSerialNumber: asString(creds.offlineCertificateSerialNumber),
+      jpkSignerCertPem: asString(creds.jpkSignerCertPem),
+      jpkSignerPrivateKeyPem: asString(creds.jpkSignerPrivateKeyPem),
       environment,
     }
   } catch {
