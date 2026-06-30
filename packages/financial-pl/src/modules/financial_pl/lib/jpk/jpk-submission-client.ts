@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { deflateRawSync } from 'node:zlib'
+import * as zlib from 'node:zlib'
 
 import type { KsefEnvironment } from '../../config'
 import { resolveJpkGatewayUrl } from '../../config'
@@ -8,16 +8,36 @@ import { putToAbsoluteUrl } from '../http-put'
 import { signJpkInitUpload } from '../xades'
 import { buildJpkInitUploadMetadata, type JpkUploadParts } from './jpk-submission-metadata'
 
-const REQUEST_TIMEOUT_MS = 15_000
-const STATUS_POLL_ATTEMPTS = 5
-const STATUS_POLL_DELAY_MS = 100
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+const DEFAULT_STATUS_POLL_ATTEMPTS = 20
+const DEFAULT_STATUS_POLL_DELAY_MS = 3_000
+const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50
+const CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50
+const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50
+const ZIP_VERSION_STORE = 20
+const UTF8_FILE_NAME_FLAG = 0x0800
+const STORE_COMPRESSION_METHOD = 0
+const DOS_TIME_MIDNIGHT = 0
+const DOS_DATE_1980_01_01 = 0x0021
+const ZIP64_LIMIT = 0xffffffff
+const ZIP16_LIMIT = 0xffff
+const JPK_ZIP_FILE_NAME = 'jpk.xml'
 
-export type JpkSubmissionDeps = {
+export const JPK_STATUS_POLL_TIMEOUT_ERROR = 'status poll timed out'
+
+export type JpkStatusPollDeps = {
   environment: KsefEnvironment
+  fetchImpl?: typeof fetch
+  pollAttempts?: number
+  pollDelayMs?: number
+  requestTimeoutMs?: number
+}
+
+export type JpkSubmissionDeps = JpkStatusPollDeps & {
   signer: { certificatePem: string; privateKeyPem: string }
   mfPublicCertPem: string
-  fetchImpl?: typeof fetch
   zip?: (xml: string) => Buffer
+  onReference?: (referenceNumber: string) => Promise<void> | void
 }
 
 export type JpkSubmissionResult =
@@ -46,9 +66,148 @@ type StatusPayload = {
   error?: string
 }
 
-function defaultZip(xml: string): Buffer {
-  // [internal] confirm ZIP container vs raw-deflate against the MF spec.
-  return deflateRawSync(Buffer.from(xml, 'utf8'))
+type ZipEntry = {
+  fileNameBytes: Buffer
+  data: Buffer
+  crc32: number
+  localHeaderOffset: number
+}
+
+type PollOptions = {
+  attempts: number
+  delayMs: number
+  requestTimeoutMs: number
+}
+
+export function defaultZip(xml: string): Buffer {
+  return buildSingleEntryStoreModeZip(JPK_ZIP_FILE_NAME, Buffer.from(xml, 'utf8'))
+}
+
+function buildSingleEntryStoreModeZip(fileName: string, data: Buffer): Buffer {
+  const fileNameBytes = Buffer.from(fileName, 'utf8')
+  if (fileNameBytes.length === 0) throw new Error('[internal] JPK ZIP entry file name must be non-empty')
+  assertZip16(fileNameBytes.length, `file name length for ${fileName}`)
+  assertZip32(data.length, `file size for ${fileName}`)
+
+  const entry: ZipEntry = {
+    fileNameBytes,
+    data,
+    crc32: computeCrc32(data),
+    localHeaderOffset: 0,
+  }
+  const localHeader = localFileHeader(entry)
+  const centralDirectoryOffset = localHeader.length + fileNameBytes.length + data.length
+  assertZip32(centralDirectoryOffset, 'central directory offset')
+
+  const centralHeader = centralDirectoryHeader(entry)
+  const centralDirectorySize = centralHeader.length + fileNameBytes.length
+  assertZip32(centralDirectorySize, 'central directory size')
+
+  return Buffer.concat([
+    localHeader,
+    fileNameBytes,
+    data,
+    centralHeader,
+    fileNameBytes,
+    endOfCentralDirectory(1, centralDirectorySize, centralDirectoryOffset),
+  ])
+}
+
+function localFileHeader(entry: ZipEntry): Buffer {
+  const header = Buffer.allocUnsafe(30)
+  header.writeUInt32LE(LOCAL_FILE_HEADER_SIGNATURE, 0)
+  header.writeUInt16LE(ZIP_VERSION_STORE, 4)
+  header.writeUInt16LE(UTF8_FILE_NAME_FLAG, 6)
+  header.writeUInt16LE(STORE_COMPRESSION_METHOD, 8)
+  header.writeUInt16LE(DOS_TIME_MIDNIGHT, 10)
+  header.writeUInt16LE(DOS_DATE_1980_01_01, 12)
+  header.writeUInt32LE(entry.crc32, 14)
+  header.writeUInt32LE(entry.data.length, 18)
+  header.writeUInt32LE(entry.data.length, 22)
+  header.writeUInt16LE(entry.fileNameBytes.length, 26)
+  header.writeUInt16LE(0, 28)
+  return header
+}
+
+function centralDirectoryHeader(entry: ZipEntry): Buffer {
+  const header = Buffer.allocUnsafe(46)
+  header.writeUInt32LE(CENTRAL_DIRECTORY_SIGNATURE, 0)
+  header.writeUInt16LE(ZIP_VERSION_STORE, 4)
+  header.writeUInt16LE(ZIP_VERSION_STORE, 6)
+  header.writeUInt16LE(UTF8_FILE_NAME_FLAG, 8)
+  header.writeUInt16LE(STORE_COMPRESSION_METHOD, 10)
+  header.writeUInt16LE(DOS_TIME_MIDNIGHT, 12)
+  header.writeUInt16LE(DOS_DATE_1980_01_01, 14)
+  header.writeUInt32LE(entry.crc32, 16)
+  header.writeUInt32LE(entry.data.length, 20)
+  header.writeUInt32LE(entry.data.length, 24)
+  header.writeUInt16LE(entry.fileNameBytes.length, 28)
+  header.writeUInt16LE(0, 30)
+  header.writeUInt16LE(0, 32)
+  header.writeUInt16LE(0, 34)
+  header.writeUInt16LE(0, 36)
+  header.writeUInt32LE(0, 38)
+  header.writeUInt32LE(entry.localHeaderOffset, 42)
+  return header
+}
+
+function endOfCentralDirectory(
+  entryCount: number,
+  centralDirectorySize: number,
+  centralDirectoryOffset: number,
+): Buffer {
+  const record = Buffer.allocUnsafe(22)
+  record.writeUInt32LE(END_OF_CENTRAL_DIRECTORY_SIGNATURE, 0)
+  record.writeUInt16LE(0, 4)
+  record.writeUInt16LE(0, 6)
+  record.writeUInt16LE(entryCount, 8)
+  record.writeUInt16LE(entryCount, 10)
+  record.writeUInt32LE(centralDirectorySize, 12)
+  record.writeUInt32LE(centralDirectoryOffset, 16)
+  record.writeUInt16LE(0, 20)
+  return record
+}
+
+function computeCrc32(data: Buffer): number {
+  const zlibCrc32: unknown = (zlib as { crc32?: unknown }).crc32
+  if (typeof zlibCrc32 === 'function') {
+    return (zlibCrc32 as (input: Buffer) => number)(data) >>> 0
+  }
+  return softwareCrc32(data)
+}
+
+const CRC32_TABLE = createCrc32Table()
+
+function createCrc32Table(): Uint32Array {
+  const table = new Uint32Array(256)
+  for (let index = 0; index < table.length; index += 1) {
+    let value = index
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
+    }
+    table[index] = value >>> 0
+  }
+  return table
+}
+
+function softwareCrc32(data: Buffer): number {
+  let crc = 0xffffffff
+  for (const byte of data) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function assertZip16(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > ZIP16_LIMIT) {
+    throw new Error(`[internal] ZIP ${label} must fit in 16 bits`)
+  }
+}
+
+function assertZip32(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > ZIP64_LIMIT) {
+    throw new Error(`[internal] ZIP ${label} requires ZIP64, which is not supported for JPK submissions`)
+  }
 }
 
 function hashBase64(algorithm: 'md5' | 'sha256', body: Buffer): string {
@@ -118,11 +277,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function envPositiveInteger(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback
+}
+
+function optionPositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : fallback
+}
+
+function resolvePollOptions(deps: Partial<JpkStatusPollDeps> = {}): PollOptions {
+  return {
+    attempts: optionPositiveInteger(
+      deps.pollAttempts,
+      envPositiveInteger('OM_JPK_STATUS_POLL_ATTEMPTS', DEFAULT_STATUS_POLL_ATTEMPTS),
+    ),
+    delayMs: optionPositiveInteger(
+      deps.pollDelayMs,
+      envPositiveInteger('OM_JPK_STATUS_POLL_DELAY_MS', DEFAULT_STATUS_POLL_DELAY_MS),
+    ),
+    requestTimeoutMs: optionPositiveInteger(
+      deps.requestTimeoutMs,
+      envPositiveInteger('OM_JPK_REQUEST_TIMEOUT_MS', DEFAULT_REQUEST_TIMEOUT_MS),
+    ),
+  }
+}
+
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  timeoutMs: number,
 ): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -139,20 +324,25 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(text) as unknown
 }
 
-async function postXml(fetchImpl: typeof fetch, url: string, body: string): Promise<Response> {
+async function postXml(fetchImpl: typeof fetch, url: string, body: string, timeoutMs: number): Promise<Response> {
   return fetchWithTimeout(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/xml; charset=utf-8' },
     body,
-  })
+  }, timeoutMs)
 }
 
-async function postJson(fetchImpl: typeof fetch, url: string, body: Record<string, string>): Promise<Response> {
+async function postJson(
+  fetchImpl: typeof fetch,
+  url: string,
+  body: Record<string, string>,
+  timeoutMs: number,
+): Promise<Response> {
   return fetchWithTimeout(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
-  })
+  }, timeoutMs)
 }
 
 function readStatusPayload(value: unknown): StatusPayload {
@@ -195,12 +385,12 @@ async function pollStatus(
   fetchImpl: typeof fetch,
   statusUrl: string,
   referenceNumber: string,
+  options: PollOptions,
 ): Promise<JpkSubmissionResult> {
   let lastStatus = 'unknown'
-  let lastError: string | undefined
 
-  for (let attempt = 1; attempt <= STATUS_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(fetchImpl, statusUrl, { method: 'GET' })
+  for (let attempt = 1; attempt <= options.attempts; attempt += 1) {
+    const response = await fetchWithTimeout(fetchImpl, statusUrl, { method: 'GET' }, options.requestTimeoutMs)
     if (!response.ok) {
       return {
         ok: false,
@@ -212,7 +402,6 @@ async function pollStatus(
 
     const statusPayload = readStatusPayload(await readJson(response))
     lastStatus = statusPayload.status
-    lastError = statusPayload.error
     if (statusPayload.terminalSuccess) {
       return {
         ok: true,
@@ -229,14 +418,33 @@ async function pollStatus(
         error: statusPayload.error ?? `JPK submission finished with status ${statusPayload.status}`,
       }
     }
-    if (attempt < STATUS_POLL_ATTEMPTS) await sleep(STATUS_POLL_DELAY_MS)
+    if (attempt < options.attempts) await sleep(options.delayMs)
   }
 
   return {
     ok: false,
     referenceNumber,
     status: lastStatus,
-    error: lastError ?? 'JPK submission status polling timed out',
+    error: JPK_STATUS_POLL_TIMEOUT_ERROR,
+  }
+}
+
+export async function pollJpkStatus(referenceNumber: string, deps: JpkStatusPollDeps): Promise<JpkSubmissionResult> {
+  try {
+    const fetchImpl = deps.fetchImpl ?? globalThis.fetch
+    if (typeof fetchImpl !== 'function') {
+      return { ok: false, referenceNumber, error: '[internal] fetch is not available' }
+    }
+
+    const gatewayUrl = resolveJpkGatewayUrl(deps.environment)
+    return await pollStatus(
+      fetchImpl,
+      absoluteApiUrl(gatewayUrl, `/api/Storage/Status/${encodeURIComponent(referenceNumber)}`),
+      referenceNumber,
+      resolvePollOptions(deps),
+    )
+  } catch (error) {
+    return { ok: false, referenceNumber, error: errorMessage(error) }
   }
 }
 
@@ -244,6 +452,7 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
   try {
     const fetchImpl = deps.fetchImpl ?? globalThis.fetch
     if (typeof fetchImpl !== 'function') return { ok: false, error: '[internal] fetch is not available' }
+    const pollOptions = resolvePollOptions(deps)
 
     const zipped = deps.zip ? deps.zip(jpkXml) : defaultZip(jpkXml)
     const material = generateSymmetricKey()
@@ -269,11 +478,17 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
       fetchImpl,
       absoluteApiUrl(gatewayUrl, '/api/Storage/InitUploadSigned'),
       signedMetadataXml,
+      pollOptions.requestTimeoutMs,
     )
     if (!initResponse.ok) return { ok: false, error: `JPK InitUploadSigned failed with HTTP ${initResponse.status}` }
 
     const initPayload = parseInitUploadResponse(await readJson(initResponse))
     if (!initPayload) return { ok: false, error: 'JPK InitUploadSigned returned an invalid response' }
+    try {
+      await deps.onReference?.(initPayload.ReferenceNumber)
+    } catch (error) {
+      return { ok: false, referenceNumber: initPayload.ReferenceNumber, error: errorMessage(error) }
+    }
     if (initPayload.RequestToUploadFileList.length < uploadParts.length) {
       return {
         ok: false,
@@ -287,7 +502,7 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
       const part = uploadParts[index]
       const uploadResult = await putToAbsoluteUrl(uploadEntry.Url, part.encryptedPart, uploadHeaders(uploadEntry), {
         fetchImpl,
-        timeoutMs: REQUEST_TIMEOUT_MS,
+        timeoutMs: pollOptions.requestTimeoutMs,
       })
       if (!uploadResult.ok) {
         return {
@@ -300,7 +515,7 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
 
     const finishResponse = await postJson(fetchImpl, absoluteApiUrl(gatewayUrl, '/api/Storage/FinishUpload'), {
       ReferenceNumber: initPayload.ReferenceNumber,
-    })
+    }, pollOptions.requestTimeoutMs)
     if (!finishResponse.ok) {
       return {
         ok: false,
@@ -313,6 +528,7 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
       fetchImpl,
       absoluteApiUrl(gatewayUrl, `/api/Storage/Status/${encodeURIComponent(initPayload.ReferenceNumber)}`),
       initPayload.ReferenceNumber,
+      pollOptions,
     )
   } catch (error) {
     return { ok: false, error: errorMessage(error) }

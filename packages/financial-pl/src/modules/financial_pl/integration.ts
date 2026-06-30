@@ -96,6 +96,22 @@ export const integration: IntegrationDefinition = {
         helpText: 'Private key (PEM) for the KSeF certificate. Stored encrypted; never displayed.',
       },
       {
+        key: 'jpkSignerCertPem',
+        label: 'JPK signer certificate (PEM)',
+        type: 'text',
+        required: false,
+        helpText:
+          'Separate qualified/Trusted-Profile JPK signer certificate (PEM). Use a self-signed certificate only on the MF TEST gateway.',
+      },
+      {
+        key: 'jpkSignerPrivateKeyPem',
+        label: 'JPK signer private key (PEM)',
+        type: 'secret',
+        required: false,
+        helpText:
+          'Private key (PEM) for the separate qualified/Trusted-Profile JPK signer. Stored encrypted; never displayed.',
+      },
+      {
         key: 'certificateSerialNumber',
         label: 'KSeF certificate serial number',
         type: 'text',

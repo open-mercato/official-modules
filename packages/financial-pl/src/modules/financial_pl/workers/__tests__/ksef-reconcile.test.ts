@@ -1,20 +1,45 @@
+const mockAuthenticate = jest.fn()
+
 jest.mock('../../events', () => ({
   emitFinancialPlEvent: jest.fn(),
 }))
 
+jest.mock('../../lib/ksef-auth', () => ({
+  authenticate: (...args: unknown[]) => mockAuthenticate(...args),
+}))
+
+jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
+  findOneWithDecryption: (em: { findOne: (...args: unknown[]) => Promise<unknown> }, entity: unknown, where: unknown) =>
+    em.findOne(entity, where),
+}))
+
 import { emitFinancialPlEvent } from '../../events'
+import type { KsefTransport, KsefTransportRequest } from '../../lib/ksef-client'
 import handle from '../ksef-reconcile.worker'
 
 type Row = {
   id: string
-  status: 'queued' | 'processing' | 'offline_issued'
+  status: 'queued' | 'processing' | 'offline_issued' | 'accepted' | 'rejected'
   attemptCount: number
+  mode?: 'online' | 'batch'
+  batchReference?: string | null
+  sessionReference?: string | null
+  invoiceReference?: string | null
+  contextNip?: string
+  environment?: 'test' | 'demo' | 'prod'
+  salesInvoiceId?: string
+  ksefNumber?: string | null
+  upoXml?: string | null
+  lastStatusCode?: number | null
+  lastErrorCode?: string | null
+  lastErrorMessage?: string | null
+  acceptedAt?: Date | null
   submittedAt?: Date | null
   updatedAt?: Date | null
   offlineSendDeadlineAt?: Date | null
 }
 
-type FindWhere = { status?: string | { $in: string[] } }
+type FindWhere = { id?: string; status?: string | { $in: string[] } }
 
 function makeEm(opts: {
   processing?: Row[]
@@ -23,6 +48,7 @@ function makeEm(opts: {
   gaveUp?: { id: string }[]
   nativeUpdate?: jest.Mock
 }) {
+  const rows = [...(opts.processing ?? []), ...(opts.queued ?? []), ...(opts.offlineIssued ?? [])]
   const find = jest.fn(async (_entity: unknown, where: FindWhere) => {
     if (where.status === 'processing') return opts.processing ?? []
     if (where.status === 'queued') return opts.queued ?? []
@@ -30,14 +56,63 @@ function makeEm(opts: {
     // The over-ceiling give-up query keys status as { $in: [...] }.
     return opts.gaveUp ?? []
   })
-  const nativeUpdate = opts.nativeUpdate ?? jest.fn(async () => 1)
-  const em: Record<string, unknown> = { find, nativeUpdate }
+  const nativeUpdate =
+    opts.nativeUpdate ??
+    jest.fn(async (_entity: unknown, where: FindWhere, update: Partial<Row>) => {
+      const matches = rows.filter((row) => !where.id || row.id === where.id)
+      for (const row of matches) Object.assign(row, update)
+      return matches.length || 1
+    })
+  const findOne = jest.fn(async (_entity: unknown, where: FindWhere) => rows.find((row) => row.id === where.id) ?? null)
+  const flush = jest.fn(async () => {})
+  const em: Record<string, unknown> = { find, findOne, flush, nativeUpdate }
   em.fork = () => em
-  return { em, find, nativeUpdate }
+  return { em, find, findOne, flush, nativeUpdate }
 }
 
-function makeCtx(em: unknown) {
-  return { resolve: (name: string) => (name === 'em' ? em : undefined) }
+function makeCtx(em: unknown, transport?: KsefTransport) {
+  return {
+    resolve: (name: string) => {
+      if (name === 'em') return em
+      if (name === 'ksefTransport') return transport
+      if (name === 'integrationCredentialsService') {
+        return {
+          getRaw: async () => ({
+            authMethod: 'token',
+            ksefToken: 'TOKEN',
+            environment: 'test',
+          }),
+        }
+      }
+      return undefined
+    },
+  }
+}
+
+function json(body: unknown) {
+  return { status: 200, headers: {}, text: JSON.stringify(body) }
+}
+
+function makeBatchTransport(): { transport: KsefTransport; calls: KsefTransportRequest[] } {
+  const calls: KsefTransportRequest[] = []
+  const transport: KsefTransport = async (req) => {
+    calls.push(req)
+    const path = new URL(req.url).pathname
+    if (path.endsWith('/security/public-key-certificates')) {
+      return json([{ publicKeyId: 'TOKEN', certificate: 'TOKEN-CERT', usage: ['token'], validFrom: '2026-01-01' }])
+    }
+    if (path.endsWith('/sessions/BATCH-REF-1')) {
+      return json({ status: { code: 200, description: 'accepted' } })
+    }
+    if (path.endsWith('/sessions/BATCH-REF-1/invoices')) {
+      return json({ invoices: [{ fileName: 'INV-1.xml', status: { code: 200 }, ksefNumber: 'KSEF-NO-1' }] })
+    }
+    if (path.endsWith('/sessions/BATCH-REF-1/invoices/ksef/KSEF-NO-1/upo')) {
+      return { status: 200, headers: {}, text: '<UPO/>' }
+    }
+    throw new Error(`unexpected KSeF request: ${req.method} ${path}`)
+  }
+  return { transport, calls }
 }
 
 function candidateFinds(find: jest.Mock) {
@@ -57,6 +132,8 @@ const STALE = new Date(Date.now() - 60 * 60_000)
 describe('ksef-reconcile worker', () => {
   beforeEach(() => {
     ;(emitFinancialPlEvent as jest.Mock).mockReset()
+    mockAuthenticate.mockReset()
+    mockAuthenticate.mockResolvedValue({ ok: true, accessToken: 'ACCESS' })
     delete process.env.OM_KSEF_RECONCILE_MAX_ATTEMPTS
     delete process.env.OM_KSEF_RECONCILE_STALE_MINUTES
   })
@@ -144,6 +221,52 @@ describe('ksef-reconcile worker', () => {
     })
     await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
     expect(emitFinancialPlEvent).not.toHaveBeenCalled()
+  })
+
+  it('resolves a processing batch row to accepted with KSeF number and UPO', async () => {
+    const row: Row = {
+      id: 'BATCH-S1',
+      status: 'processing',
+      mode: 'batch',
+      batchReference: 'BATCH-REF-1',
+      sessionReference: 'BATCH-REF-1',
+      contextNip: '5260001246',
+      environment: 'test',
+      salesInvoiceId: 'INV-1',
+      attemptCount: 1,
+      submittedAt: STALE,
+    }
+    const { em, nativeUpdate } = makeEm({ processing: [row] })
+    const { transport, calls } = makeBatchTransport()
+
+    await handle({ payload: PAYLOAD } as never, makeCtx(em, transport) as never)
+
+    expect(nativeUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        id: 'BATCH-S1',
+        organizationId: 'O',
+        tenantId: 'T',
+        status: 'processing',
+        mode: 'batch',
+        batchReference: 'BATCH-REF-1',
+      }),
+      expect.objectContaining({ attemptCount: 2 }),
+    )
+    expect(calls.some((req) => new URL(req.url).pathname.endsWith('/sessions/BATCH-REF-1/invoices'))).toBe(true)
+    expect(row.status).toBe('accepted')
+    expect(row.ksefNumber).toBe('KSEF-NO-1')
+    expect(row.upoXml).toBe('<UPO/>')
+    expect(emitFinancialPlEvent).toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.accepted',
+      { submissionId: 'BATCH-S1', organizationId: 'O', tenantId: 'T', ksefNumber: 'KSEF-NO-1' },
+      { persistent: true },
+    )
+    expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.queued',
+      expect.anything(),
+      expect.anything(),
+    )
   })
 
   it('scopes every query to the org + tenant (no cross-tenant re-drive)', async () => {

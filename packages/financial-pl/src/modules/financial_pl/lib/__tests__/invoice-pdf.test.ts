@@ -135,6 +135,16 @@ describe('renderInvoicePdf', () => {
     expect(bytes.length).toBe(32415)
     expect(createHash('sha256').update(Buffer.from(bytes)).digest('hex')).toBe('eac37d2fbd4c753f9683c4881800bbdb904a93ddcac7b0e829f66d48074a818f')
   })
+
+  it('keeps a 45-line threshold invoice byte-identical to the pre-pagination renderer', async () => {
+    const url = buildKodIUrl({ environment: 'test', sellerNip: '2481632647', issueDate: '2026-02-01', invoiceXml: '<Faktura/>' })
+    const qrPng = await generateQrPng(url)
+    const bytes = await renderInvoicePdf(sampleModelWithLineCount(45), { fontBytes: loadInvoiceFontBytes(), qrPng })
+    const pdf = await PDFDocument.load(bytes)
+    expect(pdf.getPageCount()).toBe(1)
+    expect(bytes.length).toBe(33319)
+    expect(createHash('sha256').update(Buffer.from(bytes)).digest('hex')).toBe('f9b7632de04cd8b9803f0247e1ec7e627a4b84987fcd3c3d77db81c68edd1b2f')
+  })
 })
 
 describe('generateQrPng', () => {

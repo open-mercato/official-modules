@@ -7,7 +7,7 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { KsefSubmission, type KsefSubmissionStatusColumn } from '../data/entities'
-import { createPrivateKey } from 'node:crypto'
+import { createPrivateKey, randomUUID } from 'node:crypto'
 import {
   ksefSubmissionSendSchema,
   ksefSubmissionRetrySchema,
@@ -461,46 +461,9 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
       })
     }
 
-    const environmentConfig = resolveKsefEnvironment(creds.environment ?? details.environment)
-    const client = new KsefClient(environmentConfig, resolveOptional<KsefTransport>(ctx, 'ksefTransport'))
-    let accessToken: string
-    let mfPublicKeyPem: string
-    try {
-      const certs = await client.getPublicKeyCertificates()
-      const symmetricCert = selectCertificate(certs, 'symmetric')
-      if (!symmetricCert?.certificate) {
-        throw new CrudHttpError(502, {
-          error: '[internal] KSeF public keys unavailable',
-          code: 'ksef_public_keys_unavailable',
-        })
-      }
-      mfPublicKeyPem = symmetricCert.certificate
-      const authResult = await authenticate(client, selectCertificate(certs, 'token'), auth, AUTH_POLL)
-      if (!authResult.ok) {
-        throw new CrudHttpError(502, { error: authResult.errorMessage, code: 'ksef_auth_failed' })
-      }
-      accessToken = authResult.accessToken
-    } catch (err) {
-      if (err instanceof CrudHttpError) throw err
-      throw new CrudHttpError(502, {
-        error: err instanceof Error ? `[internal] KSeF batch authentication failed: ${err.message}` : '[internal] KSeF batch authentication failed',
-        code: 'ksef_batch_auth_failed',
-      })
-    }
-
     const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted', 'offline_issued']
     const batchInvoices: Array<{ invoiceId: string; fileName: string; xml: string }> = []
     for (const invoiceId of [...new Set(parsed.invoiceIds)]) {
-      const existing = await em.findOne(KsefSubmission, {
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        documentKind: 'invoice',
-        salesInvoiceId: invoiceId,
-        status: { $in: activeStatuses },
-        deletedAt: null,
-      })
-      if (existing) continue
-
       const invoicePayload = await resolveFa3FromSalesInvoice(
         { queryEngine, contextNip, translate, seller: details.seller },
         {
@@ -524,15 +487,107 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
       })
     }
 
-    const pkg = buildBatchPackage(
-      batchInvoices.map((invoice) => ({ fileName: invoice.fileName, xml: invoice.xml })),
-      mfPublicKeyPem,
-    )
-
-    let referenceNumber: string
+    const localBatchReference = `local-${randomUUID()}`
+    let claimedSubmissions: KsefSubmission[] = []
     try {
+      claimedSubmissions = await em.transactional(async (tx) => {
+        for (const invoice of batchInvoices) {
+          const existing = await tx.findOne(KsefSubmission, {
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            documentKind: 'invoice',
+            salesInvoiceId: invoice.invoiceId,
+            status: { $in: activeStatuses },
+            deletedAt: null,
+          })
+          if (existing) {
+            throw new CrudHttpError(409, {
+              error: '[internal] invoice already has an active KSeF submission',
+              code: 'ksef_submission_already_active',
+              invoiceId: invoice.invoiceId,
+            })
+          }
+        }
+
+        const now = new Date()
+        const submissions = batchInvoices.map((invoice) =>
+          tx.create(KsefSubmission, {
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            salesInvoiceId: invoice.invoiceId,
+            documentKind: 'invoice',
+            creditMemoId: null,
+            environment: resolveKsefEnvironment(creds.environment ?? details.environment).environment,
+            mode: 'batch',
+            status: 'queued',
+            contextNip,
+            invoiceXml: invoice.xml,
+            sessionReference: null,
+            batchReference: localBatchReference,
+            attemptCount: 0,
+            submittedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        await tx.persist(submissions).flush()
+        return submissions
+      })
+    } catch (err) {
+      if (isUniqueViolation(err, 'financial_pl_ksef_submissions_active_unique')) {
+        throw new CrudHttpError(409, {
+          error: '[internal] one or more invoices already have an active KSeF submission',
+          code: 'ksef_submission_already_active',
+        })
+      }
+      throw err
+    }
+
+    const environmentConfig = resolveKsefEnvironment(creds.environment ?? details.environment)
+    const client = new KsefClient(environmentConfig, resolveOptional<KsefTransport>(ctx, 'ksefTransport'))
+    const claimedIds = claimedSubmissions.map((submission) => submission.id)
+    let referenceNumber: string | undefined
+
+    const markClaimedRejected = async (err: unknown) => {
+      const now = new Date()
+      const update: Partial<KsefSubmission> = {
+        status: 'rejected',
+        lastErrorCode: 'ksef_batch_send_failed',
+        lastErrorMessage:
+          err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed',
+        updatedAt: now,
+      }
+      if (referenceNumber) {
+        update.sessionReference = referenceNumber
+        update.batchReference = referenceNumber
+        update.submittedAt = now
+      }
+      await em.nativeUpdate(
+        KsefSubmission,
+        { id: { $in: claimedIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+        update,
+      )
+    }
+
+    try {
+      const certs = await client.getPublicKeyCertificates()
+      const symmetricCert = selectCertificate(certs, 'symmetric')
+      if (!symmetricCert?.certificate) {
+        throw new CrudHttpError(502, {
+          error: '[internal] KSeF public keys unavailable',
+          code: 'ksef_public_keys_unavailable',
+        })
+      }
+      const authResult = await authenticate(client, selectCertificate(certs, 'token'), auth, AUTH_POLL)
+      if (!authResult.ok) {
+        throw new CrudHttpError(502, { error: authResult.errorMessage, code: 'ksef_auth_failed' })
+      }
+      const pkg = buildBatchPackage(
+        batchInvoices.map((invoice) => ({ fileName: invoice.fileName, xml: invoice.xml })),
+        symmetricCert.certificate,
+      )
       const session = await client.openBatchSession({
-        accessToken,
+        accessToken: authResult.accessToken,
         formCode: {
           systemCode: FA3_SCHEMA.systemCode,
           schemaVersion: FA3_SCHEMA.schemaVersion,
@@ -543,6 +598,19 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
         fileParts: pkg.fileParts,
       })
       referenceNumber = session.referenceNumber
+      const now = new Date()
+      await em.nativeUpdate(
+        KsefSubmission,
+        { id: { $in: claimedIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+        {
+          status: 'processing',
+          sessionReference: referenceNumber,
+          batchReference: referenceNumber,
+          submittedAt: now,
+          updatedAt: now,
+          attemptCount: 1,
+        },
+      )
       const uploadRequest = session.partUploadRequests[0]
       if (!uploadRequest) {
         throw new CrudHttpError(502, {
@@ -551,8 +619,9 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
         })
       }
       await client.uploadBatchPart(uploadRequest, pkg.encryptedZip)
-      await client.closeBatchSession({ accessToken, referenceNumber })
+      await client.closeBatchSession({ accessToken: authResult.accessToken, referenceNumber })
     } catch (err) {
+      await markClaimedRejected(err)
       if (err instanceof CrudHttpError) throw err
       throw new CrudHttpError(502, {
         error: err instanceof Error ? `[internal] KSeF batch send failed: ${err.message}` : '[internal] KSeF batch send failed',
@@ -560,30 +629,13 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
       })
     }
 
-    const now = new Date()
-    const submissions = batchInvoices.map((invoice) =>
-      em.create(KsefSubmission, {
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        salesInvoiceId: invoice.invoiceId,
-        documentKind: 'invoice',
-        creditMemoId: null,
-        environment: environmentConfig.environment,
-        mode: 'batch',
-        status: 'processing',
-        contextNip,
-        invoiceXml: invoice.xml,
-        sessionReference: referenceNumber,
-        batchReference: referenceNumber,
-        attemptCount: 1,
-        submittedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      }),
-    )
-    await em.persist(submissions).flush()
-
-    return { batchReference: referenceNumber, count: submissions.length }
+    if (!referenceNumber) {
+      throw new CrudHttpError(502, {
+        error: '[internal] KSeF batch session did not return a reference number',
+        code: 'ksef_batch_reference_missing',
+      })
+    }
+    return { batchReference: referenceNumber, count: claimedSubmissions.length }
   },
 }
 

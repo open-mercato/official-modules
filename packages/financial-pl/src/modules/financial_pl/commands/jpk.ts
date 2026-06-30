@@ -22,7 +22,12 @@ import { resolveKsefEnvironment } from '../config'
 import { readKsefCredentials as readSharedKsefCredentials } from '../lib/credentials'
 import { buildJpkXml } from '../lib/jpk/build-jpk-xml'
 import { resolveJpkFiling, type ResolveJpkQueryEngine } from '../lib/jpk/resolve-jpk-filing'
-import { submitJpk } from '../lib/jpk/jpk-submission-client'
+import {
+  JPK_STATUS_POLL_TIMEOUT_ERROR,
+  pollJpkStatus,
+  submitJpk,
+  type JpkSubmissionResult,
+} from '../lib/jpk/jpk-submission-client'
 
 function resolveCommandScope(ctx: CommandRuntimeContext): { organizationId: string; tenantId: string } {
   const tenantId = ctx.auth?.tenantId ?? null
@@ -53,6 +58,7 @@ function credString(value: unknown): string | undefined {
 
 type RuntimeJpkFilingStatus = JpkVatFiling['status'] | 'submitting'
 const JPK_SUBMITTING_STATUS = 'submitting' as JpkVatFiling['status']
+const JPK_REFERENCE_PERSIST_GRACE_MS = 2 * 60 * 1000
 
 function runtimeJpkStatus(filing: JpkVatFiling): RuntimeJpkFilingStatus {
   return filing.status as RuntimeJpkFilingStatus
@@ -60,6 +66,11 @@ function runtimeJpkStatus(filing: JpkVatFiling): RuntimeJpkFilingStatus {
 
 function setJpkFilingStatus(filing: JpkVatFiling, status: RuntimeJpkFilingStatus): void {
   filing.status = status as JpkVatFiling['status']
+}
+
+function isReferencePersistGraceActive(filing: JpkVatFiling, now: Date): boolean {
+  const marker = filing.updatedAt ?? filing.createdAt
+  return now.getTime() - marker.getTime() < JPK_REFERENCE_PERSIST_GRACE_MS
 }
 
 async function readKsefCredentials(
@@ -397,7 +408,58 @@ export const generateCommand: CommandHandler<JpkGenerateInput, { filingId: strin
 
 type ClaimedJpkSubmission = {
   filingId: string
-  generatedXml: string
+} & (
+  | { mode: 'submit'; generatedXml: string }
+  | { mode: 'resume'; referenceNumber: string }
+)
+
+async function persistJpkSubmissionReference(
+  em: EntityManager,
+  scope: { organizationId: string; tenantId: string },
+  filingId: string,
+  referenceNumber: string,
+): Promise<void> {
+  const updated = await em.nativeUpdate(
+    JpkVatFiling,
+    {
+      id: filingId,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+      status: JPK_SUBMITTING_STATUS,
+    },
+    { submissionReference: referenceNumber, submissionError: null, updatedAt: new Date() },
+  )
+  if (updated !== 1) throw new Error('[internal] failed to persist JPK submission reference')
+}
+
+async function resetJpkSubmissionToGenerated(
+  em: EntityManager,
+  scope: { organizationId: string; tenantId: string },
+  filingId: string,
+  submissionError: string,
+  referenceNumber?: string,
+): Promise<void> {
+  await em.transactional(async (tx: EntityManager) => {
+    const filing = await findOneWithDecryption(
+      tx,
+      JpkVatFiling,
+      {
+        id: filingId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+      scope,
+    )
+    if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
+    if (referenceNumber) filing.submissionReference = referenceNumber
+    filing.submissionError = submissionError
+    setJpkFilingStatus(filing, 'generated')
+    filing.updatedAt = new Date()
+    await tx.flush()
+  })
 }
 
 export const submitFilingCommand: CommandHandler<
@@ -412,17 +474,6 @@ export const submitFilingCommand: CommandHandler<
     ensureOrganizationScope(ctx, scope.organizationId)
 
     const credentials = await readSharedKsefCredentials(ctx.container, scope)
-    if (!credentials.jpkSignerCertPem || !credentials.jpkSignerPrivateKeyPem) {
-      throw new CrudHttpError(422, { error: 'JPK signer credential not configured', code: 'jpk_signer_missing' })
-    }
-    const mfPublicCertPem = credString(process.env.OM_JPK_MF_CERT_PEM)
-    if (!mfPublicCertPem) {
-      throw new CrudHttpError(422, {
-        error: 'MF JPK public certificate is not configured',
-        code: 'jpk_mf_cert_missing',
-      })
-    }
-
     const environment = resolveKsefEnvironment(credentials.environment).environment
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const claimed = await em.transactional(async (tx: EntityManager): Promise<ClaimedJpkSubmission> => {
@@ -441,11 +492,45 @@ export const submitFilingCommand: CommandHandler<
       if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
 
       const currentStatus = runtimeJpkStatus(filing)
-      if (currentStatus === 'submitted' || currentStatus === 'submitting') {
+      if (currentStatus === 'submitted') {
         throw new CrudHttpError(409, {
-          error: '[internal] JPK filing is already submitted or in progress',
-          code: 'jpk_already_submitted_or_in_progress',
+          error: '[internal] JPK filing is already submitted',
+          code: 'jpk_already_submitted',
         })
+      }
+      if (currentStatus === JPK_SUBMITTING_STATUS) {
+        const referenceNumber = credString(filing.submissionReference)
+        if (referenceNumber) return { filingId: filing.id, mode: 'resume', referenceNumber }
+
+        const now = new Date()
+        if (isReferencePersistGraceActive(filing, now)) {
+          throw new CrudHttpError(409, {
+            error: '[internal] JPK filing is being submitted but has no MF reference yet',
+            code: 'jpk_submission_reference_pending',
+          })
+        }
+        if (!filing.generatedXml) {
+          throw new CrudHttpError(422, { error: '[internal] JPK filing has not been generated', code: 'jpk_not_generated' })
+        }
+        const updated = await tx.nativeUpdate(
+          JpkVatFiling,
+          {
+            id: filing.id,
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            deletedAt: null,
+            status: JPK_SUBMITTING_STATUS,
+            submissionReference: null,
+          },
+          { submissionError: null, updatedAt: now },
+        )
+        if (updated !== 1) {
+          throw new CrudHttpError(409, {
+            error: '[internal] JPK filing is already submitted or in progress',
+            code: 'jpk_already_submitted_or_in_progress',
+          })
+        }
+        return { filingId: filing.id, mode: 'submit', generatedXml: filing.generatedXml }
       }
       if (currentStatus !== 'generated' || !filing.generatedXml) {
         throw new CrudHttpError(422, { error: '[internal] JPK filing has not been generated', code: 'jpk_not_generated' })
@@ -461,7 +546,7 @@ export const submitFilingCommand: CommandHandler<
           deletedAt: null,
           status: 'generated',
         },
-        { status: JPK_SUBMITTING_STATUS, submissionError: null, updatedAt: now },
+        { status: JPK_SUBMITTING_STATUS, submissionReference: null, submissionError: null, updatedAt: now },
       )
       if (updated !== 1) {
         throw new CrudHttpError(409, {
@@ -470,17 +555,34 @@ export const submitFilingCommand: CommandHandler<
         })
       }
 
-      return { filingId: filing.id, generatedXml: filing.generatedXml }
+      return { filingId: filing.id, mode: 'submit', generatedXml: filing.generatedXml }
     })
 
-    const result = await submitJpk(claimed.generatedXml, {
-      environment,
-      signer: {
-        certificatePem: credentials.jpkSignerCertPem,
-        privateKeyPem: credentials.jpkSignerPrivateKeyPem,
-      },
-      mfPublicCertPem,
-    })
+    let result: JpkSubmissionResult
+    if (claimed.mode === 'resume') {
+      result = await pollJpkStatus(claimed.referenceNumber, { environment })
+    } else {
+      if (!credentials.jpkSignerCertPem || !credentials.jpkSignerPrivateKeyPem) {
+        const error = 'JPK signer credential not configured'
+        await resetJpkSubmissionToGenerated(em, scope, claimed.filingId, error)
+        throw new CrudHttpError(422, { error, code: 'jpk_signer_missing' })
+      }
+      const mfPublicCertPem = credString(process.env.OM_JPK_MF_CERT_PEM)
+      if (!mfPublicCertPem) {
+        const error = 'MF JPK public certificate is not configured'
+        await resetJpkSubmissionToGenerated(em, scope, claimed.filingId, error)
+        throw new CrudHttpError(422, { error, code: 'jpk_mf_cert_missing' })
+      }
+      result = await submitJpk(claimed.generatedXml, {
+        environment,
+        signer: {
+          certificatePem: credentials.jpkSignerCertPem,
+          privateKeyPem: credentials.jpkSignerPrivateKeyPem,
+        },
+        mfPublicCertPem,
+        onReference: (referenceNumber) => persistJpkSubmissionReference(em, scope, claimed.filingId, referenceNumber),
+      })
+    }
 
     if (result.ok) {
       const submittedAt = new Date()
@@ -509,26 +611,35 @@ export const submitFilingCommand: CommandHandler<
       return { filingId: claimed.filingId, status: 'submitted', referenceNumber: result.referenceNumber }
     }
 
-    await em.transactional(async (tx: EntityManager) => {
-      const filing = await findOneWithDecryption(
-        tx,
-        JpkVatFiling,
-        {
-          id: claimed.filingId,
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-          deletedAt: null,
-        },
-        { lockMode: LockMode.PESSIMISTIC_WRITE },
-        scope,
-      )
-      if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
-      if (result.referenceNumber) filing.submissionReference = result.referenceNumber
-      filing.submissionError = result.error
-      setJpkFilingStatus(filing, 'generated')
-      filing.updatedAt = new Date()
-      await tx.flush()
-    })
+    if (result.error === JPK_STATUS_POLL_TIMEOUT_ERROR) {
+      await em.transactional(async (tx: EntityManager) => {
+        const filing = await findOneWithDecryption(
+          tx,
+          JpkVatFiling,
+          {
+            id: claimed.filingId,
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            deletedAt: null,
+          },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+          scope,
+        )
+        if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
+        if (result.referenceNumber) filing.submissionReference = result.referenceNumber
+        filing.submissionError = result.error
+        setJpkFilingStatus(filing, JPK_SUBMITTING_STATUS)
+        filing.updatedAt = new Date()
+        await tx.flush()
+      })
+      throw new CrudHttpError(504, {
+        error: result.error,
+        code: 'jpk_status_poll_timed_out',
+        referenceNumber: result.referenceNumber,
+      })
+    }
+
+    await resetJpkSubmissionToGenerated(em, scope, claimed.filingId, result.error, result.referenceNumber)
     throw new CrudHttpError(502, { error: result.error, code: 'jpk_submit_failed' })
   },
 }

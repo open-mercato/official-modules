@@ -42,7 +42,7 @@ function json(body: unknown) {
   return { status: 200, headers: {}, text: JSON.stringify(body) }
 }
 
-function makeTransport(): { transport: KsefTransport; calls: KsefTransportRequest[] } {
+function makeTransport(events: string[] = []): { transport: KsefTransport; calls: KsefTransportRequest[] } {
   const calls: KsefTransportRequest[] = []
   const transport: KsefTransport = async (req) => {
     calls.push(req)
@@ -54,6 +54,7 @@ function makeTransport(): { transport: KsefTransport; calls: KsefTransportReques
       ])
     }
     if (path.endsWith('/sessions/batch')) {
+      events.push('open-batch')
       return json({
         referenceNumber: 'BATCH-REF-1',
         partUploadRequests: [
@@ -74,19 +75,30 @@ function makeTransport(): { transport: KsefTransport; calls: KsefTransportReques
   return { transport, calls }
 }
 
-function makeEm() {
+function makeEm(opts: { events?: string[]; existingInvoiceIds?: Set<string> } = {}) {
   const persisted: Array<Record<string, unknown>> = []
-  const flush = jest.fn(async () => {})
+  const events = opts.events ?? []
+  const flush = jest.fn(async () => {
+    events.push('flush')
+  })
   const em: Record<string, unknown> = {
-    findOne: jest.fn(async () => null),
+    findOne: jest.fn(async (_entity: unknown, where: { salesInvoiceId?: string }) =>
+      where.salesInvoiceId && opts.existingInvoiceIds?.has(where.salesInvoiceId) ? { id: 'existing-submission' } : null,
+    ),
     create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({
       id: `sub-${String(data.salesInvoiceId)}`,
       ...data,
     })),
     persist: jest.fn((entities: Array<Record<string, unknown>>) => {
+      events.push('persist')
       persisted.push(...entities)
       return { flush }
     }),
+    nativeUpdate: jest.fn(async (_entity: unknown, _where: unknown, update: Record<string, unknown>) => {
+      for (const row of persisted) Object.assign(row, update)
+      return persisted.length
+    }),
+    transactional: jest.fn(async (fn: (tx: Record<string, unknown>) => Promise<unknown>) => fn(em)),
   }
   em.fork = () => em
   return { em, persisted, flush }
@@ -142,12 +154,16 @@ beforeEach(() => {
 
 describe('financial_pl.ksef_submission.send_batch', () => {
   it('opens, uploads, closes, and creates one batch submission row per invoice', async () => {
-    const { em, persisted } = makeEm()
-    const { transport, calls } = makeTransport()
+    const events: string[] = []
+    const { em, persisted } = makeEm({ events })
+    const { transport, calls } = makeTransport(events)
 
     const result = await sendBatchCommand.execute({ invoiceIds: [INV_1, INV_2] }, makeCtx(em, transport))
 
     expect(result).toEqual({ batchReference: 'BATCH-REF-1', count: 2 })
+    expect(events.indexOf('persist')).toBeGreaterThanOrEqual(0)
+    expect(events.indexOf('open-batch')).toBeGreaterThanOrEqual(0)
+    expect(events.indexOf('persist')).toBeLessThan(events.indexOf('open-batch'))
     expect(mockBuildBatchPackage).toHaveBeenCalledWith(
       [
         { fileName: `${INV_1}.xml`, xml: `<FA>${INV_1}</FA>` },
@@ -192,6 +208,21 @@ describe('financial_pl.ksef_submission.send_batch', () => {
     await expect(sendBatchCommand.execute({ invoiceIds: [SELF_BILLED, INV_1] }, makeCtx(em, transport))).rejects.toMatchObject({
       status: 422,
       body: { code: 'self_billing_unsupported' },
+    })
+
+    expect(mockBuildBatchPackage).not.toHaveBeenCalled()
+    expect(mockPutToAbsoluteUrl).not.toHaveBeenCalled()
+    expect(calls.some((req) => new URL(req.url).pathname.endsWith('/sessions/batch'))).toBe(false)
+    expect((em as Record<string, jest.Mock>).persist).not.toHaveBeenCalled()
+  })
+
+  it('rejects an already-active invoice locally without opening a batch session', async () => {
+    const { em } = makeEm({ existingInvoiceIds: new Set([INV_1]) })
+    const { transport, calls } = makeTransport()
+
+    await expect(sendBatchCommand.execute({ invoiceIds: [INV_1, INV_2] }, makeCtx(em, transport))).rejects.toMatchObject({
+      status: 409,
+      body: { code: 'ksef_submission_already_active' },
     })
 
     expect(mockBuildBatchPackage).not.toHaveBeenCalled()

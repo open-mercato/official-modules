@@ -49,7 +49,7 @@ const COL = { lp: 0, name: 26, qty: 250, unit: 300, unitNet: 330, net: 395, vat:
 const TABLE_RIGHT = A4.w - M - M // content width
 const ROW_HEIGHT = 13
 const TABLE_HEADER_HEIGHT = 18
-const SINGLE_PAGE_LINE_LIMIT = 40
+const SINGLE_PAGE_LINE_LIMIT = 45
 const MULTI_PAGE_BOTTOM_Y = M + 20
 const FINAL_BLOCK_BOTTOM_Y = M + 40 + 90 + 12
 

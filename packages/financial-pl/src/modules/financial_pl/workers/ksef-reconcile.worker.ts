@@ -1,7 +1,13 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission } from '../data/entities'
 import { chooseRecovery } from '../lib/recovery'
 import { emitFinancialPlEvent } from '../events'
+import { resolveKsefEnvironment } from '../config'
+import { KsefClient, type KsefPublicKeyCertificate, type KsefTransport } from '../lib/ksef-client'
+import { authenticate } from '../lib/ksef-auth'
+import { buildKsefAuthConfig, readKsefCredentials, type ResolverContext } from '../lib/credentials'
+import { evaluateInvoiceStatus, evaluateSessionStatus } from '../lib/status'
 
 /**
  * Periodic reconciliation sweep that recovers KSeF submissions which fell out of
@@ -40,9 +46,7 @@ type ReconcilePayload = {
 
 type ReconcileJob = { payload: ReconcilePayload }
 
-type HandlerContext = {
-  resolve: <T = unknown>(name: string) => T
-}
+type HandlerContext = ResolverContext
 
 export const metadata = {
   queue: 'financial-pl-ksef-reconcile',
@@ -58,10 +62,376 @@ const CANDIDATE_BATCH = 100
 // pick it up once the deadline is within this lookahead (or already past) and prioritize the
 // most-urgent rows first (soonest deadline). Overridable so an operator can widen the window.
 const DEFAULT_OFFLINE_LOOKAHEAD_HOURS = 24
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+const AUTH_POLL = { authMaxAttempts: 20, authDelayMs: 1500, wait } as const
+
+type JsonRecord = Record<string, unknown>
+
+type BatchSessionInvoice = {
+  salesInvoiceId?: string
+  fileName?: string
+  invoiceReference?: string
+  ksefNumber?: string
+  statusCode: number
+  errorCode?: string
+  errorMessage?: string
+}
 
 function readPositiveInt(envValue: string | undefined, fallback: number): number {
   const parsed = Number(envValue)
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function pickString(record: JsonRecord | undefined, ...keys: string[]): string | undefined {
+  if (!record) return undefined
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return undefined
+}
+
+function pickNumber(record: JsonRecord | undefined, ...keys: string[]): number | undefined {
+  if (!record) return undefined
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
+}
+
+function selectCertificate(
+  certs: KsefPublicKeyCertificate[],
+  usageNeedle: string,
+): KsefPublicKeyCertificate | undefined {
+  const matches = certs.filter(
+    (cert) =>
+      cert.certificate.trim().length > 0 &&
+      cert.usage.some((usage) => usage.toLowerCase().includes(usageNeedle)),
+  )
+  return [...matches].sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? ''))[0]
+}
+
+function resolveOptional<T>(ctx: HandlerContext, name: string): T | undefined {
+  try {
+    return ctx.resolve<T>(name)
+  } catch {
+    return undefined
+  }
+}
+
+function sessionInvoiceArray(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload
+  if (!isRecord(payload)) return []
+  const direct = payload.invoices ?? payload.items ?? payload.results
+  if (Array.isArray(direct)) return direct
+  const data = payload.data
+  if (isRecord(data)) {
+    const nested = data.invoices ?? data.items ?? data.results
+    if (Array.isArray(nested)) return nested
+  }
+  return []
+}
+
+function parseBatchSessionInvoices(payload: unknown): BatchSessionInvoice[] {
+  return sessionInvoiceArray(payload).flatMap((item) => {
+    if (!isRecord(item)) return []
+    const status = isRecord(item.status) ? item.status : undefined
+    const fileName = pickString(item, 'fileName', 'filename', 'invoiceFileName', 'originalFileName')
+    return [
+      {
+        salesInvoiceId: pickString(item, 'salesInvoiceId', 'invoiceId'),
+        fileName,
+        invoiceReference: pickString(item, 'invoiceReference', 'invoiceReferenceNumber', 'referenceNumber'),
+        ksefNumber: pickString(item, 'ksefNumber', 'KsefNumber', 'nrKsef'),
+        statusCode: pickNumber(status, 'code') ?? pickNumber(item, 'statusCode', 'code') ?? 0,
+        errorCode: pickString(status, 'errorCode', 'code') ?? pickString(item, 'errorCode'),
+        errorMessage:
+          pickString(status, 'description', 'message', 'errorMessage') ??
+          pickString(item, 'description', 'message', 'errorMessage'),
+      },
+    ]
+  })
+}
+
+function stripXmlSuffix(fileName: string | undefined): string | undefined {
+  if (!fileName) return undefined
+  return fileName.endsWith('.xml') ? fileName.slice(0, -4) : fileName
+}
+
+function findMatchingInvoiceStatus(
+  row: KsefSubmission,
+  statuses: BatchSessionInvoice[],
+  usedIndexes: Set<number>,
+  rowCount: number,
+): { index: number; status: BatchSessionInvoice } | null {
+  const expectedFileName = `${row.salesInvoiceId}.xml`
+  for (let index = 0; index < statuses.length; index += 1) {
+    if (usedIndexes.has(index)) continue
+    const status = statuses[index]
+    if (
+      status.salesInvoiceId === row.salesInvoiceId ||
+      status.fileName === expectedFileName ||
+      stripXmlSuffix(status.fileName) === row.salesInvoiceId ||
+      (row.invoiceReference && status.invoiceReference === row.invoiceReference)
+    ) {
+      return { index, status }
+    }
+  }
+  if (rowCount === 1 && statuses.length === 1 && !usedIndexes.has(0)) {
+    return { index: 0, status: statuses[0] }
+  }
+  return null
+}
+
+function groupBatchRows(rows: KsefSubmission[]): KsefSubmission[][] {
+  const groups = new Map<string, KsefSubmission[]>()
+  for (const row of rows) {
+    const reference = row.batchReference ?? row.sessionReference
+    if (!reference) continue
+    const key = `${row.environment}:${row.contextNip}:${reference}`
+    const group = groups.get(key) ?? []
+    group.push(row)
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+}
+
+async function recordBatchRowsError(
+  em: EntityManager,
+  rows: KsefSubmission[],
+  scope: { organizationId: string; tenantId: string },
+  errorMessage: string,
+  statusCode?: number,
+): Promise<void> {
+  if (rows.length === 0) return
+  await em.nativeUpdate(
+    KsefSubmission,
+    { id: { $in: rows.map((row) => row.id) }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+    {
+      lastStatusCode: statusCode ?? null,
+      lastErrorMessage: errorMessage,
+      updatedAt: new Date(),
+    },
+  )
+}
+
+async function markBatchRowRejected(
+  em: EntityManager,
+  row: KsefSubmission,
+  scope: { organizationId: string; tenantId: string },
+  statusCode: number,
+  errorCode: string | undefined,
+  errorMessage: string | undefined,
+): Promise<boolean> {
+  const submission = await findOneWithDecryption(
+    em,
+    KsefSubmission,
+    { id: row.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+    undefined,
+    scope,
+  )
+  if (!submission || submission.status !== 'processing') return false
+  submission.status = 'rejected'
+  submission.lastStatusCode = statusCode
+  submission.lastErrorCode = errorCode ?? 'ksef_batch_invoice_rejected'
+  submission.lastErrorMessage = errorMessage ?? '[internal] KSeF batch invoice rejected'
+  submission.updatedAt = new Date()
+  await em.flush()
+  await emitFinancialPlEvent(
+    'financial_pl.ksef_submission.rejected',
+    { submissionId: submission.id, organizationId: scope.organizationId, tenantId: scope.tenantId },
+    { persistent: true },
+  )
+  return true
+}
+
+async function markBatchRowAccepted(
+  em: EntityManager,
+  row: KsefSubmission,
+  scope: { organizationId: string; tenantId: string },
+  ksefNumber: string,
+  upoXml: string,
+  statusCode: number,
+): Promise<boolean> {
+  const submission = await findOneWithDecryption(
+    em,
+    KsefSubmission,
+    { id: row.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null },
+    undefined,
+    scope,
+  )
+  if (!submission || submission.status !== 'processing') return false
+  submission.status = 'accepted'
+  submission.ksefNumber = ksefNumber
+  submission.upoXml = upoXml
+  submission.lastStatusCode = statusCode
+  submission.lastErrorCode = null
+  submission.lastErrorMessage = null
+  submission.acceptedAt = new Date()
+  submission.updatedAt = new Date()
+  await em.flush()
+  await emitFinancialPlEvent(
+    'financial_pl.ksef_submission.accepted',
+    { submissionId: submission.id, organizationId: scope.organizationId, tenantId: scope.tenantId, ksefNumber },
+    { persistent: true },
+  )
+  return true
+}
+
+async function reconcileBatchGroup(args: {
+  em: EntityManager
+  ctx: HandlerContext
+  rows: KsefSubmission[]
+  organizationId: string
+  tenantId: string
+  cutoff: Date
+  maxAttempts: number
+  now: Date
+}): Promise<{ accepted: number; rejected: number }> {
+  const { em, ctx, rows, organizationId, tenantId, cutoff, maxAttempts, now } = args
+  const scope = { organizationId, tenantId }
+  const claimedRows: KsefSubmission[] = []
+  for (const row of rows) {
+    const claimed = await em.nativeUpdate(
+      KsefSubmission,
+      {
+        id: row.id,
+        organizationId,
+        tenantId,
+        deletedAt: null,
+        status: 'processing',
+        mode: 'batch',
+        batchReference: row.batchReference,
+        submittedAt: { $lt: cutoff },
+        attemptCount: { $lt: maxAttempts },
+      },
+      { submittedAt: now, updatedAt: now, attemptCount: (row.attemptCount ?? 0) + 1 },
+    )
+    if (claimed > 0) claimedRows.push(row)
+  }
+  if (claimedRows.length === 0) return { accepted: 0, rejected: 0 }
+
+  const first = claimedRows[0]
+  const referenceNumber = first.batchReference ?? first.sessionReference
+  if (!referenceNumber || !first.contextNip) {
+    await recordBatchRowsError(em, claimedRows, scope, '[internal] KSeF batch row is missing its session reference or context NIP')
+    return { accepted: 0, rejected: 0 }
+  }
+
+  try {
+    const creds = await readKsefCredentials(ctx, scope)
+    const auth = buildKsefAuthConfig(creds, first.contextNip)
+    if (!auth) {
+      await recordBatchRowsError(em, claimedRows, scope, '[internal] KSeF credentials are not configured for batch reconcile')
+      return { accepted: 0, rejected: 0 }
+    }
+    const client = new KsefClient(
+      resolveKsefEnvironment(creds.environment ?? first.environment),
+      resolveOptional<KsefTransport>(ctx, 'ksefTransport'),
+    )
+    const certs = await client.getPublicKeyCertificates()
+    const authResult = await authenticate(client, selectCertificate(certs, 'token'), auth, AUTH_POLL)
+    if (!authResult.ok) {
+      await recordBatchRowsError(em, claimedRows, scope, authResult.errorMessage ?? '[internal] KSeF batch reconcile auth failed')
+      return { accepted: 0, rejected: 0 }
+    }
+
+    const sessionStatus = await client.getSessionStatus({ accessToken: authResult.accessToken, sessionReference: referenceNumber })
+    const sessionEvaluation = evaluateSessionStatus(sessionStatus.code)
+    if (sessionEvaluation.status === 'processing') {
+      await recordBatchRowsError(
+        em,
+        claimedRows,
+        scope,
+        sessionStatus.description ?? '[internal] KSeF batch session is still processing',
+        sessionStatus.code,
+      )
+      return { accepted: 0, rejected: 0 }
+    }
+    if (sessionEvaluation.status === 'rejected') {
+      let rejected = 0
+      for (const row of claimedRows) {
+        if (await markBatchRowRejected(em, row, scope, sessionStatus.code, 'ksef_batch_session_rejected', sessionStatus.description)) {
+          rejected += 1
+        }
+      }
+      return { accepted: 0, rejected }
+    }
+
+    const statuses = parseBatchSessionInvoices(
+      await client.getSessionInvoices({ accessToken: authResult.accessToken, referenceNumber }),
+    )
+    const usedIndexes = new Set<number>()
+    let accepted = 0
+    let rejected = 0
+    for (const row of claimedRows) {
+      const match = findMatchingInvoiceStatus(row, statuses, usedIndexes, claimedRows.length)
+      if (!match) {
+        await recordBatchRowsError(em, [row], scope, '[internal] KSeF batch session did not return a matching invoice status')
+        continue
+      }
+      usedIndexes.add(match.index)
+      const invoiceEvaluation = evaluateInvoiceStatus(match.status.statusCode)
+      if (invoiceEvaluation.status === 'processing') continue
+      if (invoiceEvaluation.status === 'rejected') {
+        if (
+          await markBatchRowRejected(
+            em,
+            row,
+            scope,
+            match.status.statusCode,
+            match.status.errorCode,
+            match.status.errorMessage,
+          )
+        ) {
+          rejected += 1
+        }
+        continue
+      }
+      if (!match.status.ksefNumber) {
+        await recordBatchRowsError(
+          em,
+          [row],
+          scope,
+          '[internal] KSeF batch invoice was accepted without a KSeF number',
+          match.status.statusCode,
+        )
+        continue
+      }
+      try {
+        const upoXml = await client.getInvoiceUpoByKsefNumber({
+          accessToken: authResult.accessToken,
+          sessionReference: referenceNumber,
+          ksefNumber: match.status.ksefNumber,
+        })
+        if (await markBatchRowAccepted(em, row, scope, match.status.ksefNumber, upoXml, match.status.statusCode)) {
+          accepted += 1
+        }
+      } catch (err) {
+        await recordBatchRowsError(
+          em,
+          [row],
+          scope,
+          err instanceof Error ? `[internal] KSeF batch UPO fetch failed: ${err.message}` : '[internal] KSeF batch UPO fetch failed',
+          match.status.statusCode,
+        )
+      }
+    }
+    return { accepted, rejected }
+  } catch (err) {
+    await recordBatchRowsError(
+      em,
+      claimedRows,
+      scope,
+      err instanceof Error ? `[internal] KSeF batch reconcile failed: ${err.message}` : '[internal] KSeF batch reconcile failed',
+    )
+    return { accepted: 0, rejected: 0 }
+  }
 }
 
 export default async function handle(job: ReconcileJob, ctx: HandlerContext): Promise<void> {
@@ -84,8 +454,13 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
     'attemptCount',
     'submittedAt',
     'updatedAt',
+    'mode',
     'sessionReference',
+    'batchReference',
     'invoiceReference',
+    'contextNip',
+    'environment',
+    'salesInvoiceId',
     'offlineSendDeadlineAt',
   ] as const
 
@@ -136,6 +511,8 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
   let requeued = 0
   let repolled = 0
   let offlineSent = 0
+  let batchAccepted = 0
+  let batchRejected = 0
 
   // Deferred offline INITIAL send: CAS-claim the offline-issued row (bump submitted_at/updated_at/
   // attempt_count, KEEP status `offline_issued` so the send subscriber's own offline_issued->processing
@@ -159,7 +536,16 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
     }
   }
 
+  const batchProcessing = orphanedProcessing.filter((candidate) => candidate.mode === 'batch' && Boolean(candidate.batchReference))
+  const batchProcessingIds = new Set(batchProcessing.map((candidate) => candidate.id))
+  for (const group of groupBatchRows(batchProcessing)) {
+    const result = await reconcileBatchGroup({ em, ctx, rows: group, organizationId, tenantId, cutoff, maxAttempts, now })
+    batchAccepted += result.accepted
+    batchRejected += result.rejected
+  }
+
   for (const candidate of [...orphanedProcessing, ...stuckQueued]) {
+    if (batchProcessingIds.has(candidate.id)) continue
     const isProcessing = candidate.status === 'processing'
     const staleGuard: FilterQuery<KsefSubmission> =
       isProcessing ? { submittedAt: { $lt: cutoff } } : { updatedAt: { $lt: cutoff } }
@@ -227,11 +613,11 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
     { fields: ['id'], limit: CANDIDATE_BATCH },
   )
 
-  if (requeued > 0 || repolled > 0 || offlineSent > 0 || gaveUpRows.length > 0) {
+  if (requeued > 0 || repolled > 0 || offlineSent > 0 || batchAccepted > 0 || batchRejected > 0 || gaveUpRows.length > 0) {
     const gaveUpIds = gaveUpRows.map((row) => row.id).join(',')
     // eslint-disable-next-line no-console
     console.warn(
-      `[internal] financial_pl:ksef-reconcile org=${organizationId} requeued=${requeued} repolled=${repolled} offlineSent=${offlineSent} gaveUp=${gaveUpRows.length}${gaveUpIds ? ` ids=${gaveUpIds}` : ''}`,
+      `[internal] financial_pl:ksef-reconcile org=${organizationId} requeued=${requeued} repolled=${repolled} offlineSent=${offlineSent} batchAccepted=${batchAccepted} batchRejected=${batchRejected} gaveUp=${gaveUpRows.length}${gaveUpIds ? ` ids=${gaveUpIds}` : ''}`,
     )
   }
 }
