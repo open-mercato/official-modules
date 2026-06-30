@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { z } from 'zod'
 import { CrudForm, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@open-mercato/ui/primitives/accordion'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
@@ -37,6 +38,8 @@ export type InvoiceFormValue = {
   buyer: BuyerValue
   lines: InvoiceLineInput[]
   meta: InvoiceMeta
+  /** Invoice note (Uwagi) — persisted in core SalesInvoice `metadata.notes`. */
+  notes?: string
   /** The core invoice `metadata` loaded in edit mode — carried so `buyerSnapshot` merges without
    * clobbering other keys. `null`/absent in create mode. */
   metadata?: Record<string, unknown> | null
@@ -55,6 +58,7 @@ export type InvoiceFormProps = {
 }
 
 const DEFAULT_CURRENCY = 'PLN'
+const ADVANCE_INVOICE_KINDS = new Set(['zal', 'roz', 'kor_zal', 'kor_roz'])
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -75,6 +79,7 @@ export function emptyInvoiceFormValue(): InvoiceFormValue {
       1,
     )],
     meta: {},
+    notes: '',
     metadata: null,
   }
 }
@@ -110,13 +115,26 @@ function buildLinesPayload(lines: InvoiceLineInput[], currencyCode: string): Arr
     if (computed.taxAmount) row.taxAmount = computed.taxAmount
     if (computed.totalNetAmount) row.totalNetAmount = computed.totalNetAmount
     if (computed.totalGrossAmount) row.totalGrossAmount = computed.totalGrossAmount
+    const sku = line.sku?.trim()
+    if (sku) row.sku = sku
+    const metadata = line.metadata ? { ...line.metadata } : {}
+    const productId = line.productId?.trim()
+    if (productId) metadata.productId = productId
+    else delete metadata.productId
+    if (Object.keys(metadata).length > 0) row.metadata = metadata
     return row
   })
 }
 
 /** Map the controlled PL-VAT meta value to the invoice-meta PUT body (keyed by salesInvoiceId). */
-function buildMetaPayload(salesInvoiceId: string, meta: InvoiceMeta): Record<string, unknown> {
-  const body: Record<string, unknown> = { salesInvoiceId, ...meta }
+function buildMetaPayload(
+  salesInvoiceId: string,
+  meta: InvoiceMeta,
+  effectiveCurrency: string,
+  invoiceKind: InvoiceMeta['invoiceKind'],
+): Record<string, unknown> {
+  const normalizedInvoiceKind = String(invoiceKind ?? 'vat').trim().toLowerCase()
+  const body: Record<string, unknown> = { salesInvoiceId, ...meta, invoiceKind: normalizedInvoiceKind }
   // Normalise the taxpayer NIP to bare digits before the meta PUT: the schema is ^[0-9]{10}$, so a
   // dashed/spaced value (e.g. 525-234-40-78 — which the client checksum check accepts) would otherwise
   // 422 server-side (code-jury r2, Codex). Empty / non-digit input ⇒ null (no taxpayer NIP).
@@ -125,9 +143,57 @@ function buildMetaPayload(salesInvoiceId: string, meta: InvoiceMeta): Record<str
     body.contextNip = digits ? digits : null
   }
   if (body.consumptionCountryCode === '') body.consumptionCountryCode = null
-  if (body.exchangeRate === '') body.exchangeRate = null
-  if (body.exchangeRateDate === '') body.exchangeRateDate = null
+  if (effectiveCurrency.trim().toUpperCase() === DEFAULT_CURRENCY) {
+    body.exchangeRate = null
+    body.exchangeRateDate = null
+  } else {
+    if (body.exchangeRate === '') body.exchangeRate = null
+    if (body.exchangeRateDate === '') body.exchangeRateDate = null
+  }
+  if (!ADVANCE_INVOICE_KINDS.has(normalizedInvoiceKind)) {
+    body.advancePayments = []
+    body.advanceRefs = []
+    body.orderSnapshot = null
+  }
   return body
+}
+
+function hasNonEmptyString(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasMeaningfulPlVatMeta(meta: InvoiceMeta): boolean {
+  if ((meta.invoiceKind ?? 'vat') !== 'vat') return true
+  if (
+    meta.mppRequired ||
+    meta.issuedOutsideKsef ||
+    meta.selfBilling ||
+    meta.reverseCharge ||
+    meta.ossProcedure
+  ) {
+    return true
+  }
+  if (
+    hasNonEmptyString(meta.contextNip) ||
+    hasNonEmptyString(meta.vatExemptionBasis) ||
+    hasNonEmptyString(meta.consumptionCountryCode) ||
+    hasNonEmptyString(meta.exchangeRate) ||
+    hasNonEmptyString(meta.exchangeRateDate) ||
+    hasNonEmptyString(meta.badDebtReliefPeriod) ||
+    hasNonEmptyString(meta.badDebtTerminPlatnosci) ||
+    Boolean(meta.typDokumentu)
+  ) {
+    return true
+  }
+  if (
+    (meta.advancePayments?.length ?? 0) > 0 ||
+    (meta.advanceRefs?.length ?? 0) > 0 ||
+    (meta.gtuCodes?.length ?? 0) > 0 ||
+    Object.values(meta.procedureMarkings ?? {}).some(Boolean)
+  ) {
+    return true
+  }
+  return meta.orderSnapshot != null
 }
 
 type CreateResponse = { invoiceId?: string; id?: string }
@@ -150,6 +216,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   const t = useT()
   const router = useRouter()
   const isEdit = Boolean(invoiceId)
+  const [initialPlVatAccordionValue] = React.useState<string[]>(() =>
+    hasMeaningfulPlVatMeta(initialValue.meta) ? ['plvat'] : [],
+  )
 
   const [value, setValue] = React.useState<InvoiceFormValue>(initialValue)
   React.useEffect(() => {
@@ -189,7 +258,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   // --- Submit handler shared by create + edit -----------------------------------------------
   // Header values come straight from the CrudForm builtin fields (passed in by `onSubmit`) so the
   // payload reflects the latest edits without depending on async state propagation.
-  const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues) => {
+  const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues & { notes?: string }) => {
     if (readOnly) return
     const effectiveCurrency = header.currencyCode.trim().toUpperCase() || DEFAULT_CURRENCY
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency)
@@ -259,8 +328,12 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const mergedMetadata: Record<string, unknown> = { ...(value.metadata ?? {}) }
     if (buyerSnapshot) mergedMetadata.buyerSnapshot = buyerSnapshot
     else delete mergedMetadata.buyerSnapshot
+    const notes = (header.notes ?? '').trim()
+    if (notes) mergedMetadata.notes = notes
+    else delete mergedMetadata.notes
+    const hadMetadata = value.metadata != null && Object.keys(value.metadata).length > 0
     const metadataPayload: Record<string, unknown> =
-      Object.keys(mergedMetadata).length ? { metadata: mergedMetadata } : {}
+      Object.keys(mergedMetadata).length || hadMetadata ? { metadata: mergedMetadata } : {}
 
     const headerPayload = buildInvoiceHeaderPayload(header)
 
@@ -284,7 +357,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           apiCall(`/api/financial_pl/ksef/invoice-meta`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(buildMetaPayload(invoiceId, value.meta)),
+            body: JSON.stringify(
+              buildMetaPayload(invoiceId, value.meta, effectiveCurrency, value.meta.invoiceKind ?? 'vat'),
+            ),
           }),
         context: buildMutationContext('updateMeta', invoiceId),
         mutationPayload: { salesInvoiceId: invoiceId },
@@ -324,7 +399,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           apiCall(`/api/financial_pl/ksef/invoice-meta`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(buildMetaPayload(newId, value.meta)),
+            body: JSON.stringify(
+              buildMetaPayload(newId, value.meta, effectiveCurrency, value.meta.invoiceKind ?? 'vat'),
+            ),
           }),
         context: buildMutationContext('createMeta', newId),
         mutationPayload: { salesInvoiceId: newId },
@@ -350,7 +427,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       id: 'header',
       title: t('financial_pl.invoices.form.sections.header', 'Invoice details'),
       column: 1,
-      fields: ['invoiceNumber', 'issueDate', 'dueDate', 'currencyCode', 'orderId'],
+      fields: ['invoiceNumber', 'issueDate', 'dueDate', 'currencyCode', 'orderId', 'notes'],
     },
     {
       id: 'buyer',
@@ -383,25 +460,34 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     },
     {
       id: 'plvat',
-      title: t('financial_pl.invoices.form.sections.plVat', 'Polish VAT'),
       column: 1,
+      bare: true,
       component: (ctx) => {
         const liveCurrency =
           (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
           DEFAULT_CURRENCY
         const liveIssueDate = typeof ctx.values.issueDate === 'string' ? ctx.values.issueDate.trim() : ''
         return (
-          <PlVatMetaForm
-            value={value.meta}
-            onChange={setMeta}
-            disabled={readOnly}
-            currencyCode={liveCurrency}
-            taxPointDate={liveIssueDate}
-          />
+          <Accordion type="multiple" defaultValue={initialPlVatAccordionValue}>
+            <AccordionItem value="plvat" variant="card">
+              <AccordionTrigger triggerIcon="chevron">
+                {t('financial_pl.invoices.form.sections.plVatAdvanced', 'VAT, KSeF & JPK details (advanced)')}
+              </AccordionTrigger>
+              <AccordionContent>
+                <PlVatMetaForm
+                  value={value.meta}
+                  onChange={setMeta}
+                  disabled={readOnly}
+                  currencyCode={liveCurrency}
+                  taxPointDate={liveIssueDate}
+                />
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
         )
       },
     },
-  ], [readOnly, setBuyer, setLines, setMeta, t, value.buyer, value.lines, value.meta])
+  ], [initialPlVatAccordionValue, readOnly, setBuyer, setLines, setMeta, t, value.buyer, value.lines, value.meta])
 
   return (
     <div className="flex flex-col gap-4">
@@ -444,6 +530,12 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
             label: t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)'),
             type: 'text',
           },
+          {
+            id: 'notes',
+            label: t('financial_pl.invoices.form.fields.notes', 'Notes (Uwagi)'),
+            type: 'textarea',
+            placeholder: t('financial_pl.invoices.form.fields.notesPlaceholder', 'Optional invoice notes'),
+          },
         ]}
         groups={groups}
         initialValues={{
@@ -452,6 +544,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           dueDate: value.header.dueDate,
           currencyCode: value.header.currencyCode,
           orderId: value.header.orderId,
+          notes: value.notes ?? '',
         }}
         schema={z.object({
           invoiceNumber: z.string().optional(),
@@ -459,6 +552,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           dueDate: z.string().optional(),
           currencyCode: z.string().trim().min(1),
           orderId: z.string().optional(),
+          notes: z.string().optional(),
         })}
         onSubmit={async (values) => {
           // CrudForm owns the header builtin fields; the lines + meta come from our controlled
@@ -469,6 +563,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
             dueDate: String(values.dueDate ?? ''),
             currencyCode: String(values.currencyCode ?? DEFAULT_CURRENCY),
             orderId: String(values.orderId ?? ''),
+            notes: String(values.notes ?? ''),
           })
         }}
       />

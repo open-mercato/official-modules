@@ -31,6 +31,7 @@ type InvoiceQueryEngine = {
       tenantId: string
       organizationIds?: Array<string | null>
       filters?: Record<string, unknown>
+      fields?: string[]
       page?: { page: number; pageSize: number }
       sort?: Array<{ field: string; dir?: 'asc' | 'desc' }>
     },
@@ -70,6 +71,8 @@ type SalesInvoiceLineRow = {
   tax_amount?: string | number | null
   total_gross_amount?: string | number | null
   currency_code?: string | null
+  sku?: string | null
+  metadata?: Record<string, unknown> | null
 }
 
 type InvoiceDetail = {
@@ -103,6 +106,8 @@ type InvoiceLineDetail = {
   currencyCode: string | null
   lineNumber: number | null
   kind: string | null
+  sku: string | null
+  metadata: Record<string, unknown> | null
 }
 
 // Full SalesInvoicePlMeta field set (the PL-VAT layer) projected to camelCase for the editor.
@@ -202,6 +207,21 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
         tenantId: auth.tenantId,
         ...(organizationIds ? { organizationIds } : {}),
         filters: { invoice_id: { $eq: id } },
+        fields: [
+          'line_number',
+          'kind',
+          'name',
+          'quantity',
+          'quantity_unit',
+          'unit_price_net',
+          'tax_rate',
+          'total_net_amount',
+          'tax_amount',
+          'total_gross_amount',
+          'currency_code',
+          'sku',
+          'metadata',
+        ],
         page: { page, pageSize: linePageSize },
         sort: [{ field: 'line_number', dir: 'asc' }],
       })
@@ -274,6 +294,8 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
       currencyCode: row.currency_code ?? null,
       lineNumber: row.line_number ?? null,
       kind: row.kind ?? null,
+      sku: row.sku ?? null,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
     }))
 
     const meta: InvoiceMetaDetail | null = metaRow
@@ -366,6 +388,8 @@ const lineSchema = z.object({
   currencyCode: z.string().nullable(),
   lineNumber: z.number().nullable(),
   kind: z.string().nullable(),
+  sku: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 })
 const submissionSchema = z.object({
   id: z.string(),

@@ -57,6 +57,8 @@ type InvoiceLineDetail = {
   currencyCode: string | null
   lineNumber: number | null
   kind: string | null
+  sku?: string | null
+  metadata?: Record<string, unknown> | null
 }
 
 type InvoiceMetaDetail = {
@@ -364,6 +366,8 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
   const currency = invoice.currencyCode ?? ''
   const buyer = buyerFromMetadata(invoice.metadata)
   const hasBuyer = Boolean(buyer.companyName || buyer.nip || buyer.addressLine1)
+  const invoiceNote = typeof invoice.metadata?.notes === 'string' ? invoice.metadata.notes : null
+  const hasInvoiceNote = Boolean(invoiceNote && invoiceNote.trim().length > 0)
   const submissionStatus = submission?.status ?? null
   const editLocked = submissionStatus != null && EDIT_LOCK_STATUSES.has(submissionStatus)
   const isAccepted = submissionStatus === 'accepted'
@@ -558,6 +562,12 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
               </p>
             )}
           </SectionCard>
+
+          {hasInvoiceNote ? (
+            <SectionCard title={t('financial_pl.invoices.detail.notes', 'Notes (Uwagi)')}>
+              <p className="whitespace-pre-wrap text-sm text-foreground">{invoiceNote}</p>
+            </SectionCard>
+          ) : null}
 
           {/* Correction (KOR) — shown once accepted, gated client-side on sales.credit_memos.manage */}
           {isAccepted && canIssueCorrection ? (

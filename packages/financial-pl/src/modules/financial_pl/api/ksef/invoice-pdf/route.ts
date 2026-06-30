@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createPrivateKey } from 'node:crypto'
+import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
@@ -55,6 +56,32 @@ function credString(value: unknown): string | undefined {
 function detectKodIIAlgorithm(privateKeyPem: string): KsefKodIIAlgorithm {
   const type = createPrivateKey(privateKeyPem).asymmetricKeyType
   return type === 'ec' ? 'EC' : 'RSA'
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function readInvoiceNotes(metadata: unknown): string | undefined {
+  const value = metadataRecord(metadata).notes
+  if (typeof value !== 'string') return undefined
+  const notes = value.trim()
+  return notes.length > 0 ? notes : undefined
+}
+
+async function readSalesInvoiceNotes(
+  queryEngine: ResolveFa3QueryEngine,
+  args: { salesInvoiceId: string; organizationId: string; tenantId: string },
+): Promise<string | undefined> {
+  const queryOptions: Parameters<ResolveFa3QueryEngine['query']>[1] & { fields: string[] } = {
+    tenantId: args.tenantId,
+    organizationIds: [args.organizationId],
+    filters: { id: { $eq: args.salesInvoiceId } },
+    fields: ['metadata'],
+    page: { page: 1, pageSize: 1 },
+  }
+  const result = await queryEngine.query<{ metadata?: unknown }>(E.sales.sales_invoice, queryOptions)
+  return readInvoiceNotes(result.items?.[0]?.metadata)
 }
 
 /**
@@ -145,6 +172,7 @@ export async function GET(req: Request) {
       },
       { salesInvoiceId, organizationId, tenantId },
     )
+    const invoiceNotes = await readSalesInvoiceNotes(queryEngine, { salesInvoiceId, organizationId, tenantId })
 
     // Wrap the validated payload into a Fa3Document (the shape the display model +
     // serializer consume) exactly as buildFa3XmlFromInput does.
@@ -269,6 +297,7 @@ export async function GET(req: Request) {
       ksefNumber,
       ksefStatus,
       notice: translate('financial_pl.pdf.visualizationNotice', VISUALIZATION_NOTICE_DEFAULT),
+      ...(invoiceNotes ? { notes: invoiceNotes } : {}),
       ...(qrIiPng
         ? {
             hasKodII: true,

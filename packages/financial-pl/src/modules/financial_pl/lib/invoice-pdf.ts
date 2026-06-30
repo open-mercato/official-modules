@@ -35,6 +35,7 @@ const L = {
   totalGross: 'Razem brutto',
   toPay: 'Do zapłaty',
   ksefNumber: 'Numer KSeF',
+  notes: 'Uwagi',
   correctionReason: 'Przyczyna korekty',
 } as const
 
@@ -52,12 +53,106 @@ const TABLE_HEADER_HEIGHT = 18
 const SINGLE_PAGE_LINE_LIMIT = 45
 const MULTI_PAGE_BOTTOM_Y = M + 20
 const FINAL_BLOCK_BOTTOM_Y = M + 40 + 90 + 12
+const NOTE_FONT_SIZE = 8
+const NOTE_LINE_HEIGHT = 10
+const NOTE_LABEL_GAP = 13
+const NOTE_AFTER_GAP = 4
 
 function clip(font: PDFFont, text: string, size: number, maxWidth: number): string {
   if (font.widthOfTextAtSize(text, size) <= maxWidth) return text
   let t = text
   while (t.length > 1 && font.widthOfTextAtSize(t + '…', size) > maxWidth) t = t.slice(0, -1)
   return t + '…'
+}
+
+function splitLongWord(font: PDFFont, word: string, size: number, maxWidth: number): string[] {
+  if (font.widthOfTextAtSize(word, size) <= maxWidth) return [word]
+  const chunks: string[] = []
+  let current = ''
+  for (const ch of word) {
+    const next = current + ch
+    if (current && font.widthOfTextAtSize(next, size) > maxWidth) {
+      chunks.push(current)
+      current = ch
+    } else {
+      current = next
+    }
+  }
+  if (current) chunks.push(current)
+  return chunks
+}
+
+function wrapText(font: PDFFont, value: string, size: number, maxWidth: number): string[] {
+  const lines: string[] = []
+  for (const paragraph of value.replace(/\r\n?/g, '\n').split('\n')) {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0) {
+      if (lines.length > 0) lines.push('')
+      continue
+    }
+    let current = ''
+    for (const word of words) {
+      for (const part of splitLongWord(font, word, size, maxWidth)) {
+        const next = current ? `${current} ${part}` : part
+        if (!current || font.widthOfTextAtSize(next, size) <= maxWidth) {
+          current = next
+        } else {
+          lines.push(current)
+          current = part
+        }
+      }
+    }
+    if (current) lines.push(current)
+  }
+  return lines
+}
+
+function noteBlockHeight(lineCount: number): number {
+  return lineCount > 0 ? NOTE_LABEL_GAP + lineCount * NOTE_LINE_HEIGHT + NOTE_AFTER_GAP : 0
+}
+
+function noteLineCapacity(topY: number, bottomY: number): number {
+  return Math.max(0, Math.floor((topY - bottomY - NOTE_LABEL_GAP - NOTE_AFTER_GAP) / NOTE_LINE_HEIGHT))
+}
+
+function partyBottomY(p: InvoicePdfModel['seller'], partyTopY: number): number {
+  let yy = partyTopY
+  yy -= 14
+  yy -= 13
+  if (p.nip) yy -= 12
+  yy -= 12
+  if (p.addressLine2) yy -= 12
+  return yy
+}
+
+function firstTableY(model: InvoicePdfModel): number {
+  const partyTopY = A4.h - M - 56
+  return Math.min(partyBottomY(model.seller, partyTopY), partyBottomY(model.buyer, partyTopY)) - 14
+}
+
+function estimateSinglePageYBeforeNotes(model: InvoicePdfModel): number {
+  let y = firstTableY(model)
+  y -= TABLE_HEADER_HEIGHT
+  y -= model.lines.length * ROW_HEIGHT
+  y -= 4
+  y -= 10
+  y -= 12 * model.vatSummary.length
+  y -= 8
+  y -= 44
+  if (model.correctionReason) y -= 16
+  return y
+}
+
+function estimateContinuationFinalYBeforeNotes(model: InvoicePdfModel, finalLineCount: number): number {
+  let y = A4.h - M - TABLE_HEADER_HEIGHT
+  y -= finalLineCount * ROW_HEIGHT
+  y -= 4
+  y -= 10
+  y -= 12 * model.vatSummary.length
+  y -= 8
+  y -= 44
+  if (model.correctionReason) y -= 16
+  return y
 }
 
 export async function renderInvoicePdf(
@@ -75,8 +170,13 @@ export async function renderInvoicePdf(
   doc.setModificationDate(FIXED_PDF_DATE)
   doc.registerFontkit(fontkit)
   const font = await doc.embedFont(deps.fontBytes, { subset: true })
+  const noteLines = model.notes ? wrapText(font, model.notes, NOTE_FONT_SIZE, TABLE_RIGHT) : []
 
-  if (model.lines.length <= SINGLE_PAGE_LINE_LIMIT) {
+  if (
+    model.lines.length <= SINGLE_PAGE_LINE_LIMIT &&
+    (noteLines.length === 0 ||
+      estimateSinglePageYBeforeNotes(model) - noteBlockHeight(noteLines.length) >= FINAL_BLOCK_BOTTOM_Y)
+  ) {
     const page = doc.addPage([A4.w, A4.h])
 
     let y = A4.h - M
@@ -162,6 +262,16 @@ export async function renderInvoicePdf(
       y -= 16
     }
 
+    if (noteLines.length > 0) {
+      text(L.notes, x0, y, 9, GREY)
+      y -= NOTE_LABEL_GAP
+      for (const line of noteLines) {
+        if (line) text(line, x0, y, NOTE_FONT_SIZE, DARK)
+        y -= NOTE_LINE_HEIGHT
+      }
+      y -= NOTE_AFTER_GAP
+    }
+
     // KSeF block + KOD I QR (bottom-left)
     const qrY = M + 40
     const qrSize = 90
@@ -193,20 +303,8 @@ export async function renderInvoicePdf(
   const qrY = M + 40
   const qrSize = 90
   const colW = (TABLE_RIGHT - 20) / 2
-  const firstTableY = (() => {
-    const partyTopY = A4.h - M - 56
-    const partyBottomY = (p: InvoicePdfModel['seller']) => {
-      let yy = partyTopY
-      yy -= 14
-      yy -= 13
-      if (p.nip) yy -= 12
-      yy -= 12
-      if (p.addressLine2) yy -= 12
-      return yy
-    }
-    return Math.min(partyBottomY(model.seller), partyBottomY(model.buyer)) - 14
-  })()
-  const firstRowsStartY = firstTableY - TABLE_HEADER_HEIGHT
+  const firstTableTopY = firstTableY(model)
+  const firstRowsStartY = firstTableTopY - TABLE_HEADER_HEIGHT
   const continuationRowsStartY = A4.h - M - TABLE_HEADER_HEIGHT
   const firstPageCapacity = Math.max(1, Math.floor((firstRowsStartY - MULTI_PAGE_BOTTOM_Y) / ROW_HEIGHT))
   const continuationCapacity = Math.max(1, Math.floor((continuationRowsStartY - MULTI_PAGE_BOTTOM_Y) / ROW_HEIGHT))
@@ -214,29 +312,46 @@ export async function renderInvoicePdf(
   const finalPageCapacity = Math.max(0, Math.floor((continuationRowsStartY - 14 - finalBlockHeight - FINAL_BLOCK_BOTTOM_Y) / ROW_HEIGHT))
   const finalPageMinimumRows = finalPageCapacity > 0 ? 1 : 0
 
-  let totalPages = 2
+  let linePageCount = 2
   while (
     model.lines.length >
-    firstPageCapacity + Math.max(0, totalPages - 2) * continuationCapacity + finalPageCapacity
+    firstPageCapacity + Math.max(0, linePageCount - 2) * continuationCapacity + finalPageCapacity
   ) {
-    totalPages += 1
+    linePageCount += 1
   }
 
   const lineChunks: InvoicePdfModel['lines'][] = []
   let remainingLineIndex = 0
-  for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < linePageCount; pageIndex += 1) {
     const remainingLines = model.lines.length - remainingLineIndex
-    if (pageIndex === totalPages - 1) {
+    if (pageIndex === linePageCount - 1) {
       lineChunks.push(model.lines.slice(remainingLineIndex))
       break
     }
     const capacity = pageIndex === 0 ? firstPageCapacity : continuationCapacity
-    const pagesAfterThis = totalPages - pageIndex - 1
+    const pagesAfterThis = linePageCount - pageIndex - 1
     const minimumRowsAfterThis = Math.max(0, pagesAfterThis - 1) + finalPageMinimumRows
     const take = Math.max(1, Math.min(capacity, remainingLines - minimumRowsAfterThis))
     lineChunks.push(model.lines.slice(remainingLineIndex, remainingLineIndex + take))
     remainingLineIndex += take
   }
+
+  const finalPageNoteCapacity = noteLines.length
+    ? Math.min(
+        noteLines.length,
+        noteLineCapacity(
+          estimateContinuationFinalYBeforeNotes(model, lineChunks[lineChunks.length - 1]?.length ?? 0),
+          FINAL_BLOCK_BOTTOM_Y,
+        ),
+      )
+    : 0
+  const remainingNoteLinesAfterFinalPage = Math.max(0, noteLines.length - finalPageNoteCapacity)
+  const continuationNoteCapacity = Math.max(1, noteLineCapacity(A4.h - M, MULTI_PAGE_BOTTOM_Y))
+  const noteContinuationPages =
+    remainingNoteLinesAfterFinalPage > 0
+      ? Math.ceil(remainingNoteLinesAfterFinalPage / continuationNoteCapacity)
+      : 0
+  const totalPageCount = linePageCount + noteContinuationPages
 
   const png = deps.qrPng ? await doc.embedPng(deps.qrPng) : undefined
   const pngIi = deps.qrIiPng && model.ksefCert ? await doc.embedPng(deps.qrIiPng) : undefined
@@ -276,10 +391,24 @@ export async function renderInvoicePdf(
   }
   const drawFooter = (pageNumber: number) => {
     text(clip(font, model.notice, 7.5, TABLE_RIGHT), M, M - 4, 7.5, GREY)
-    right(`Strona ${pageNumber} / ${totalPages}`, A4.w - M, M - 4, 7.5, GREY)
+    right(`Strona ${pageNumber} / ${totalPageCount}`, A4.w - M, M - 4, 7.5, GREY)
+  }
+  const drawNotesBlock = (yy: number, startIndex: number, maxLines: number): { y: number; nextIndex: number } => {
+    if (maxLines <= 0 || startIndex >= noteLines.length) return { y: yy, nextIndex: startIndex }
+    text(L.notes, x0, yy, 9, GREY)
+    yy -= NOTE_LABEL_GAP
+    const endIndex = Math.min(noteLines.length, startIndex + maxLines)
+    for (let i = startIndex; i < endIndex; i += 1) {
+      const line = noteLines[i]
+      if (line) text(line, x0, yy, NOTE_FONT_SIZE, DARK)
+      yy -= NOTE_LINE_HEIGHT
+    }
+    yy -= NOTE_AFTER_GAP
+    return { y: yy, nextIndex: endIndex }
   }
 
-  for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
+  let noteIndex = 0
+  for (let pageIndex = 0; pageIndex < linePageCount; pageIndex += 1) {
     if (pageIndex > 0) page = doc.addPage([A4.w, A4.h])
     let y = A4.h - M
     if (pageIndex === 0) {
@@ -307,7 +436,7 @@ export async function renderInvoicePdf(
     y = drawTableHeader(y)
     y = drawLineRows(y, lineChunks[pageIndex] ?? [])
 
-    if (pageIndex === totalPages - 1) {
+    if (pageIndex === linePageCount - 1) {
       y -= 4
       page.drawLine({ start: { x: x0, y: y + 8 }, end: { x: A4.w - M, y: y + 8 }, thickness: 0.5, color: LINE })
       y -= 10
@@ -328,6 +457,13 @@ export async function renderInvoicePdf(
 
       if (model.correctionReason) {
         text(clip(font, `${L.correctionReason}: ${model.correctionReason}`, 8, TABLE_RIGHT), x0, y, 8, GREY)
+        y -= 16
+      }
+
+      if (finalPageNoteCapacity > 0) {
+        const notes = drawNotesBlock(y, noteIndex, finalPageNoteCapacity)
+        y = notes.y
+        noteIndex = notes.nextIndex
       }
 
       if (png) {
@@ -341,6 +477,13 @@ export async function renderInvoicePdf(
       }
     }
 
+    drawFooter(pageIndex + 1)
+  }
+
+  for (let pageIndex = linePageCount; noteIndex < noteLines.length; pageIndex += 1) {
+    page = doc.addPage([A4.w, A4.h])
+    const notes = drawNotesBlock(A4.h - M, noteIndex, continuationNoteCapacity)
+    noteIndex = notes.nextIndex
     drawFooter(pageIndex + 1)
   }
 

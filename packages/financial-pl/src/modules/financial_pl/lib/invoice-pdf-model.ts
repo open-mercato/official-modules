@@ -59,6 +59,8 @@ export type InvoicePdfModel = {
    * PNG (`deps.qrIiPng`) and labels it "CERTYFIKAT" (i18n: financial_pl.labels.qrCertyfikat).
    */
   ksefCert?: { label: string }
+  /** Optional operator-visible invoice remarks, rendered only when non-empty. */
+  notes?: string
   correctionReason?: string
   /** The "this is a visualization" footer notice (translated by the caller). */
   notice: string
@@ -128,10 +130,13 @@ export function buildInvoicePdfModel(
     qrOfflineLabel?: string
     /** i18n `financial_pl.labels.qrCertyfikat` translation for the KOD II label (defaults to "CERTYFIKAT"). */
     qrCertyfikatLabel?: string
+    /** Optional operator note from invoice.metadata.notes. Blank/whitespace-only values are omitted. */
+    notes?: string | null
   },
 ): InvoicePdfModel {
   const { model, lines } = doc
   const isKor = model.invoiceKind === 'KOR' || model.invoiceKind === 'KOR_ZAL' || model.invoiceKind === 'KOR_ROZ'
+  const notes = typeof opts.notes === 'string' ? opts.notes.trim() : ''
 
   const lineViews: InvoiceLineView[] = lines.map((l) => {
     const vat = lineVat(l.netValue, l.vatRate)
@@ -174,6 +179,7 @@ export function buildInvoicePdfModel(
     totalGross: model.totalGross,
     ksef: { number, label: number ?? offlineLabel, status: opts.ksefStatus },
     ...(opts.hasKodII ? { ksefCert: { label: opts.qrCertyfikatLabel ?? 'CERTYFIKAT' } } : {}),
+    ...(notes ? { notes } : {}),
     correctionReason: model.correction?.reason,
     notice: opts.notice,
   }

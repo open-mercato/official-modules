@@ -8,6 +8,7 @@ import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { CheckboxField } from '@open-mercato/ui/primitives/checkbox-field'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@open-mercato/ui/primitives/accordion'
 import {
   Select,
   SelectContent,
@@ -78,6 +79,7 @@ const NONE_VALUE = '__none__'
 
 const labelClass = 'text-sm font-medium text-foreground'
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+const ADVANCE_SECTION_INVOICE_KINDS: readonly InvoiceKindColumn[] = ['zal', 'roz', 'kor_zal', 'kor_roz']
 
 export type PlVatMetaFormProps = {
   value: InvoiceMeta
@@ -93,6 +95,32 @@ type NbpRateLookupResult =
   | { ok: true; currency: string; rate: string; tableDate: string }
   | { ok: false; reason: 'invalid_currency' | 'unavailable' | 'not_found' }
 
+function computePlVatAccordionOpenSections(value: InvoiceMeta, includeFx: boolean): string[] {
+  const open: string[] = []
+
+  if (includeFx && (value.exchangeRate || value.exchangeRateDate)) open.push('fx')
+  if (
+    (value.advancePayments?.length ?? 0) > 0 ||
+    (value.advanceRefs?.length ?? 0) > 0 ||
+    value.orderSnapshot != null ||
+    ADVANCE_SECTION_INVOICE_KINDS.includes(value.invoiceKind ?? 'vat')
+  ) {
+    open.push('advance')
+  }
+  if (
+    (value.gtuCodes?.length ?? 0) > 0 ||
+    Object.values(value.procedureMarkings ?? {}).some(Boolean) ||
+    value.typDokumentu
+  ) {
+    open.push('jpk')
+  }
+  if (value.badDebtReliefPeriod || value.badDebtTerminPlatnosci || value.vatExemptionBasis) {
+    open.push('adjustments')
+  }
+
+  return open
+}
+
 /**
  * Controlled PL-VAT metadata editor rendering the FULL `invoiceMetaPutSchema` field
  * set. Pure controlled component: the parent owns persistence (M8 — no internal
@@ -101,9 +129,17 @@ type NbpRateLookupResult =
 export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPointDate }: PlVatMetaFormProps) {
   const t = useT()
   const busy = Boolean(disabled)
+  const normalizedCurrencyCode = (currencyCode ?? '').trim().toUpperCase()
+  const showFxSection = normalizedCurrencyCode !== 'PLN'
+  const [initiallyOpenSections] = React.useState<string[]>(() =>
+    computePlVatAccordionOpenSections(value, showFxSection),
+  )
+  const [openSections, setOpenSections] = React.useState<string[]>(initiallyOpenSections)
   const [gtuFilter, setGtuFilter] = React.useState('')
   const [procedureFilter, setProcedureFilter] = React.useState('')
   const [nbpLookupState, setNbpLookupState] = React.useState<NbpLookupState>('idle')
+  const accordionDataSectionsRef = React.useRef<readonly string[]>(initiallyOpenSections)
+  const skipNextAccordionSyncRef = React.useRef(false)
   const valueRef = React.useRef(value)
   React.useEffect(() => {
     valueRef.current = value
@@ -111,17 +147,42 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
 
   const patch = React.useCallback(
     (next: Partial<InvoiceMeta>) => {
+      skipNextAccordionSyncRef.current = true
       onChange({ ...valueRef.current, ...next })
     },
     [onChange],
   )
+
+  React.useEffect(() => {
+    const sectionsWithData = computePlVatAccordionOpenSections(value, showFxSection)
+    const previousSectionsWithData = accordionDataSectionsRef.current
+    accordionDataSectionsRef.current = sectionsWithData
+
+    setOpenSections((current) => {
+      let nextOpen = showFxSection ? current : current.filter((section) => section !== 'fx')
+      let changed = nextOpen.length !== current.length
+
+      if (!skipNextAccordionSyncRef.current) {
+        for (const section of sectionsWithData) {
+          if (!previousSectionsWithData.includes(section) && !nextOpen.includes(section)) {
+            if (nextOpen === current) nextOpen = [...current]
+            nextOpen.push(section)
+            changed = true
+          }
+        }
+      }
+
+      return changed ? nextOpen : current
+    })
+
+    if (skipNextAccordionSyncRef.current) skipNextAccordionSyncRef.current = false
+  }, [showFxSection, value])
 
   const invoiceKind = value.invoiceKind ?? 'vat'
   const gtuCodes = value.gtuCodes ?? []
   const procedureMarkings = value.procedureMarkings ?? {}
   const advancePayments = value.advancePayments ?? []
   const advanceRefs = value.advanceRefs ?? []
-  const normalizedCurrencyCode = (currencyCode ?? '').trim().toUpperCase()
   const normalizedTaxPointDate = (taxPointDate ?? '').trim()
   const hasNbpCurrency = /^[A-Z]{3}$/.test(normalizedCurrencyCode)
   const hasNbpDate = DATE_ONLY_RE.test(normalizedTaxPointDate)
@@ -337,419 +398,471 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <label className={labelClass} htmlFor="financial_pl-exchange-rate">
-            {t('financial_pl.fields.exchangeRate', 'Exchange rate (to PLN)')}
-          </label>
-          <div className="flex flex-col gap-1 sm:flex-row">
-            <Input
-              id="financial_pl-exchange-rate"
-              inputMode="decimal"
-              value={value.exchangeRate ?? ''}
-              disabled={busy}
-              onChange={(event) => {
-                patch({ exchangeRate: event.target.value.length ? event.target.value : null })
-                if (nbpLookupState !== 'idle') setNbpLookupState('idle')
-              }}
-              placeholder="4.3210"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0 whitespace-nowrap"
-              disabled={busy || nbpLookupBusy || !nbpInputsReady}
-              title={nbpButtonTitle}
-              onClick={() => void fetchNbpRate()}
-            >
-              {nbpLookupBusy ? (
-                <Loader2 className="mr-1 size-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1 size-4" />
-              )}
-              {t('financial_pl.fields.fetchNbpRate', 'Fetch NBP rate')}
-            </Button>
-          </div>
-          {nbpLookupState === 'unavailable' ? (
-            <span className="text-xs text-muted-foreground">
-              {t('financial_pl.fields.nbpUnavailable', 'NBP rate unavailable — enter manually')}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className={labelClass} htmlFor="financial_pl-exchange-rate-date">
-            {t('financial_pl.fields.exchangeRateDate', 'Exchange rate date')}
-          </label>
-          <Input
-            id="financial_pl-exchange-rate-date"
-            type="date"
-            value={value.exchangeRateDate ?? ''}
-            disabled={busy}
-            onChange={(event) => patch({ exchangeRateDate: event.target.value.length ? event.target.value : null })}
-          />
-        </div>
-      </div>
-
-      <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium text-foreground">
-          {t('financial_pl.fields.advancePaymentsGroup', 'Advance payments (ZAL)')}
-        </legend>
-        {advancePayments.map((row, index) => (
-          <div key={index} className="flex items-end gap-2">
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-date-${index}`}>
-                {t('financial_pl.fields.advanceReceivedDate', 'Received date')}
-              </label>
-              <Input
-                id={`financial_pl-advance-date-${index}`}
-                type="date"
-                value={row.receivedDate}
-                disabled={busy}
-                onChange={(event) => updateAdvancePayment(index, { receivedDate: event.target.value })}
-              />
-            </div>
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-amount-${index}`}>
-                {t('financial_pl.fields.advanceAmount', 'Amount')}
-              </label>
-              <Input
-                id={`financial_pl-advance-amount-${index}`}
-                inputMode="decimal"
-                value={row.amount}
-                disabled={busy}
-                onChange={(event) => updateAdvancePayment(index, { amount: event.target.value })}
-              />
-            </div>
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-fx-${index}`}>
-                {t('financial_pl.fields.advanceFxRate', 'FX rate')}
-              </label>
-              <Input
-                id={`financial_pl-advance-fx-${index}`}
-                inputMode="decimal"
-                value={row.fxRate ?? ''}
-                disabled={busy}
-                onChange={(event) => updateAdvancePayment(index, { fxRate: event.target.value.length ? event.target.value : undefined })}
-              />
-            </div>
-            <IconButton
-              type="button"
-              variant="ghost"
-              disabled={busy}
-              aria-label={t('financial_pl.actions.removeAdvancePayment', 'Remove advance payment')}
-              title={t('financial_pl.actions.removeAdvancePayment', 'Remove advance payment')}
-              onClick={() => removeAdvancePayment(index)}
-            >
-              <Trash2 className="size-4" />
-            </IconButton>
-          </div>
-        ))}
-        <div className="flex">
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addAdvancePayment}>
-            <Plus className="mr-1 size-4" />
-            {t('financial_pl.actions.addAdvancePayment', 'Add advance payment')}
-          </Button>
-        </div>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium text-foreground">
-          {t('financial_pl.fields.advanceRefsGroup', 'Advance invoice references (ROZ)')}
-        </legend>
-        {advanceRefs.map((row, index) => (
-          <div key={index} className="flex items-end gap-2">
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ksef-${index}`}>
-                {t('financial_pl.fields.advanceRefKsefNumber', 'KSeF number')}
-              </label>
-              <Input
-                id={`financial_pl-advance-ksef-${index}`}
-                value={row.ksefNumber ?? ''}
-                disabled={busy}
-                onChange={(event) => updateAdvanceRef(index, { ksefNumber: event.target.value.length ? event.target.value : undefined })}
-              />
-            </div>
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-invoice-${index}`}>
-                {t('financial_pl.fields.advanceRefInvoiceNumber', 'Invoice number')}
-              </label>
-              <Input
-                id={`financial_pl-advance-invoice-${index}`}
-                value={row.invoiceNumber ?? ''}
-                disabled={busy}
-                onChange={(event) => updateAdvanceRef(index, { invoiceNumber: event.target.value.length ? event.target.value : undefined })}
-              />
-            </div>
-            <div className="flex flex-1 flex-col gap-1.5">
-              <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ref-amount-${index}`}>
-                {t('financial_pl.fields.advanceRefAmount', 'Amount')}
-              </label>
-              <Input
-                id={`financial_pl-advance-ref-amount-${index}`}
-                inputMode="decimal"
-                value={row.amount ?? ''}
-                disabled={busy}
-                onChange={(event) => updateAdvanceRef(index, { amount: event.target.value.length ? event.target.value : undefined })}
-              />
-            </div>
-            <IconButton
-              type="button"
-              variant="ghost"
-              disabled={busy}
-              aria-label={t('financial_pl.actions.removeAdvanceRef', 'Remove advance reference')}
-              title={t('financial_pl.actions.removeAdvanceRef', 'Remove advance reference')}
-              onClick={() => removeAdvanceRef(index)}
-            >
-              <Trash2 className="size-4" />
-            </IconButton>
-          </div>
-        ))}
-        <div className="flex">
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addAdvanceRef}>
-            <Plus className="mr-1 size-4" />
-            {t('financial_pl.actions.addAdvanceRef', 'Add advance reference')}
-          </Button>
-        </div>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium text-foreground">
-          {t('financial_pl.fields.orderSnapshotGroup', 'Order snapshot (ZAL / KOR_ZAL)')}
-        </legend>
-        <SwitchField
-          label={t('financial_pl.fields.orderSnapshotEnabled', 'Attach an order snapshot (FA(3) Zamówienie)')}
-          checked={orderSnapshot != null}
-          disabled={busy}
-          onCheckedChange={(next) => enableOrderSnapshot(Boolean(next))}
-        />
-        {orderSnapshot != null ? (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <label className={labelClass} htmlFor="financial_pl-order-total">
-                {t('financial_pl.fields.orderTotalValue', 'Order total value')}
-              </label>
-              <Input
-                id="financial_pl-order-total"
-                inputMode="decimal"
-                value={orderSnapshot.totalValue}
-                disabled={busy}
-                onChange={(event) => patchOrderSnapshot({ totalValue: event.target.value })}
-                placeholder="1230.00"
-              />
-            </div>
-            {orderLines.map((row, index) => (
-              <div
-                key={index}
-                className="flex flex-col gap-2 rounded-md border border-border p-2 sm:flex-row sm:items-end"
-              >
-                <div className="flex flex-[2] flex-col gap-1.5">
-                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-name-${index}`}>
-                    {t('financial_pl.fields.orderLineName', 'Name')}
+      <Accordion
+        type="multiple"
+        defaultValue={initiallyOpenSections}
+        value={openSections}
+        onValueChange={(next) => setOpenSections(next)}
+        className="flex flex-col gap-3"
+      >
+        {showFxSection ? (
+          <AccordionItem value="fx" variant="card">
+            <AccordionTrigger triggerIcon="chevron">
+              {t('financial_pl.invoices.plvat.section.fx', 'Foreign currency (FX)')}
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label className={labelClass} htmlFor="financial_pl-exchange-rate">
+                    {t('financial_pl.fields.exchangeRate', 'Exchange rate (to PLN)')}
+                  </label>
+                  <div className="flex flex-col gap-1 sm:flex-row">
+                    <Input
+                      id="financial_pl-exchange-rate"
+                      inputMode="decimal"
+                      value={value.exchangeRate ?? ''}
+                      disabled={busy}
+                      onChange={(event) => {
+                        patch({ exchangeRate: event.target.value.length ? event.target.value : null })
+                        if (nbpLookupState !== 'idle') setNbpLookupState('idle')
+                      }}
+                      placeholder="4.3210"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 whitespace-nowrap"
+                      disabled={busy || nbpLookupBusy || !nbpInputsReady}
+                      title={nbpButtonTitle}
+                      onClick={() => void fetchNbpRate()}
+                    >
+                      {nbpLookupBusy ? (
+                        <Loader2 className="mr-1 size-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="mr-1 size-4" />
+                      )}
+                      {t('financial_pl.fields.fetchNbpRate', 'Fetch NBP rate')}
+                    </Button>
+                  </div>
+                  {nbpLookupState === 'unavailable' ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t('financial_pl.fields.nbpUnavailable', 'NBP rate unavailable — enter manually')}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className={labelClass} htmlFor="financial_pl-exchange-rate-date">
+                    {t('financial_pl.fields.exchangeRateDate', 'Exchange rate date')}
                   </label>
                   <Input
-                    id={`financial_pl-order-line-name-${index}`}
-                    value={row.name}
+                    id="financial_pl-exchange-rate-date"
+                    type="date"
+                    value={value.exchangeRateDate ?? ''}
                     disabled={busy}
-                    onChange={(event) => updateOrderLine(index, { name: event.target.value })}
+                    onChange={(event) => patch({ exchangeRateDate: event.target.value.length ? event.target.value : null })}
                   />
                 </div>
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-qty-${index}`}>
-                    {t('financial_pl.fields.orderLineQuantity', 'Quantity')}
-                  </label>
-                  <Input
-                    id={`financial_pl-order-line-qty-${index}`}
-                    inputMode="decimal"
-                    value={row.quantity ?? ''}
-                    disabled={busy}
-                    onChange={(event) =>
-                      updateOrderLine(index, { quantity: event.target.value.length ? event.target.value : undefined })
-                    }
-                  />
-                </div>
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-price-${index}`}>
-                    {t('financial_pl.fields.orderLineUnitPrice', 'Unit price')}
-                  </label>
-                  <Input
-                    id={`financial_pl-order-line-price-${index}`}
-                    inputMode="decimal"
-                    value={row.unitPrice ?? ''}
-                    disabled={busy}
-                    onChange={(event) =>
-                      updateOrderLine(index, { unitPrice: event.target.value.length ? event.target.value : undefined })
-                    }
-                  />
-                </div>
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-net-${index}`}>
-                    {t('financial_pl.fields.orderLineNetValue', 'Net value')}
-                  </label>
-                  <Input
-                    id={`financial_pl-order-line-net-${index}`}
-                    inputMode="decimal"
-                    value={row.netValue ?? ''}
-                    disabled={busy}
-                    onChange={(event) =>
-                      updateOrderLine(index, { netValue: event.target.value.length ? event.target.value : undefined })
-                    }
-                  />
-                </div>
-                <div className="flex flex-1 flex-col gap-1.5">
-                  <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-vat-${index}`}>
-                    {t('financial_pl.fields.orderLineVatRate', 'VAT rate')}
-                  </label>
-                  <Input
-                    id={`financial_pl-order-line-vat-${index}`}
-                    inputMode="decimal"
-                    value={row.vatRate ?? ''}
-                    disabled={busy}
-                    onChange={(event) =>
-                      updateOrderLine(index, { vatRate: event.target.value.length ? event.target.value : undefined })
-                    }
-                  />
-                </div>
-                <IconButton
-                  type="button"
-                  variant="ghost"
-                  disabled={busy}
-                  aria-label={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
-                  title={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
-                  onClick={() => removeOrderLine(index)}
-                >
-                  <Trash2 className="size-4" />
-                </IconButton>
               </div>
-            ))}
-            <div className="flex">
-              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addOrderLine}>
-                <Plus className="mr-1 size-4" />
-                {t('financial_pl.actions.addOrderLine', 'Add order line')}
-              </Button>
-            </div>
-          </>
+            </AccordionContent>
+          </AccordionItem>
         ) : null}
-      </fieldset>
 
-      <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium text-foreground">
-          {t('financial_pl.fields.gtuGroup', 'GTU markings (JPK)')}
-        </legend>
-        <Input
-          value={gtuFilter}
-          disabled={busy}
-          onChange={(event) => setGtuFilter(event.target.value)}
-          placeholder={t('financial_pl.fields.gtuFilter', 'Filter GTU codes…')}
-          aria-label={t('financial_pl.fields.gtuFilter', 'Filter GTU codes')}
-        />
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {GTU_CODES.filter((code) => {
-            const q = gtuFilter.trim().toLowerCase()
-            if (!q || gtuCodes.includes(code)) return true
-            return code.toLowerCase().includes(q) || t(`financial_pl.fields.gtu.${code}`, code).toLowerCase().includes(q)
-          }).map((code) => (
-            <CheckboxField
-              key={code}
-              label={t(`financial_pl.fields.gtu.${code}`, code)}
-              checked={gtuCodes.includes(code)}
-              disabled={busy}
-              onCheckedChange={(next) => toggleGtu(code, Boolean(next))}
-            />
-          ))}
-        </div>
-      </fieldset>
+        <AccordionItem value="advance" variant="card">
+          <AccordionTrigger triggerIcon="chevron">
+            {t('financial_pl.invoices.plvat.section.advance', 'Advance & settlement (ZAL/ROZ)')}
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-col gap-4">
+              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.advancePaymentsGroup', 'Advance payments (ZAL)')}
+                </legend>
+                {advancePayments.map((row, index) => (
+                  <div key={index} className="flex items-end gap-2">
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-date-${index}`}>
+                        {t('financial_pl.fields.advanceReceivedDate', 'Received date')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-date-${index}`}
+                        type="date"
+                        value={row.receivedDate}
+                        disabled={busy}
+                        onChange={(event) => updateAdvancePayment(index, { receivedDate: event.target.value })}
+                      />
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-amount-${index}`}>
+                        {t('financial_pl.fields.advanceAmount', 'Amount')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-amount-${index}`}
+                        inputMode="decimal"
+                        value={row.amount}
+                        disabled={busy}
+                        onChange={(event) => updateAdvancePayment(index, { amount: event.target.value })}
+                      />
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-fx-${index}`}>
+                        {t('financial_pl.fields.advanceFxRate', 'FX rate')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-fx-${index}`}
+                        inputMode="decimal"
+                        value={row.fxRate ?? ''}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateAdvancePayment(index, { fxRate: event.target.value.length ? event.target.value : undefined })
+                        }
+                      />
+                    </div>
+                    <IconButton
+                      type="button"
+                      variant="ghost"
+                      disabled={busy}
+                      aria-label={t('financial_pl.actions.removeAdvancePayment', 'Remove advance payment')}
+                      title={t('financial_pl.actions.removeAdvancePayment', 'Remove advance payment')}
+                      onClick={() => removeAdvancePayment(index)}
+                    >
+                      <Trash2 className="size-4" />
+                    </IconButton>
+                  </div>
+                ))}
+                <div className="flex">
+                  <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addAdvancePayment}>
+                    <Plus className="mr-1 size-4" />
+                    {t('financial_pl.actions.addAdvancePayment', 'Add advance payment')}
+                  </Button>
+                </div>
+              </fieldset>
 
-      <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium text-foreground">
-          {t('financial_pl.fields.procedureGroup', 'JPK procedure markings')}
-        </legend>
-        <Input
-          value={procedureFilter}
-          disabled={busy}
-          onChange={(event) => setProcedureFilter(event.target.value)}
-          placeholder={t('financial_pl.fields.procedureFilter', 'Filter procedure markings…')}
-          aria-label={t('financial_pl.fields.procedureFilter', 'Filter procedure markings')}
-        />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {JPK_PROCEDURE_MARKINGS.filter((code) => {
-            const q = procedureFilter.trim().toLowerCase()
-            if (!q || procedureMarkings[code]) return true
-            return code.toLowerCase().includes(q) || t(`financial_pl.fields.procedure.${code}`, code).toLowerCase().includes(q)
-          }).map((code) => (
-            <CheckboxField
-              key={code}
-              label={t(`financial_pl.fields.procedure.${code}`, code)}
-              checked={Boolean(procedureMarkings[code])}
-              disabled={busy}
-              onCheckedChange={(next) => toggleProcedure(code, Boolean(next))}
-            />
-          ))}
-        </div>
-      </fieldset>
+              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.advanceRefsGroup', 'Advance invoice references (ROZ)')}
+                </legend>
+                {advanceRefs.map((row, index) => (
+                  <div key={index} className="flex items-end gap-2">
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ksef-${index}`}>
+                        {t('financial_pl.fields.advanceRefKsefNumber', 'KSeF number')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-ksef-${index}`}
+                        value={row.ksefNumber ?? ''}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateAdvanceRef(index, { ksefNumber: event.target.value.length ? event.target.value : undefined })
+                        }
+                      />
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-invoice-${index}`}>
+                        {t('financial_pl.fields.advanceRefInvoiceNumber', 'Invoice number')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-invoice-${index}`}
+                        value={row.invoiceNumber ?? ''}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateAdvanceRef(index, { invoiceNumber: event.target.value.length ? event.target.value : undefined })
+                        }
+                      />
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ref-amount-${index}`}>
+                        {t('financial_pl.fields.advanceRefAmount', 'Amount')}
+                      </label>
+                      <Input
+                        id={`financial_pl-advance-ref-amount-${index}`}
+                        inputMode="decimal"
+                        value={row.amount ?? ''}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateAdvanceRef(index, { amount: event.target.value.length ? event.target.value : undefined })
+                        }
+                      />
+                    </div>
+                    <IconButton
+                      type="button"
+                      variant="ghost"
+                      disabled={busy}
+                      aria-label={t('financial_pl.actions.removeAdvanceRef', 'Remove advance reference')}
+                      title={t('financial_pl.actions.removeAdvanceRef', 'Remove advance reference')}
+                      onClick={() => removeAdvanceRef(index)}
+                    >
+                      <Trash2 className="size-4" />
+                    </IconButton>
+                  </div>
+                ))}
+                <div className="flex">
+                  <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addAdvanceRef}>
+                    <Plus className="mr-1 size-4" />
+                    {t('financial_pl.actions.addAdvanceRef', 'Add advance reference')}
+                  </Button>
+                </div>
+              </fieldset>
 
-      <div className="flex flex-col gap-1.5">
-        <label className={labelClass} htmlFor="financial_pl-typ-dokumentu">
-          {t('financial_pl.fields.typDokumentu', 'Document type (JPK)')}
-        </label>
-        <Select
-          value={value.typDokumentu || NONE_VALUE}
-          onValueChange={(next) => patch({ typDokumentu: next === NONE_VALUE ? null : (next as JpkTypDokumentu) })}
-          disabled={busy}
-        >
-          <SelectTrigger id="financial_pl-typ-dokumentu" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE_VALUE}>—</SelectItem>
-            {JPK_TYP_DOKUMENTU.map((code) => (
-              <SelectItem key={code} value={code}>
-                {code}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.orderSnapshotGroup', 'Order snapshot (ZAL / KOR_ZAL)')}
+                </legend>
+                <SwitchField
+                  label={t('financial_pl.fields.orderSnapshotEnabled', 'Attach an order snapshot (FA(3) Zamówienie)')}
+                  checked={orderSnapshot != null}
+                  disabled={busy}
+                  onCheckedChange={(next) => enableOrderSnapshot(Boolean(next))}
+                />
+                {orderSnapshot != null ? (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label className={labelClass} htmlFor="financial_pl-order-total">
+                        {t('financial_pl.fields.orderTotalValue', 'Order total value')}
+                      </label>
+                      <Input
+                        id="financial_pl-order-total"
+                        inputMode="decimal"
+                        value={orderSnapshot.totalValue}
+                        disabled={busy}
+                        onChange={(event) => patchOrderSnapshot({ totalValue: event.target.value })}
+                        placeholder="1230.00"
+                      />
+                    </div>
+                    {orderLines.map((row, index) => (
+                      <div
+                        key={index}
+                        className="flex flex-col gap-2 rounded-md border border-border p-2 sm:flex-row sm:items-end"
+                      >
+                        <div className="flex flex-[2] flex-col gap-1.5">
+                          <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-name-${index}`}>
+                            {t('financial_pl.fields.orderLineName', 'Name')}
+                          </label>
+                          <Input
+                            id={`financial_pl-order-line-name-${index}`}
+                            value={row.name}
+                            disabled={busy}
+                            onChange={(event) => updateOrderLine(index, { name: event.target.value })}
+                          />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-1.5">
+                          <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-qty-${index}`}>
+                            {t('financial_pl.fields.orderLineQuantity', 'Quantity')}
+                          </label>
+                          <Input
+                            id={`financial_pl-order-line-qty-${index}`}
+                            inputMode="decimal"
+                            value={row.quantity ?? ''}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateOrderLine(index, { quantity: event.target.value.length ? event.target.value : undefined })
+                            }
+                          />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-1.5">
+                          <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-price-${index}`}>
+                            {t('financial_pl.fields.orderLineUnitPrice', 'Unit price')}
+                          </label>
+                          <Input
+                            id={`financial_pl-order-line-price-${index}`}
+                            inputMode="decimal"
+                            value={row.unitPrice ?? ''}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateOrderLine(index, { unitPrice: event.target.value.length ? event.target.value : undefined })
+                            }
+                          />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-1.5">
+                          <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-net-${index}`}>
+                            {t('financial_pl.fields.orderLineNetValue', 'Net value')}
+                          </label>
+                          <Input
+                            id={`financial_pl-order-line-net-${index}`}
+                            inputMode="decimal"
+                            value={row.netValue ?? ''}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateOrderLine(index, { netValue: event.target.value.length ? event.target.value : undefined })
+                            }
+                          />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-1.5">
+                          <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-vat-${index}`}>
+                            {t('financial_pl.fields.orderLineVatRate', 'VAT rate')}
+                          </label>
+                          <Input
+                            id={`financial_pl-order-line-vat-${index}`}
+                            inputMode="decimal"
+                            value={row.vatRate ?? ''}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateOrderLine(index, { vatRate: event.target.value.length ? event.target.value : undefined })
+                            }
+                          />
+                        </div>
+                        <IconButton
+                          type="button"
+                          variant="ghost"
+                          disabled={busy}
+                          aria-label={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
+                          title={t('financial_pl.actions.removeOrderLine', 'Remove order line')}
+                          onClick={() => removeOrderLine(index)}
+                        >
+                          <Trash2 className="size-4" />
+                        </IconButton>
+                      </div>
+                    ))}
+                    <div className="flex">
+                      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addOrderLine}>
+                        <Plus className="mr-1 size-4" />
+                        {t('financial_pl.actions.addOrderLine', 'Add order line')}
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+              </fieldset>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <label className={labelClass} htmlFor="financial_pl-bad-debt-period">
-            {t('financial_pl.fields.badDebtReliefPeriod', 'Bad-debt relief period (YYYY-MM)')}
-          </label>
-          <Input
-            id="financial_pl-bad-debt-period"
-            value={value.badDebtReliefPeriod ?? ''}
-            disabled={busy}
-            onChange={(event) => patch({ badDebtReliefPeriod: event.target.value.length ? event.target.value : null })}
-            placeholder="2026-02"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className={labelClass} htmlFor="financial_pl-bad-debt-due">
-            {t('financial_pl.fields.badDebtTerminPlatnosci', 'Bad-debt payment due date')}
-          </label>
-          <Input
-            id="financial_pl-bad-debt-due"
-            type="date"
-            value={value.badDebtTerminPlatnosci ?? ''}
-            disabled={busy}
-            onChange={(event) => patch({ badDebtTerminPlatnosci: event.target.value.length ? event.target.value : null })}
-          />
-        </div>
-      </div>
+        <AccordionItem value="jpk" variant="card">
+          <AccordionTrigger triggerIcon="chevron">
+            {t('financial_pl.invoices.plvat.section.jpk', 'JPK markings')}
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-col gap-4">
+              <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.gtuGroup', 'GTU markings (JPK)')}
+                </legend>
+                <Input
+                  value={gtuFilter}
+                  disabled={busy}
+                  onChange={(event) => setGtuFilter(event.target.value)}
+                  placeholder={t('financial_pl.fields.gtuFilter', 'Filter GTU codes…')}
+                  aria-label={t('financial_pl.fields.gtuFilter', 'Filter GTU codes')}
+                />
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {GTU_CODES.filter((code) => {
+                    const q = gtuFilter.trim().toLowerCase()
+                    if (!q || gtuCodes.includes(code)) return true
+                    return code.toLowerCase().includes(q) || t(`financial_pl.fields.gtu.${code}`, code).toLowerCase().includes(q)
+                  }).map((code) => (
+                    <CheckboxField
+                      key={code}
+                      label={t(`financial_pl.fields.gtu.${code}`, code)}
+                      checked={gtuCodes.includes(code)}
+                      disabled={busy}
+                      onCheckedChange={(next) => toggleGtu(code, Boolean(next))}
+                    />
+                  ))}
+                </div>
+              </fieldset>
 
-      <div className="flex flex-col gap-1.5">
-        <label className={labelClass} htmlFor="financial_pl-vat-exemption">
-          {t('financial_pl.fields.vatExemptionBasis', 'VAT exemption legal basis')}
-        </label>
-        <Textarea
-          id="financial_pl-vat-exemption"
-          value={value.vatExemptionBasis ?? ''}
-          disabled={busy}
-          onChange={(event) => patch({ vatExemptionBasis: event.target.value.length ? event.target.value : null })}
-          rows={2}
-        />
-      </div>
+              <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.procedureGroup', 'JPK procedure markings')}
+                </legend>
+                <Input
+                  value={procedureFilter}
+                  disabled={busy}
+                  onChange={(event) => setProcedureFilter(event.target.value)}
+                  placeholder={t('financial_pl.fields.procedureFilter', 'Filter procedure markings…')}
+                  aria-label={t('financial_pl.fields.procedureFilter', 'Filter procedure markings')}
+                />
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {JPK_PROCEDURE_MARKINGS.filter((code) => {
+                    const q = procedureFilter.trim().toLowerCase()
+                    if (!q || procedureMarkings[code]) return true
+                    return code.toLowerCase().includes(q) || t(`financial_pl.fields.procedure.${code}`, code).toLowerCase().includes(q)
+                  }).map((code) => (
+                    <CheckboxField
+                      key={code}
+                      label={t(`financial_pl.fields.procedure.${code}`, code)}
+                      checked={Boolean(procedureMarkings[code])}
+                      disabled={busy}
+                      onCheckedChange={(next) => toggleProcedure(code, Boolean(next))}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClass} htmlFor="financial_pl-typ-dokumentu">
+                  {t('financial_pl.fields.typDokumentu', 'Document type (JPK)')}
+                </label>
+                <Select
+                  value={value.typDokumentu || NONE_VALUE}
+                  onValueChange={(next) => patch({ typDokumentu: next === NONE_VALUE ? null : (next as JpkTypDokumentu) })}
+                  disabled={busy}
+                >
+                  <SelectTrigger id="financial_pl-typ-dokumentu" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>—</SelectItem>
+                    {JPK_TYP_DOKUMENTU.map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {code}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem value="adjustments" variant="card">
+          <AccordionTrigger triggerIcon="chevron">
+            {t('financial_pl.invoices.plvat.section.adjustments', 'Adjustments & exemption')}
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label className={labelClass} htmlFor="financial_pl-bad-debt-period">
+                    {t('financial_pl.fields.badDebtReliefPeriod', 'Bad-debt relief period (YYYY-MM)')}
+                  </label>
+                  <Input
+                    id="financial_pl-bad-debt-period"
+                    value={value.badDebtReliefPeriod ?? ''}
+                    disabled={busy}
+                    onChange={(event) => patch({ badDebtReliefPeriod: event.target.value.length ? event.target.value : null })}
+                    placeholder="2026-02"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className={labelClass} htmlFor="financial_pl-bad-debt-due">
+                    {t('financial_pl.fields.badDebtTerminPlatnosci', 'Bad-debt payment due date')}
+                  </label>
+                  <Input
+                    id="financial_pl-bad-debt-due"
+                    type="date"
+                    value={value.badDebtTerminPlatnosci ?? ''}
+                    disabled={busy}
+                    onChange={(event) => patch({ badDebtTerminPlatnosci: event.target.value.length ? event.target.value : null })}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClass} htmlFor="financial_pl-vat-exemption">
+                  {t('financial_pl.fields.vatExemptionBasis', 'VAT exemption legal basis')}
+                </label>
+                <Textarea
+                  id="financial_pl-vat-exemption"
+                  value={value.vatExemptionBasis ?? ''}
+                  disabled={busy}
+                  onChange={(event) => patch({ vatExemptionBasis: event.target.value.length ? event.target.value : null })}
+                  rows={2}
+                />
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   )
 }

@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
+import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs/ComboboxInput'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 // Standard Polish VAT rates offered as quick-picks; any other numeric rate goes through "Other".
@@ -35,12 +37,37 @@ export type InvoiceLineInput = {
   quantityUnit?: string
   unitPriceNet: string
   taxRate?: string
+  metadata?: Record<string, unknown> | null
+  productId?: string
+  sku?: string
   totalNetAmount?: string
   taxAmount?: string
   totalGrossAmount?: string
   currencyCode: string
   lineNumber?: number
   kind?: 'product' | 'service' | 'shipping' | 'discount' | 'adjustment'
+}
+
+type CatalogProductPricing = {
+  unit_price_net?: string | number | null
+  unit_price_gross?: string | number | null
+  currency_code?: string | null
+  tax_rate?: string | number | null
+}
+
+type CatalogProduct = {
+  id: string
+  title: string
+  sku?: string | null
+  default_unit?: string | null
+  default_sales_unit?: string | null
+  tax_rate?: string | number | null
+  primary_currency_code?: string | null
+  pricing?: CatalogProductPricing | null
+}
+
+type CatalogProductsResponse = {
+  items?: CatalogProduct[]
 }
 
 /** Round a number to 2 decimals and render as a fixed-point string, or '' for non-finite. */
@@ -99,6 +126,7 @@ const labelClass = 'text-xs text-muted-foreground'
 export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: InvoiceLinesFieldProps) {
   const t = useT()
   const busy = Boolean(disabled)
+  const productByIdRef = React.useRef<Map<string, CatalogProduct>>(new Map())
 
   const emit = React.useCallback(
     (lines: InvoiceLineInput[]) => {
@@ -109,6 +137,73 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
 
   const updateLine = (index: number, next: Partial<InvoiceLineInput>) => {
     emit(value.map((line, i) => (i === index ? { ...line, ...next } : line)))
+  }
+
+  const loadProductSuggestions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
+    const q = (query ?? '').trim()
+    if (q.length < 2) return []
+    try {
+      const res = await apiCall<CatalogProductsResponse>(
+        `/api/catalog/products?search=${encodeURIComponent(q)}&pageSize=10`,
+      )
+      const items = res.ok && Array.isArray(res.result?.items) ? res.result.items : []
+      if (items.length === 0) return []
+      const options: ComboboxOption[] = []
+      for (const product of items) {
+        const id = product.id.trim()
+        const title = product.title.trim()
+        if (!id || !title) continue
+        const normalizedProduct = { ...product, id, title }
+        productByIdRef.current.set(id, normalizedProduct)
+        options.push({
+          value: id,
+          label: title,
+          description: product.sku?.trim() || undefined,
+        })
+      }
+      return options
+    } catch {
+      return []
+    }
+  }, [])
+
+  const updateLineProduct = (index: number, nextValue: string) => {
+    const product = productByIdRef.current.get(nextValue)
+    const carriedMetadata = value[index]?.metadata ? { ...value[index].metadata } : {}
+    if (!product) {
+      delete carriedMetadata.productId
+      updateLine(index, {
+        name: nextValue,
+        productId: undefined,
+        sku: undefined,
+        metadata: Object.keys(carriedMetadata).length > 0 ? carriedMetadata : null,
+      })
+      return
+    }
+
+    const pricing = product.pricing ?? null
+    const unit = product.default_unit?.trim() || product.default_sales_unit?.trim()
+    const taxRate = pricing?.tax_rate ?? product.tax_rate
+    carriedMetadata.productId = product.id
+    const next: Partial<InvoiceLineInput> = {
+      name: product.title,
+      productId: product.id,
+      sku: product.sku ?? undefined,
+      metadata: carriedMetadata,
+    }
+
+    if (unit) next.quantityUnit = unit
+    if (taxRate != null && String(taxRate).trim() !== '') next.taxRate = String(taxRate)
+    if (
+      pricing != null
+      && pricing.currency_code === currencyCode
+      && pricing.unit_price_net != null
+      && String(pricing.unit_price_net).trim() !== ''
+    ) {
+      next.unitPriceNet = String(pricing.unit_price_net)
+    }
+
+    updateLine(index, next)
   }
 
   const addLine = () => {
@@ -144,6 +239,20 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
           <div key={index} className="flex flex-col gap-2 rounded-md border border-border p-3">
             <div className="flex items-end gap-2">
               <div className="flex flex-[2] flex-col gap-1.5">
+                <label className={labelClass} htmlFor={`financial_pl-line-product-${index}`}>
+                  {t('financial_pl.invoices.line.product', 'Product (from catalog)')}
+                </label>
+                <ComboboxInput
+                  value={line.name}
+                  onChange={(next) => updateLineProduct(index, next)}
+                  loadSuggestions={loadProductSuggestions}
+                  seedOptions={
+                    line.name ? [{ value: line.name, label: line.name, description: line.sku ?? null }] : []
+                  }
+                  allowCustomValues
+                  disabled={busy}
+                  placeholder={t('financial_pl.invoices.line.productPlaceholder', 'Search products or type a name')}
+                />
                 <label className={labelClass} htmlFor={`financial_pl-line-name-${index}`}>
                   {t('financial_pl.lines.name', 'Name')}
                 </label>

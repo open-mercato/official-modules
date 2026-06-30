@@ -47,6 +47,8 @@ type InvoiceDetailResponse = {
     currencyCode?: string | null
     lineNumber?: number | null
     kind?: string | null
+    sku?: string | null
+    metadata?: Record<string, unknown> | null
   }> | null
   meta?: (InvoiceMetaWire & { updatedAt?: string | null }) | null
   submission?: { status?: string | null } | null
@@ -160,8 +162,10 @@ function toLineKind(value: string | null | undefined): InvoiceLineInput['kind'] 
 /** Map the detail response into the controlled InvoiceForm value (header + lines + meta). */
 function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
   const currencyCode = toStr(data.invoice?.currencyCode, DEFAULT_CURRENCY) || DEFAULT_CURRENCY
-  const lines: InvoiceLineInput[] = (data.lines ?? []).map((line, index) =>
-    withComputedTotals(
+  const invoiceMetadata = data.invoice?.metadata ?? null
+  const lines: InvoiceLineInput[] = (data.lines ?? []).map((line, index) => {
+    const productId = typeof line.metadata?.productId === 'string' ? line.metadata.productId : undefined
+    return withComputedTotals(
       {
         name: toStr(line.name),
         quantity: toStr(line.quantity, '1'),
@@ -170,11 +174,14 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
         taxRate: line.taxRate != null ? toStr(line.taxRate) : '',
         currencyCode,
         kind: toLineKind(line.kind),
+        metadata: line.metadata ?? null,
+        sku: line.sku ?? undefined,
+        productId,
       },
       currencyCode,
       index + 1,
-    ),
-  )
+    )
+  })
   const { updatedAt, ...wireMeta } = data.meta ?? {}
   return {
     header: {
@@ -184,10 +191,11 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       currencyCode,
       orderId: toStr(data.invoice?.orderId),
     },
-    buyer: buyerFromMetadata(data.invoice?.metadata),
+    buyer: buyerFromMetadata(invoiceMetadata),
     lines: lines.length ? lines : [],
     meta: data.meta ? toFormMeta(wireMeta) : {},
-    metadata: data.invoice?.metadata ?? null,
+    notes: typeof invoiceMetadata?.notes === 'string' ? invoiceMetadata.notes : '',
+    metadata: invoiceMetadata,
     metaUpdatedAt: updatedAt ?? null,
   }
 }

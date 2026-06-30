@@ -5,7 +5,7 @@ import { Search, Loader2 } from 'lucide-react'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
-import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
+import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidPolishNip } from '../lib/nip'
@@ -27,6 +27,30 @@ function vatStatusVariant(status: string | null): VatTagVariant {
 
 const labelClass = 'text-xs text-muted-foreground'
 type LookupState = 'idle' | 'searching' | 'unavailable' | 'not_found'
+type CustomerSuggestion = { id: string; label: string }
+type CustomerCompanyListItem = {
+  id?: string | null
+  displayName?: string | null
+  display_name?: string | null
+  legalName?: string | null
+  legal_name?: string | null
+  city?: string | null
+  industry?: string | null
+}
+type CustomerCompanyAddress = {
+  addressLine1?: string | null
+  addressLine2?: string | null
+  buildingNumber?: string | null
+  flatNumber?: string | null
+  city?: string | null
+  region?: string | null
+  postalCode?: string | null
+  country?: string | null
+  isPrimary?: boolean | null
+}
+type CustomerCompanyDetail = {
+  addresses?: CustomerCompanyAddress[] | null
+}
 
 export type BuyerFieldsProps = {
   value: BuyerValue
@@ -46,6 +70,9 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
   const busy = Boolean(disabled)
   const [lookupState, setLookupState] = React.useState<LookupState>('idle')
   const [vatStatus, setVatStatus] = React.useState<string | null>(null)
+  const customerSuggestionsRef = React.useRef(new Map<string, CustomerSuggestion>())
+  const selectedCustomerIdRef = React.useRef<string | null>(null)
+  const customerSelectionDirtiesRef = React.useRef<Set<keyof BuyerValue>>(new Set())
 
   // Keep a ref to the latest value so the ASYNC lookup merges against the operator's current edits
   // (not the snapshot captured when the request started) — otherwise an in-flight lookup reverts a
@@ -65,28 +92,81 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
   // — so the inline state matches the save-time validation (code-jury r2, Codex).
   const nipInvalid = (value.nip ?? '').trim().length > 0 && !isValidPolishNip(nipDigits)
 
-  const loadCustomerSuggestions = React.useCallback(async (query?: string) => {
+  const trimText = React.useCallback((next?: string | null) => (next ?? '').trim(), [])
+
+  const composeCustomerAddressLine1 = React.useCallback(
+    (address?: CustomerCompanyAddress) => {
+      if (!address) return ''
+      const line1 = trimText(address.addressLine1)
+      const building = trimText(address.buildingNumber)
+      const flat = trimText(address.flatNumber)
+      const number = building && flat ? `${building}/${flat}` : building || flat
+      if (!number) return line1
+      if (!line1) return number
+      return line1.includes(number) ? line1 : `${line1} ${number}`
+    },
+    [trimText],
+  )
+
+  const markCustomerSelectionDirty = React.useCallback((field: keyof BuyerValue) => {
+    if (selectedCustomerIdRef.current) customerSelectionDirtiesRef.current.add(field)
+  }, [])
+
+  const loadSelectedCustomerAddress = React.useCallback(
+    async (selected: CustomerSuggestion) => {
+      try {
+        const res = await apiCall<CustomerCompanyDetail>(
+          `/api/customers/companies/${encodeURIComponent(selected.id)}?include=addresses`,
+        )
+        if (selectedCustomerIdRef.current !== selected.id || !res.ok || !res.result) return
+        const address = res.result.addresses?.find((a) => a.isPrimary) ?? res.result.addresses?.[0]
+        const dirty = customerSelectionDirtiesRef.current
+        const latest = valueRef.current
+        onChange({
+          ...latest,
+          companyName: selected.label,
+          addressLine1: dirty.has('addressLine1') ? latest.addressLine1 : composeCustomerAddressLine1(address),
+          addressLine2: dirty.has('addressLine2') ? latest.addressLine2 : trimText(address?.addressLine2),
+          postalCode: dirty.has('postalCode') ? latest.postalCode : trimText(address?.postalCode),
+          city: dirty.has('city') ? latest.city : trimText(address?.city),
+          countryCode: dirty.has('countryCode')
+            ? latest.countryCode
+            : trimText(address?.country).toUpperCase() || 'PL',
+        })
+      } catch {
+        // Customers is an optional module dependency for this picker; manual buyer entry remains available.
+      }
+    },
+    [composeCustomerAddressLine1, onChange, trimText],
+  )
+
+  const loadCustomerSuggestions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
     const q = (query ?? '').trim()
+    customerSuggestionsRef.current = new Map()
     if (q.length < 2) return []
     try {
-      const res = await apiCall<{ items?: Array<{ displayName?: string | null; legalName?: string | null }> }>(
+      const res = await apiCall<{ items?: CustomerCompanyListItem[] }>(
         `/api/customers/companies?search=${encodeURIComponent(q)}&pageSize=10`,
       )
       if (!res.ok || !res.result?.items) return []
-      const seen = new Set<string>()
-      const out: string[] = []
+      const nextMap = new Map<string, CustomerSuggestion>()
+      const out: ComboboxOption[] = []
       for (const c of res.result.items) {
-        const name = (c.displayName || c.legalName || '').trim()
-        if (name && !seen.has(name)) {
-          seen.add(name)
-          out.push(name)
+        const id = trimText(c.id)
+        const label = trimText(c.displayName || c.display_name || c.legalName || c.legal_name)
+        if (id && label && !nextMap.has(id)) {
+          const description = [trimText(c.city), trimText(c.industry)].filter(Boolean).join(' / ')
+          nextMap.set(id, { id, label })
+          out.push({ value: id, label, ...(description ? { description } : {}) })
         }
       }
+      customerSuggestionsRef.current = nextMap
       return out
     } catch {
+      customerSuggestionsRef.current = new Map()
       return []
     }
-  }, [])
+  }, [trimText])
 
   // Fill only BLANK fields — never silently overwrite what the operator already typed. Merges
   // against `valueRef.current` (the latest value), so edits made during the in-flight lookup survive.
@@ -146,7 +226,26 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
         </label>
         <ComboboxInput
           value={value.companyName ?? ''}
-          onChange={(next) => patch({ companyName: next })}
+          onChange={(next) => {
+            const selected = customerSuggestionsRef.current.get(next)
+            if (selected) {
+              selectedCustomerIdRef.current = selected.id
+              customerSelectionDirtiesRef.current.clear()
+              patch({
+                companyName: selected.label,
+                addressLine1: '',
+                addressLine2: '',
+                postalCode: '',
+                city: '',
+                countryCode: 'PL',
+              })
+              void loadSelectedCustomerAddress(selected)
+              return
+            }
+            selectedCustomerIdRef.current = null
+            customerSelectionDirtiesRef.current.clear()
+            patch({ companyName: next })
+          }}
           loadSuggestions={loadCustomerSuggestions}
           allowCustomValues
           disabled={busy}
@@ -221,7 +320,10 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
             id="financial_pl-buyer-line1"
             value={value.addressLine1 ?? ''}
             disabled={busy}
-            onChange={(event) => patch({ addressLine1: event.target.value })}
+            onChange={(event) => {
+              markCustomerSelectionDirty('addressLine1')
+              patch({ addressLine1: event.target.value })
+            }}
           />
         </div>
         <div className="flex flex-col gap-1.5">
@@ -232,7 +334,10 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
             id="financial_pl-buyer-line2"
             value={value.addressLine2 ?? ''}
             disabled={busy}
-            onChange={(event) => patch({ addressLine2: event.target.value })}
+            onChange={(event) => {
+              markCustomerSelectionDirty('addressLine2')
+              patch({ addressLine2: event.target.value })
+            }}
           />
         </div>
       </div>
@@ -246,7 +351,10 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
             id="financial_pl-buyer-postal"
             value={value.postalCode ?? ''}
             disabled={busy}
-            onChange={(event) => patch({ postalCode: event.target.value })}
+            onChange={(event) => {
+              markCustomerSelectionDirty('postalCode')
+              patch({ postalCode: event.target.value })
+            }}
             placeholder="00-000"
           />
         </div>
@@ -258,7 +366,10 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
             id="financial_pl-buyer-city"
             value={value.city ?? ''}
             disabled={busy}
-            onChange={(event) => patch({ city: event.target.value })}
+            onChange={(event) => {
+              markCustomerSelectionDirty('city')
+              patch({ city: event.target.value })
+            }}
           />
         </div>
         <div className="flex flex-col gap-1.5">
@@ -270,7 +381,10 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
             value={value.countryCode ?? ''}
             disabled={busy}
             maxLength={2}
-            onChange={(event) => patch({ countryCode: event.target.value.toUpperCase() })}
+            onChange={(event) => {
+              markCustomerSelectionDirty('countryCode')
+              patch({ countryCode: event.target.value.toUpperCase() })
+            }}
             placeholder="PL"
           />
         </div>

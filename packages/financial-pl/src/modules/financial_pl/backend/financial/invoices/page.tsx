@@ -3,9 +3,10 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { Send } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -14,6 +15,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { KsefStatusBadge } from '../../../components/KsefStatusBadge'
+import { isInvoiceIssued } from '../../../lib/invoice-status'
 
 type InvoiceListItem = {
   id: string
@@ -38,9 +40,16 @@ type InvoiceListResponse = {
   pageSize?: number
 }
 
+type BatchSendResponse = {
+  ok?: boolean
+  batchReference?: string | null
+  count?: number
+}
+
 type InvoiceRow = {
   id: string
   invoiceNumber: string
+  status: string | null
   issueDate: string | null
   dueDate: string | null
   currencyCode: string | null
@@ -83,6 +92,8 @@ const ksefStatusFilterLabelFallback: Record<(typeof KSEF_STATUS_FILTER_KEYS)[num
   not_applicable: 'Not applicable',
 }
 
+const BATCH_INELIGIBLE_KSEF_STATUSES = new Set(['accepted', 'processing', 'queued', 'offline_issued'])
+
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number') return Number.isNaN(value) ? null : value
   if (typeof value === 'string' && value.trim().length) {
@@ -113,6 +124,12 @@ function formatCurrency(
   } catch {
     return String(amount)
   }
+}
+
+function isInvoiceEligibleForKsefBatch(row: InvoiceRow): boolean {
+  if (!isInvoiceIssued(row.status)) return false
+  const ksefStatus = row.ksefStatus?.trim().toLowerCase()
+  return !ksefStatus || !BATCH_INELIGIBLE_KSEF_STATUSES.has(ksefStatus)
 }
 
 export default function FinancialPlInvoicesPage() {
@@ -169,6 +186,7 @@ export default function FinancialPlInvoicesPage() {
     return {
       id,
       invoiceNumber: item.invoiceNumber ?? id,
+      status: item.status ?? null,
       issueDate: item.issueDate ?? null,
       dueDate: item.dueDate ?? null,
       currencyCode: item.currencyCode ?? null,
@@ -232,6 +250,67 @@ export default function FinancialPlInvoicesPage() {
       router.push(`/backend/financial/invoices/${row.id}`)
     },
     [router],
+  )
+
+  const bulkActions = React.useMemo<BulkAction<InvoiceRow>[]>(
+    () => [
+      {
+        id: 'financial-pl-batch-send-ksef',
+        label: t('financial_pl.invoices.list.batchSend', 'Send selected to KSeF'),
+        icon: Send,
+        onExecute: async (selectedRows) => {
+          const eligibleRows = selectedRows.filter(isInvoiceEligibleForKsefBatch)
+          const invoiceIds = eligibleRows.map((row) => row.id).filter((id) => id.trim().length > 0)
+          const skippedCount = selectedRows.length - invoiceIds.length
+
+          if (invoiceIds.length === 0) {
+            flash(
+              t('financial_pl.invoices.list.batchNoneEligible', 'No selected invoices are eligible to send.'),
+              'warning',
+            )
+            return false
+          }
+
+          try {
+            const call = await apiCall<BatchSendResponse>('/api/financial_pl/ksef/submissions/batch', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ invoiceIds }),
+            })
+            const batchReference = call.result?.batchReference?.trim() || ''
+            const count = typeof call.result?.count === 'number' ? call.result.count : invoiceIds.length
+            if (!call.ok || call.result?.ok !== true || !batchReference) {
+              flash(t('financial_pl.invoices.list.batchFailed', 'Batch send failed.'), 'error')
+              return false
+            }
+            if (skippedCount > 0) {
+              flash(
+                t(
+                  'financial_pl.invoices.list.batchSkipped',
+                  '{count} selected invoice(s) were skipped because they are not eligible.',
+                  { count: skippedCount },
+                ),
+                'info',
+              )
+            }
+            flash(
+              t(
+                'financial_pl.invoices.list.batchQueued',
+                '{count} invoice(s) queued to KSeF (batch {ref}).',
+                { count, ref: batchReference },
+              ),
+              'success',
+            )
+            handleRefresh()
+            return true
+          } catch {
+            flash(t('financial_pl.invoices.list.batchFailed', 'Batch send failed.'), 'error')
+            return false
+          }
+        },
+      },
+    ],
+    [handleRefresh, t],
   )
 
   const columns = React.useMemo<ColumnDef<InvoiceRow>[]>(
@@ -315,6 +394,7 @@ export default function FinancialPlInvoicesPage() {
           )}
           columns={columns}
           data={rows}
+          bulkActions={bulkActions}
           isLoading={isLoading}
           searchValue={search}
           onSearchChange={handleSearchChange}
