@@ -227,6 +227,35 @@ function resolveAbsoluteMediaUrl(url: string): string {
   return new URL(url, base).toString()
 }
 
+function isUrlKeyConflict(error: MagentoApiError): boolean {
+  const lower = error.body.toLowerCase()
+  return lower.includes('url key') || lower.includes('url_key')
+}
+
+function toUrlKey(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'product'
+}
+
+function wrapExportError(error: unknown): string {
+  if (error instanceof MagentoApiError) return error.message
+  if (error instanceof Error) return error.message.split('\n')[0]
+  return 'Unknown export error'
+}
+
+// Retries a product PUT up to 5 times on url_key uniqueness conflicts, appending
+// a counter suffix (-1, -2, …) to the url_key on each retry.
+async function withUrlKeyRetry<T>(baseUrlKey: string, attempt: (urlKey: string) => Promise<T>): Promise<T> {
+  for (let i = 0; i <= 5; i++) {
+    try {
+      return await attempt(i === 0 ? baseUrlKey : `${baseUrlKey}-${i}`)
+    } catch (error) {
+      if (error instanceof MagentoApiError && isUrlKeyConflict(error) && i < 5) continue
+      throw error
+    }
+  }
+  throw new Error('unreachable')
+}
+
 // Matches OM's own attachment image route, e.g. `/api/attachments/image/<uuid>/img.jpg`.
 const ATTACHMENT_IMAGE_URL_PATTERN = /^\/api\/attachments\/image\/([0-9a-f-]{36})(?:\/|$)/i
 
@@ -349,28 +378,30 @@ async function exportVariantAsSimple(
 
   const variantPrice = await resolveVariantPrice(variant.id, parentProduct, ctx)
 
-  const customAttributes: MagentoCustomAttribute[] = []
+  const inheritedAttributes: MagentoCustomAttribute[] = []
   if (parentProduct.description) {
-    customAttributes.push({ attribute_code: 'description', value: parentProduct.description })
+    inheritedAttributes.push({ attribute_code: 'description', value: parentProduct.description })
   }
   // Carry over parent custom attributes (e.g. material, care instructions) to variants
   // so each simple child inherits the catalog content attributes.
-  customAttributes.push(...parentCustomAttributes.filter((a) => a.attribute_code !== 'description'))
+  inheritedAttributes.push(...parentCustomAttributes.filter((a) => a.attribute_code !== 'description'))
 
-  const response = await ctx.client.put<MagentoProductStub>(`/products/${encodeURIComponent(sku)}`, {
-    product: {
-      sku,
-      name: variant.name ?? parentProduct.title,
-      price: variantPrice,
-      status: variant.isActive && parentProduct.isActive ? 1 : 2,
-      visibility: 1, // Not visible individually — only accessible via the configurable parent.
-      type_id: 'simple',
-      weight: variant.weightValue ? Number(variant.weightValue) : (parentProduct.weightValue ? Number(parentProduct.weightValue) : 0),
-      attribute_set_id: Number(attributeSetId),
-      custom_attributes: customAttributes,
-      extension_attributes: { category_links: categoryLinks },
-    },
-  }, { query: { saveOptions: true } })
+  const response = await withUrlKeyRetry(toUrlKey(sku), (urlKey) =>
+    ctx.client.put<MagentoProductStub>(`/products/${encodeURIComponent(sku)}`, {
+      product: {
+        sku,
+        name: variant.name ?? parentProduct.title,
+        price: variantPrice,
+        status: variant.isActive && parentProduct.isActive ? 1 : 2,
+        visibility: 1, // Not visible individually — only accessible via the configurable parent.
+        type_id: 'simple',
+        weight: variant.weightValue ? Number(variant.weightValue) : (parentProduct.weightValue ? Number(parentProduct.weightValue) : 0),
+        attribute_set_id: Number(attributeSetId),
+        custom_attributes: [{ attribute_code: 'url_key', value: urlKey }, ...inheritedAttributes],
+        extension_attributes: { category_links: categoryLinks },
+      },
+    }, { query: { saveOptions: true } }),
+  )
 
   return { sku, magentoId: response.id }
 }
@@ -399,15 +430,32 @@ async function exportConfigurableProduct(
       ),
     ])
 
+    // Pre-compute configurable dimension attribute codes so they can be excluded from
+    // parentCustomAttributes on variant simple products. Configurable dimension values are
+    // always set per-variant in the option-value patch below; if parentCustomAttributes
+    // also contains these codes (name collision between a custom field and a dimension),
+    // the first variant PUT would plant a wrong value_index that the second PUT may never
+    // overwrite (e.g. when optionValues is null for that dimension), causing Magento's
+    // Matrix.php to crash with "Undefined array key <value_index>".
+    const schema = product.optionSchemaTemplate?.schema
+    const configurableAttrCodes = new Set<string>()
+    if (schema?.options?.length) {
+      for (const optionDef of schema.options) {
+        configurableAttrCodes.add(await ensureConfigurableAttribute(optionDef, ctx))
+      }
+    }
+    const variantBaseAttrs = configurableAttrCodes.size > 0
+      ? parentCustomAttributes.filter((a) => !configurableAttrCodes.has(a.attribute_code))
+      : parentCustomAttributes
+
     // Export each variant as a simple child product and collect their Magento ids.
     const variantResults: VariantExportResult[] = []
     for (const variant of variants) {
-      const result = await exportVariantAsSimple(variant, product, ctx, attributeSetId, categoryLinks, parentCustomAttributes)
+      const result = await exportVariantAsSimple(variant, product, ctx, attributeSetId, categoryLinks, variantBaseAttrs)
       if (result) variantResults.push(result)
     }
 
     // Build configurable_product_options from the option schema.
-    const schema = product.optionSchemaTemplate?.schema
     const configurable_product_options: unknown[] = []
 
     if (schema?.options?.length) {
@@ -428,6 +476,8 @@ async function exportConfigurableProduct(
             values.push({ value_index: Number(optionId) })
           }
         }
+
+        if (values.length === 0) continue
 
         configurable_product_options.push({
           attribute_id: attributeId,
@@ -462,29 +512,31 @@ async function exportConfigurableProduct(
       }
     }
 
-    const requestPayload = {
-      product: {
-        sku,
-        name: product.title,
-        price: 0, // Magento derives the displayed price range from the child simples.
-        status: product.isActive ? 1 : 2,
-        visibility: 4,
-        type_id: 'configurable',
-        weight: product.weightValue ? Number(product.weightValue) : 0,
-        attribute_set_id: Number(attributeSetId),
-        custom_attributes: [
-          ...(product.description ? [{ attribute_code: 'description', value: product.description }] : []),
-          ...parentCustomAttributes.filter((a) => a.attribute_code !== 'description'),
-        ],
-        extension_attributes: {
-          category_links: categoryLinks,
-          configurable_product_options,
-          configurable_product_links: variantResults.map((v) => v.magentoId),
-        },
-      },
-    }
+    const configurableCustomAttributes: MagentoCustomAttribute[] = [
+      ...(product.description ? [{ attribute_code: 'description', value: product.description }] : []),
+      ...parentCustomAttributes.filter((a) => a.attribute_code !== 'description'),
+    ]
 
-    await ctx.client.put(`/products/${encodeURIComponent(sku)}`, requestPayload, { query: { saveOptions: true } })
+    await withUrlKeyRetry(toUrlKey(sku), (urlKey) =>
+      ctx.client.put(`/products/${encodeURIComponent(sku)}`, {
+        product: {
+          sku,
+          name: product.title,
+          price: 0, // Magento derives the displayed price range from the child simples.
+          status: product.isActive ? 1 : 2,
+          visibility: 4,
+          type_id: 'configurable',
+          weight: product.weightValue ? Number(product.weightValue) : 0,
+          attribute_set_id: Number(attributeSetId),
+          custom_attributes: [{ attribute_code: 'url_key', value: urlKey }, ...configurableCustomAttributes],
+          extension_attributes: {
+            category_links: categoryLinks,
+            configurable_product_options,
+            configurable_product_links: variantResults.map((v) => v.magentoId),
+          },
+        },
+      }, { query: { saveOptions: true } }),
+    )
 
     if (ctx.settings.imageSyncEnabled && product.defaultMediaUrl) {
       await uploadProductImage(product, ctx, sku).catch((error) => {
@@ -503,12 +555,8 @@ async function exportConfigurableProduct(
 
     return { localId: product.id, externalId: sku, status: 'success' }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Magento export error'
-    if (error instanceof MagentoApiError) {
-      console.error(`[sync_magento] configurable export failed for SKU ${sku} (id=${product.id}, HTTP ${error.status}): ${error.body || message}`)
-    } else {
-      console.error(`[sync_magento] configurable export failed for SKU ${sku} (id=${product.id}): ${message}`)
-    }
+    const message = wrapExportError(error)
+    console.error(`[sync_magento] configurable export failed for SKU ${sku} (id=${product.id}): ${message}`)
     return { localId: product.id, externalId: sku, status: 'error', error: message }
   }
 }
@@ -539,26 +587,22 @@ async function exportProduct(
       customAttributes.unshift({ attribute_code: 'description', value: product.description })
     }
 
-    const requestPayload = {
-      product: {
-        sku,
-        name: product.title,
-        price,
-        status: product.isActive ? 1 : 2,
-        visibility: 4,
-        type_id: 'simple',
-        weight: product.weightValue ? Number(product.weightValue) : 0,
-        attribute_set_id: Number(attributeSetId),
-        custom_attributes: customAttributes,
-        extension_attributes: { category_links: categoryLinks },
-      },
-    }
-
-    console.log(`[sync_magento] exporting product ${sku} (id=${product.id}): ${JSON.stringify(requestPayload)}`)
-
-    const response = await ctx.client.put(`/products/${encodeURIComponent(sku)}`, requestPayload, { query: { saveOptions: true } })
-
-    console.log(`[sync_magento] Magento response for SKU ${sku}: ${JSON.stringify(response)}`)
+    await withUrlKeyRetry(toUrlKey(sku), (urlKey) =>
+      ctx.client.put(`/products/${encodeURIComponent(sku)}`, {
+        product: {
+          sku,
+          name: product.title,
+          price,
+          status: product.isActive ? 1 : 2,
+          visibility: 4,
+          type_id: 'simple',
+          weight: product.weightValue ? Number(product.weightValue) : 0,
+          attribute_set_id: Number(attributeSetId),
+          custom_attributes: [{ attribute_code: 'url_key', value: urlKey }, ...customAttributes],
+          extension_attributes: { category_links: categoryLinks },
+        },
+      }, { query: { saveOptions: true } }),
+    )
 
     if (ctx.settings.imageSyncEnabled && product.defaultMediaUrl) {
       await uploadProductImage(product, ctx, sku).catch((error) => {
@@ -578,12 +622,8 @@ async function exportProduct(
 
     return { localId: product.id, externalId: sku, status: 'success' }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Magento export error'
-    if (error instanceof MagentoApiError) {
-      console.error(`[sync_magento] export failed for SKU ${sku} (id=${product.id}, HTTP ${error.status}): ${error.body || message}`)
-    } else {
-      console.error(`[sync_magento] export failed for SKU ${sku} (id=${product.id}): ${message}`)
-    }
+    const message = wrapExportError(error)
+    console.error(`[sync_magento] export failed for SKU ${sku} (id=${product.id}): ${message}`)
     return { localId: product.id, externalId: sku, status: 'error', error: message }
   }
 }

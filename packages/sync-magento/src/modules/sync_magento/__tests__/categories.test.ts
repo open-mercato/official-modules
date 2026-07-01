@@ -113,6 +113,7 @@ describe('ensureCategory', () => {
         name: 'New Category',
         is_active: true,
         include_in_menu: true,
+        custom_attributes: [{ attribute_code: 'url_key', value: 'new-category' }],
       },
     })
   })

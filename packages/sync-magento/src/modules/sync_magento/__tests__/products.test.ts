@@ -246,7 +246,10 @@ describe('streamExport', () => {
         type_id: 'simple',
         weight: 1.5,
         attribute_set_id: 10,
-        custom_attributes: [{ attribute_code: 'description', value: product.description }],
+        custom_attributes: [
+          expect.objectContaining({ attribute_code: 'url_key' }),
+          { attribute_code: 'description', value: product.description },
+        ],
         extension_attributes: { category_links: [] },
       },
     }, { query: { saveOptions: true } })
@@ -369,6 +372,7 @@ describe('streamExport', () => {
     const [, payload] = (ctx.client.put as jest.Mock).mock.calls[0]
     expect(payload.product.extension_attributes.category_links).toEqual([{ position: 0, category_id: 33 }])
     expect(payload.product.custom_attributes).toEqual([
+      expect.objectContaining({ attribute_code: 'url_key' }),
       { attribute_code: 'description', value: product.description },
       { attribute_code: 'om_care_instructions', value: 'Hand wash only' },
     ])
@@ -412,6 +416,7 @@ describe('streamExport', () => {
 
     const [, payload] = (ctx.client.put as jest.Mock).mock.calls[0]
     expect(payload.product.custom_attributes).toEqual([
+      expect.objectContaining({ attribute_code: 'url_key' }),
       { attribute_code: 'description', value: product.description },
       { attribute_code: 'om_upper_material', value: '142' },
     ])
@@ -454,6 +459,7 @@ describe('streamExport', () => {
 
     const [, payload] = (ctx.client.put as jest.Mock).mock.calls[0]
     expect(payload.product.custom_attributes).toEqual([
+      expect.objectContaining({ attribute_code: 'url_key' }),
       { attribute_code: 'description', value: product.description },
     ])
   })
