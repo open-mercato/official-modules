@@ -21,14 +21,14 @@ Polish VAT metadata layered onto the OSS `sales` invoices via the sanctioned ext
 - **Per-organization configuration**: NIP, KSeF token, environment, and seller identity are
   stored per-org in the encrypted `integrations` credential store (`ksef_pl` provider) and
   edited at `/backend/integrations/ksef_pl`.
-- **Operator backoffice** (module-owned backend pages under `/backend/financial/*`, SPEC-013):
+- **Operator backoffice** (module-owned backend pages under `/backend/financial/*`, SPEC-008):
   Invoices list / create / detail / edit, an invoice **KSeF panel** (status, Send, Retry, Download
   UPO/PDF, Issue offline, Issue correction), the full **PL-VAT metadata editor**, plus **JPK** and
   **Certificates** pages. Works standalone on released `@open-mercato/core` (no injection host
   required). Editing a KSeF-`accepted` invoice is blocked **server-side** by a fail-closed API
   interceptor on core `sales.invoices` `PUT`/`DELETE` (an additive conditional-409 — part of the
   module's effective contract once installed).
-- **Commercial-grade invoice editor** (SPEC-014): a **Buyer (Nabywca)** section persisted to the
+- **Commercial-grade invoice editor** (SPEC-008): a **Buyer (Nabywca)** section persisted to the
   core invoice `metadata.buyerSnapshot` (the exact keys the FA(3) `buildBuyer` resolver reads, so
   the buyer flows straight into `Podmiot2`); a **"Look up" by NIP** that autofills the buyer's name +
   working address + VAT status from the Ministry of Finance *Wykaz podatników VAT* (Biała lista)

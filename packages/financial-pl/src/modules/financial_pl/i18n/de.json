@@ -301,6 +301,10 @@
   "financial_pl.invoices.form.sections.payment": "Zahlung",
   "financial_pl.invoices.form.sections.plVat": "Polnische USt.",
   "financial_pl.invoices.form.sections.plVatAdvanced": "MwSt-, KSeF- & JPK-Details (erweitert)",
+  "financial_pl.invoices.form.tabs.dodatkowe": "Zusätzlich",
+  "financial_pl.invoices.form.tabs.faktura": "Rechnung",
+  "financial_pl.invoices.form.tabs.hasDataHint": "Enthält Daten",
+  "financial_pl.invoices.form.tabs.podatki": "Steuern & KSeF",
   "financial_pl.invoices.line.product": "Produkt (aus Katalog)",
   "financial_pl.invoices.line.productPlaceholder": "Produkte suchen oder Namen eingeben",
   "financial_pl.invoices.list.batchFailed": "Stapelversand fehlgeschlagen.",
@@ -462,6 +466,7 @@
   "financial_pl.validation.nipChecksumBuyer": "Die NIP des Käufers ist ungültig (Prüfsumme fehlgeschlagen).",
   "financial_pl.validation.nipChecksumTaxpayer": "Die NIP des Steuerpflichtigen ist ungültig (Prüfsumme fehlgeschlagen).",
   "financial_pl.validation.quantityPositive": "Jede Position benötigt eine Menge größer als null.",
+  "financial_pl.validation.termDaysRange": "Die Zahlungsfrist muss eine ganze Zahl von Tagen zwischen 0 und 3650 sein.",
   "financial_pl.validation.unitPricePositive": "Der Einzelpreis einer Position darf nicht negativ sein.",
   "financial_pl.validation.vatRateNumeric": "Der USt-Satz einer Position muss eine Zahl zwischen 0 und 100 sein."
 }

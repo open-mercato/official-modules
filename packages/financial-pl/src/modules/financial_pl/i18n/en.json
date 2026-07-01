@@ -301,6 +301,10 @@
   "financial_pl.invoices.form.sections.payment": "Payment / settlement",
   "financial_pl.invoices.form.sections.plVat": "Polish VAT",
   "financial_pl.invoices.form.sections.plVatAdvanced": "VAT, KSeF & JPK details (advanced)",
+  "financial_pl.invoices.form.tabs.dodatkowe": "Additional",
+  "financial_pl.invoices.form.tabs.faktura": "Invoice",
+  "financial_pl.invoices.form.tabs.hasDataHint": "Has data",
+  "financial_pl.invoices.form.tabs.podatki": "Taxes & KSeF",
   "financial_pl.invoices.line.product": "Product (from catalog)",
   "financial_pl.invoices.line.productPlaceholder": "Search products or type a name",
   "financial_pl.invoices.list.batchFailed": "Batch send failed.",
@@ -462,6 +466,7 @@
   "financial_pl.validation.nipChecksumBuyer": "The buyer NIP is invalid (checksum failed).",
   "financial_pl.validation.nipChecksumTaxpayer": "The taxpayer NIP is invalid (checksum failed).",
   "financial_pl.validation.quantityPositive": "Every line needs a quantity greater than zero.",
+  "financial_pl.validation.termDaysRange": "The payment term must be a whole number of days between 0 and 3650.",
   "financial_pl.validation.unitPricePositive": "A line unit price cannot be negative.",
   "financial_pl.validation.vatRateNumeric": "A line VAT rate must be a number between 0 and 100."
 }

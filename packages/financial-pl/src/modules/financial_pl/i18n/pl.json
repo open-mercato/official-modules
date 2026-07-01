@@ -301,6 +301,10 @@
   "financial_pl.invoices.form.sections.payment": "Płatność",
   "financial_pl.invoices.form.sections.plVat": "Polski VAT",
   "financial_pl.invoices.form.sections.plVatAdvanced": "Szczegóły VAT, KSeF i JPK (zaawansowane)",
+  "financial_pl.invoices.form.tabs.dodatkowe": "Dodatkowe",
+  "financial_pl.invoices.form.tabs.faktura": "Faktura",
+  "financial_pl.invoices.form.tabs.hasDataHint": "Zawiera dane",
+  "financial_pl.invoices.form.tabs.podatki": "Podatki i KSeF",
   "financial_pl.invoices.line.product": "Produkt (z katalogu)",
   "financial_pl.invoices.line.productPlaceholder": "Wyszukaj produkty lub wpisz nazwę",
   "financial_pl.invoices.list.batchFailed": "Wysyłka wsadowa nie powiodła się.",
@@ -462,6 +466,7 @@
   "financial_pl.validation.nipChecksumBuyer": "NIP nabywcy jest nieprawidłowy (błędna suma kontrolna).",
   "financial_pl.validation.nipChecksumTaxpayer": "NIP podatnika jest nieprawidłowy (błędna suma kontrolna).",
   "financial_pl.validation.quantityPositive": "Każda pozycja musi mieć ilość większą od zera.",
+  "financial_pl.validation.termDaysRange": "Termin płatności musi być liczbą całkowitą dni od 0 do 3650.",
   "financial_pl.validation.unitPricePositive": "Cena jednostkowa pozycji nie może być ujemna.",
   "financial_pl.validation.vatRateNumeric": "Stawka VAT pozycji musi być liczbą od 0 do 100."
 }

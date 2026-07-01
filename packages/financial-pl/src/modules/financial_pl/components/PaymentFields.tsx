@@ -103,9 +103,15 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
           </label>
           <Input
             id="financial_pl-payment-term-days"
-            type="number"
-            min={0}
-            step={1}
+            // Plain text (not type="number") so NO native constraint validation applies at all:
+            // SPEC-018 keeps tab panels mounted, so this control is hidden (display:none) on an
+            // inactive tab, and a native-invalid hidden control ("not focusable") silently blocks
+            // form submission before handleSubmit can run. type="number" still carries an IMPLICIT
+            // step=1, so a fractional value (e.g. 14.5) is a stepMismatch → the class was not fully
+            // closed by dropping the explicit min/step (code-jury: Codex + Kimi, 2 voters). type="text"
+            // removes stepMismatch/badInput entirely; the term is validated in JS by handleSubmit
+            // (termDaysRange: whole number 0..3650, routes to the Faktura tab). inputMode="numeric"
+            // keeps the numeric on-screen keyboard.
             inputMode="numeric"
             value={value.termDays == null ? '' : String(value.termDays)}
             disabled={busy}
@@ -124,7 +130,11 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
             id="financial_pl-payment-method-other"
             value={value.methodOther ?? ''}
             disabled={busy}
-            required
+            // No native `required`: SPEC-018 keeps tab panels mounted, so this control can be
+            // hidden (display:none) on an inactive tab — a blank native-required control under
+            // display:none silently blocks form submission ("not focusable"). The invoice form
+            // gates this in handleSubmit (other⇒methodOther) and routes to the Faktura tab;
+            // `aria-required` keeps the a11y semantics without native validation.
             aria-required="true"
             onChange={(event) => patch({ methodOther: event.target.value })}
             placeholder={t(
@@ -196,7 +206,9 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               type="date"
               value={value.paidDate ?? ''}
               disabled={busy}
-              required
+              // No native `required` — see the methodOther note above: gated in handleSubmit
+              // (paid⇒paidDate) + Faktura-tab routing; native required under a hidden panel
+              // would silently block submission.
               aria-required="true"
               onChange={(event) => patch({ paidDate: event.target.value })}
             />

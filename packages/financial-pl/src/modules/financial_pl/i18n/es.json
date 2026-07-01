@@ -301,6 +301,10 @@
   "financial_pl.invoices.form.sections.payment": "Pago",
   "financial_pl.invoices.form.sections.plVat": "IVA polaco",
   "financial_pl.invoices.form.sections.plVatAdvanced": "Detalles de IVA, KSeF y JPK (avanzado)",
+  "financial_pl.invoices.form.tabs.dodatkowe": "Adicional",
+  "financial_pl.invoices.form.tabs.faktura": "Factura",
+  "financial_pl.invoices.form.tabs.hasDataHint": "Contiene datos",
+  "financial_pl.invoices.form.tabs.podatki": "Impuestos y KSeF",
   "financial_pl.invoices.line.product": "Producto (del catálogo)",
   "financial_pl.invoices.line.productPlaceholder": "Busca productos o escribe un nombre",
   "financial_pl.invoices.list.batchFailed": "El envío por lotes falló.",
@@ -462,6 +466,7 @@
   "financial_pl.validation.nipChecksumBuyer": "El NIP del comprador no es válido (suma de verificación incorrecta).",
   "financial_pl.validation.nipChecksumTaxpayer": "El NIP del contribuyente no es válido (suma de verificación incorrecta).",
   "financial_pl.validation.quantityPositive": "Cada línea necesita una cantidad mayor que cero.",
+  "financial_pl.validation.termDaysRange": "El plazo de pago debe ser un número entero de días entre 0 y 3650.",
   "financial_pl.validation.unitPricePositive": "El precio unitario de una línea no puede ser negativo.",
   "financial_pl.validation.vatRateNumeric": "La tasa de IVA de una línea debe ser un número entre 0 y 100."
 }

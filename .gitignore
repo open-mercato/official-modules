@@ -56,3 +56,6 @@ apps/sandbox/storage/attachments
 /.mcp.json
 /ARCHITECTURE.md
 /.serena/
+
+# Playwright MCP scratch output (console logs / screenshots)
+.playwright-mcp/

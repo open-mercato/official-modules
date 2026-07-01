@@ -6,7 +6,9 @@ import Link from 'next/link'
 import { z } from 'zod'
 import { CrudForm, type CrudFormGroup, type CrudFormGroupComponentProps } from '@open-mercato/ui/backend/CrudForm'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@open-mercato/ui/primitives/accordion'
+import { Input } from '@open-mercato/ui/primitives/input'
+import { Tabs, TabsList, TabsTrigger } from '@open-mercato/ui/primitives/tabs'
+import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
@@ -76,6 +78,7 @@ const DEFAULT_TERM_DAYS = 14
 const ADVANCE_INVOICE_KINDS = new Set(['zal', 'roz', 'kor_zal', 'kor_roz'])
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+type InvoiceTab = 'faktura' | 'podatki' | 'dodatkowe'
 
 type PaymentMetadata = {
   method: PaymentMethod
@@ -225,27 +228,34 @@ function formString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function isInvoiceTab(value: string): value is InvoiceTab {
+  return value === 'faktura' || value === 'podatki' || value === 'dodatkowe'
+}
+
 type PaymentGroupProps = {
   ctx: CrudFormGroupComponentProps
   payment: PaymentValue
   onChange: (payment: PaymentValue) => void
   disabled?: boolean
   dueTouched: React.MutableRefObject<boolean>
-  saleTouched: React.MutableRefObject<boolean>
   lastAutoDue: React.MutableRefObject<string>
-  lastAutoSale: React.MutableRefObject<string>
 }
 
-function PaymentGroup({
+function DateDerivationEffect({
   ctx,
   payment,
-  onChange,
-  disabled,
   dueTouched,
   saleTouched,
   lastAutoDue,
   lastAutoSale,
-}: PaymentGroupProps) {
+}: {
+  ctx: CrudFormGroupComponentProps
+  payment: PaymentValue
+  dueTouched: React.MutableRefObject<boolean>
+  saleTouched: React.MutableRefObject<boolean>
+  lastAutoDue: React.MutableRefObject<string>
+  lastAutoSale: React.MutableRefObject<string>
+}) {
   const issueDate = formString(ctx.values.issueDate)
   const dueDate = formString(ctx.values.dueDate)
   const saleDate = formString(ctx.values.saleDate)
@@ -262,16 +272,6 @@ function PaymentGroup({
       saleTouched.current = true
     }
   }, [lastAutoSale, saleDate, saleTouched])
-
-  const deriveDue = React.useCallback(
-    (termDays: number | undefined) => {
-      if (dueTouched.current || !issueDate || termDays === undefined) return
-      const nextDue = addDays(issueDate, termDays)
-      lastAutoDue.current = nextDue
-      if (dueDate !== nextDue) setFormValue('dueDate', nextDue)
-    },
-    [dueDate, dueTouched, issueDate, lastAutoDue, setFormValue],
-  )
 
   React.useEffect(() => {
     if (!issueDate) return
@@ -299,6 +299,31 @@ function PaymentGroup({
     setFormValue,
   ])
 
+  return null
+}
+
+function PaymentGroup({
+  ctx,
+  payment,
+  onChange,
+  disabled,
+  dueTouched,
+  lastAutoDue,
+}: PaymentGroupProps) {
+  const issueDate = formString(ctx.values.issueDate)
+  const dueDate = formString(ctx.values.dueDate)
+  const setFormValue = ctx.setValue
+
+  const deriveDue = React.useCallback(
+    (termDays: number | undefined) => {
+      if (dueTouched.current || !issueDate || termDays === undefined) return
+      const nextDue = addDays(issueDate, termDays)
+      lastAutoDue.current = nextDue
+      if (dueDate !== nextDue) setFormValue('dueDate', nextDue)
+    },
+    [dueDate, dueTouched, issueDate, lastAutoDue, setFormValue],
+  )
+
   return (
     <PaymentFields
       value={payment}
@@ -308,6 +333,194 @@ function PaymentGroup({
       }}
       disabled={disabled}
     />
+  )
+}
+
+type InvoiceTabsProps = {
+  ctx: CrudFormGroupComponentProps
+  value: ControlledInvoiceFormValue
+  isEdit: boolean
+  readOnly?: boolean
+  activeTab: InvoiceTab
+  setActiveTab: (tab: InvoiceTab) => void
+  setBuyer: (buyer: BuyerValue) => void
+  setLines: (lines: InvoiceLineInput[]) => void
+  setMeta: (meta: InvoiceMeta) => void
+  setPayment: (payment: PaymentValue) => void
+  dueTouched: React.MutableRefObject<boolean>
+  saleTouched: React.MutableRefObject<boolean>
+  lastAutoDue: React.MutableRefObject<string>
+  lastAutoSale: React.MutableRefObject<string>
+  t: ReturnType<typeof useT>
+}
+
+function InvoiceTabs({
+  ctx,
+  value,
+  isEdit,
+  readOnly,
+  activeTab,
+  setActiveTab,
+  setBuyer,
+  setLines,
+  setMeta,
+  setPayment,
+  dueTouched,
+  saleTouched,
+  lastAutoDue,
+  lastAutoSale,
+  t,
+}: InvoiceTabsProps) {
+  const liveCurrency =
+    (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
+    DEFAULT_CURRENCY
+  const liveIssueDate = typeof ctx.values.issueDate === 'string' ? ctx.values.issueDate.trim() : ''
+  const notesValue = typeof ctx.values.notes === 'string' ? ctx.values.notes : ''
+  const orderIdValue = typeof ctx.values.orderId === 'string' ? ctx.values.orderId : ''
+  const podatkiHasData = hasMeaningfulPlVatMeta(value.meta)
+  const hasDataHint = t('financial_pl.invoices.form.tabs.hasDataHint', 'Has data')
+  const tabsProps = {
+    value: activeTab,
+    onValueChange: (next: string) => {
+      if (isInvoiceTab(next)) setActiveTab(next)
+    },
+    variant: 'underline' as const,
+  }
+  const hasOrderId = orderIdValue.trim().length > 0
+  // The "section has data" cue is rendered inside the trigger CHILDREN (not the DS
+  // `count` prop) so it renders robustly across @open-mercato/ui Tabs versions: the
+  // sandbox runtime's Tabs did not render a count-only badge (verified live in preview),
+  // so a count-only dot silently never showed. Trigger children render everywhere.
+  const dataDot = (
+    <span aria-label={hasDataHint} className="ml-1.5 text-accent-indigo" role="img">
+      •
+    </span>
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <DateDerivationEffect
+        ctx={ctx}
+        payment={value.payment}
+        dueTouched={dueTouched}
+        saleTouched={saleTouched}
+        lastAutoDue={lastAutoDue}
+        lastAutoSale={lastAutoSale}
+      />
+      <Tabs {...tabsProps}>
+        <TabsList>
+          <TabsTrigger value="faktura">
+            {t('financial_pl.invoices.form.tabs.faktura', 'Invoice')}
+          </TabsTrigger>
+          <TabsTrigger value="podatki">
+            {t('financial_pl.invoices.form.tabs.podatki', 'Taxes & KSeF')}
+            {podatkiHasData ? dataDot : null}
+          </TabsTrigger>
+          <TabsTrigger value="dodatkowe">
+            {t('financial_pl.invoices.form.tabs.dodatkowe', 'Additional')}
+            {hasOrderId ? dataDot : null}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Panels are ALWAYS mounted and toggled with `hidden` (not the DS `TabsContent`,
+            which unmounts inactive panels). Unmounting drops uncommitted ComboboxInput
+            buffer text (buyer/product name committed only on blur) when the user types and
+            then clicks another tab — code-jury (Codex) confirmed live as data loss. Keeping
+            every panel mounted preserves all field state across tab switches. */}
+        <div
+          role="tabpanel"
+          aria-label={t('financial_pl.invoices.form.tabs.faktura', 'Invoice')}
+          className={activeTab === 'faktura' ? 'mt-2 flex flex-col gap-4' : 'hidden'}
+        >
+          <section className="rounded-lg border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-semibold">
+              {t('financial_pl.invoices.form.sections.buyer', 'Buyer (Nabywca)')}
+            </h3>
+            <BuyerFields value={value.buyer} onChange={setBuyer} disabled={readOnly} />
+          </section>
+          <section className="rounded-lg border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-semibold">
+              {t('financial_pl.invoices.form.sections.lines', 'Lines')}
+            </h3>
+            {isEdit ? (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  'financial_pl.invoices.form.linesReadOnlyOnEdit',
+                  "Line items can't be changed after the invoice is created (core limitation). To change them, create a new invoice or issue a correction (KOR). All other fields remain editable.",
+                )}
+              </p>
+            ) : null}
+            <InvoiceLinesField
+              value={value.lines}
+              onChange={setLines}
+              currencyCode={liveCurrency}
+              disabled={readOnly || isEdit}
+            />
+          </section>
+          <section className="rounded-lg border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-semibold">
+              {t('financial_pl.invoices.form.sections.payment', 'Payment / settlement')}
+            </h3>
+            <PaymentGroup
+              ctx={ctx}
+              payment={value.payment}
+              onChange={setPayment}
+              disabled={readOnly}
+              dueTouched={dueTouched}
+              lastAutoDue={lastAutoDue}
+            />
+          </section>
+          <section className="rounded-lg border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-semibold">
+              {t('financial_pl.invoices.form.fields.notes', 'Notes (Uwagi)')}
+            </h3>
+            <Textarea
+              value={notesValue}
+              onChange={(event) => ctx.setValue('notes', event.target.value)}
+              disabled={readOnly}
+              aria-label={t('financial_pl.invoices.form.fields.notes', 'Notes (Uwagi)')}
+              placeholder={t('financial_pl.invoices.form.fields.notesPlaceholder', 'Optional remarks shown on the invoice')}
+              aria-invalid={Boolean(ctx.errors?.notes)}
+            />
+            {ctx.errors?.notes ? <p className="text-sm text-destructive">{ctx.errors.notes}</p> : null}
+          </section>
+        </div>
+
+        <div
+          role="tabpanel"
+          aria-label={t('financial_pl.invoices.form.tabs.podatki', 'Taxes & KSeF')}
+          className={activeTab === 'podatki' ? 'mt-2' : 'hidden'}
+        >
+          <PlVatMetaForm
+            value={value.meta}
+            onChange={setMeta}
+            disabled={readOnly}
+            currencyCode={liveCurrency}
+            taxPointDate={liveIssueDate}
+          />
+        </div>
+
+        <div
+          role="tabpanel"
+          aria-label={t('financial_pl.invoices.form.tabs.dodatkowe', 'Additional')}
+          className={activeTab === 'dodatkowe' ? 'mt-2' : 'hidden'}
+        >
+          <section className="rounded-lg border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-semibold">
+              {t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)')}
+            </h3>
+            <Input
+              value={orderIdValue}
+              onChange={(event) => ctx.setValue('orderId', event.target.value)}
+              disabled={readOnly}
+              aria-label={t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)')}
+              aria-invalid={Boolean(ctx.errors?.orderId)}
+            />
+            {ctx.errors?.orderId ? <p className="text-sm text-destructive">{ctx.errors.orderId}</p> : null}
+          </section>
+        </div>
+      </Tabs>
+    </div>
   )
 }
 
@@ -474,9 +687,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   const t = useT()
   const router = useRouter()
   const isEdit = Boolean(invoiceId)
-  const [initialPlVatAccordionValue] = React.useState<string[]>(() =>
-    hasMeaningfulPlVatMeta(initialValue.meta) ? ['plvat'] : [],
-  )
+  const [activeTab, setActiveTab] = React.useState<InvoiceTab>('faktura')
 
   const [value, setValue] = React.useState<ControlledInvoiceFormValue>(() =>
     normalizeInvoiceFormValue(initialValue, isEdit),
@@ -536,9 +747,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency)
     if (!isEdit) {
       if (linesPayload.length < 1) {
+        setActiveTab('faktura')
         throw createCrudFormError(t('financial_pl.invoices.form.linesRequired', 'Add at least one invoice line.'))
       }
       if (value.lines.some((line) => !line.name.trim())) {
+        setActiveTab('faktura')
         throw createCrudFormError(t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.'))
       }
     }
@@ -547,16 +760,19 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const issue = header.issueDate.trim()
     const due = header.dueDate.trim()
     if (issue && due && due < issue) {
+      setActiveTab('faktura')
       throw createCrudFormError(t('financial_pl.validation.dueBeforeIssue', 'The due date cannot be earlier than the issue date.'))
     }
     if (!isEdit) {
       for (const line of value.lines) {
         const qty = Number(line.quantity)
         if (!Number.isFinite(qty) || qty <= 0) {
+          setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.'))
         }
         const price = Number(line.unitPriceNet)
         if (!Number.isFinite(price) || price < 0) {
+          setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.'))
         }
         // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
@@ -566,6 +782,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         const rateText = (line.taxRate ?? '').trim()
         const rate = Number(rateText)
         if (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100) {
+          setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.'))
         }
       }
@@ -577,11 +794,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const buyerNipRaw = (buyer.nip ?? '').trim()
     const buyerNip = normalizeNipDigits(buyerNipRaw)
     if (buyerNipRaw && !isValidPolishNip(buyerNip)) {
+      setActiveTab('faktura')
       throw createCrudFormError(t('financial_pl.validation.nipChecksumBuyer', 'The buyer NIP is invalid (checksum failed).'))
     }
     const contextNipRaw = (typeof value.meta.contextNip === 'string' ? value.meta.contextNip : '').trim()
     const contextNip = normalizeNipDigits(contextNipRaw)
     if (contextNipRaw && !isValidPolishNip(contextNip)) {
+      setActiveTab('podatki')
       throw createCrudFormError(t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).'))
     }
     // Buyer presence: a non-UPR invoice needs a name + address (matches `buildBuyer`'s 422 rule); a
@@ -593,15 +812,34 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       // Mirror buildBuyer(uprNipOnly): a UPR buyer needs EITHER a full name + address OR a NIP — a
       // name-only / address-only UPR buyer with no NIP still 422s at send (code-jury, Codex).
       if (!(hasBuyerName && hasBuyerAddress) && !buyerNip) {
+        setActiveTab('faktura')
         throw createCrudFormError(t('financial_pl.validation.buyerRequiredUpr', 'A simplified-invoice (UPR) buyer needs either a full name + address or at least a NIP.'))
       }
     } else if (!hasBuyerName || !hasBuyerAddress) {
+      setActiveTab('faktura')
       throw createCrudFormError(t('financial_pl.validation.buyerRequired', 'The buyer needs a name and an address (line 1).'))
+    }
+    // Guard the payment term: metadata.payment.termDays must be a whole number in [0, 3650] to satisfy
+    // invoicePaymentSchema. Otherwise resolve-fa3-from-invoice fail-opens on the parse error and
+    // silently DROPS the entire <Platnosc> block (method/bank/term/paid) from the KSeF invoice. SPEC-018
+    // removed the native min/step (they blocked native submit when the panel is hidden), so this JS
+    // guard restores the bound on every path — including edit mode / a manually-touched due date, where
+    // the smart derivation is suppressed so a negative term no longer trips `dueBeforeIssue` (code-jury).
+    const termDaysValue = value.payment.termDays
+    if (
+      termDaysValue !== undefined &&
+      (!Number.isInteger(termDaysValue) || termDaysValue < 0 || termDaysValue > 3650)
+    ) {
+      setActiveTab('faktura')
+      throw createCrudFormError(
+        t('financial_pl.validation.termDaysRange', 'The payment term must be a whole number of days between 0 and 3650.'),
+      )
     }
     if (
       (value.payment.paid && !cleanOptionalString(value.payment.paidDate)) ||
       (value.payment.method === 'other' && !cleanOptionalString(value.payment.methodOther))
     ) {
+      setActiveTab('faktura')
       throw createCrudFormError(
         t(
           'financial_pl.errors.payment_invalid',
@@ -720,6 +958,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     readOnly,
     router,
     runMutation,
+    setActiveTab,
     t,
     value.buyer,
     value.lines,
@@ -733,95 +972,34 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       id: 'header',
       title: t('financial_pl.invoices.form.sections.header', 'Invoice details'),
       column: 1,
-      fields: ['invoiceNumber', 'issueDate', 'dueDate', 'saleDate', 'currencyCode', 'orderId', 'notes'],
+      fields: ['invoiceNumber', 'issueDate', 'saleDate', 'dueDate', 'currencyCode'],
     },
     {
-      id: 'buyer',
-      title: t('financial_pl.invoices.form.sections.buyer', 'Buyer (Nabywca)'),
+      id: 'body',
       column: 1,
-      component: () => (
-        <BuyerFields value={value.buyer} onChange={setBuyer} disabled={readOnly} />
-      ),
-    },
-    {
-      id: 'lines',
-      title: t('financial_pl.invoices.form.sections.lines', 'Lines'),
-      column: 1,
-      // Derive the currency from the LIVE CrudForm header value (`values.currencyCode`) so editing
-      // the currency field re-stamps the lines immediately — `value.header.currencyCode` is only the
-      // initial/last-submitted value and would be stale while the user types.
-      component: (ctx) => {
-        const liveCurrency =
-          (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
-          DEFAULT_CURRENCY
-        return (
-          <div className="flex flex-col gap-3">
-            {isEdit ? (
-              <p className="text-sm text-muted-foreground">
-                {t(
-                  'financial_pl.invoices.form.linesReadOnlyOnEdit',
-                  "Line items can't be changed after the invoice is created (core limitation). To change them, create a new invoice or issue a correction (KOR). All other fields remain editable.",
-                )}
-              </p>
-            ) : null}
-            <InvoiceLinesField
-              value={value.lines}
-              onChange={setLines}
-              currencyCode={liveCurrency}
-              disabled={readOnly || isEdit}
-            />
-          </div>
-        )
-      },
-    },
-    {
-      id: 'payment',
-      title: t('financial_pl.invoices.form.sections.payment', 'Płatność / Payment'),
-      column: 1,
+      bare: true,
       component: (ctx) => (
-        <PaymentGroup
+        <InvoiceTabs
           ctx={ctx}
-          payment={value.payment}
-          onChange={setPayment}
-          disabled={readOnly}
+          value={value}
+          isEdit={isEdit}
+          readOnly={readOnly}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          setBuyer={setBuyer}
+          setLines={setLines}
+          setMeta={setMeta}
+          setPayment={setPayment}
           dueTouched={dueTouched}
           saleTouched={saleTouched}
           lastAutoDue={lastAutoDue}
           lastAutoSale={lastAutoSale}
+          t={t}
         />
       ),
     },
-    {
-      id: 'plvat',
-      column: 1,
-      bare: true,
-      component: (ctx) => {
-        const liveCurrency =
-          (typeof ctx.values.currencyCode === 'string' ? ctx.values.currencyCode.trim().toUpperCase() : '') ||
-          DEFAULT_CURRENCY
-        const liveIssueDate = typeof ctx.values.issueDate === 'string' ? ctx.values.issueDate.trim() : ''
-        return (
-          <Accordion type="multiple" defaultValue={initialPlVatAccordionValue}>
-            <AccordionItem value="plvat" variant="card">
-              <AccordionTrigger triggerIcon="chevron">
-                {t('financial_pl.invoices.form.sections.plVatAdvanced', 'VAT, KSeF & JPK details (advanced)')}
-              </AccordionTrigger>
-              <AccordionContent>
-                <PlVatMetaForm
-                  value={value.meta}
-                  onChange={setMeta}
-                  disabled={readOnly}
-                  currencyCode={liveCurrency}
-                  taxPointDate={liveIssueDate}
-                />
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        )
-      },
-    },
   ], [
-    initialPlVatAccordionValue,
+    activeTab,
     isEdit,
     readOnly,
     setBuyer,
@@ -829,10 +1007,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     setMeta,
     setPayment,
     t,
-    value.buyer,
-    value.lines,
-    value.meta,
-    value.payment,
+    value,
   ])
 
   return (
