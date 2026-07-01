@@ -407,8 +407,17 @@ export default function FinancialPlReceivedInvoicesPage() {
             />
           )}
           emptyState={
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              {t('financial_pl.received.empty', 'No received invoices yet.')}
+            <div className="flex flex-col items-center gap-3 py-10 text-center text-sm text-muted-foreground">
+              <p className="max-w-md">
+                {t(
+                  'financial_pl.received.emptyHint',
+                  'No received invoices yet. Received invoices (Faktury otrzymane) are pulled from KSeF for invoices issued to your NIP — click “Sync” and pick a date range to fetch them.',
+                )}
+              </p>
+              <Button variant="outline" onClick={openSyncDialog} disabled={isSyncing}>
+                <RefreshCw className="h-4 w-4" aria-hidden />
+                {t('financial_pl.received.sync', 'Sync')}
+              </Button>
             </div>
           }
         />

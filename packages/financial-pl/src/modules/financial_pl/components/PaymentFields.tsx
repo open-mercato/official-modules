@@ -11,6 +11,9 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { isValidBankAccount, normalizeAccountNumber } from '../lib/bank-account'
+import { lookupPolishBank } from '../lib/pl-bank-registry'
+import { isValidSwift } from '../lib/pl-format'
 
 export const PAYMENT_METHODS = [
   'cash',
@@ -53,6 +56,11 @@ function optionalNumber(raw: string): number | undefined {
 export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps) {
   const t = useT()
   const busy = Boolean(disabled)
+  const manualBankFieldsRef = React.useRef<Set<'bankName' | 'swift'>>(new Set())
+  const bankAccountRaw = (value.bankAccount ?? '').trim()
+  const bankAccountInvalid = bankAccountRaw.length > 0 && !isValidBankAccount(bankAccountRaw)
+  const swiftRaw = (value.swift ?? '').trim()
+  const swiftInvalid = swiftRaw.length > 0 && !isValidSwift(swiftRaw)
 
   const patch = React.useCallback(
     (next: Partial<PaymentValue>) => onChange({ ...value, ...next }),
@@ -66,6 +74,7 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
         delete next.bankAccount
         delete next.bankName
         delete next.swift
+        manualBankFieldsRef.current.clear()
       }
       onChange(next)
     },
@@ -155,9 +164,32 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               id="financial_pl-payment-bank-account"
               value={value.bankAccount ?? ''}
               disabled={busy}
-              onChange={(event) => patch({ bankAccount: event.target.value })}
+              aria-invalid={bankAccountInvalid || undefined}
+              onChange={(event) => {
+                const nextAccount = event.target.value
+                const info = lookupPolishBank(normalizeAccountNumber(nextAccount))
+                const patchObj: Partial<PaymentValue> = { bankAccount: nextAccount }
+                // Auto-fill bank name / SWIFT from the account. Track the CURRENT account: refresh any
+                // field the operator has NOT manually edited (so switching to a different recognized
+                // bank updates it — code-jury Codex), and never clobber a manually-typed value. An
+                // unrecognized/incomplete account leaves prior values untouched (no clear-flicker while
+                // typing, and a manual/foreign entry is preserved).
+                if (info) {
+                  if (!manualBankFieldsRef.current.has('bankName')) patchObj.bankName = info.name
+                  if (!manualBankFieldsRef.current.has('swift')) patchObj.swift = info.swift
+                }
+                patch(patchObj)
+              }}
               placeholder="PL00 0000 0000 0000 0000 0000 0000"
             />
+            {bankAccountInvalid ? (
+              <span className="text-xs text-status-error-text">
+                {t(
+                  'financial_pl.validation.bankAccount',
+                  'Enter a valid IBAN or 26-digit Polish account number (NRB).',
+                )}
+              </span>
+            ) : null}
           </div>
           <div className="flex flex-col gap-1.5">
             <label className={labelClass} htmlFor="financial_pl-payment-bank-name">
@@ -167,7 +199,10 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               id="financial_pl-payment-bank-name"
               value={value.bankName ?? ''}
               disabled={busy}
-              onChange={(event) => patch({ bankName: event.target.value })}
+              onChange={(event) => {
+                manualBankFieldsRef.current.add('bankName')
+                patch({ bankName: event.target.value })
+              }}
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -178,8 +213,17 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               id="financial_pl-payment-swift"
               value={value.swift ?? ''}
               disabled={busy}
-              onChange={(event) => patch({ swift: event.target.value.toUpperCase() })}
+              aria-invalid={swiftInvalid || undefined}
+              onChange={(event) => {
+                manualBankFieldsRef.current.add('swift')
+                patch({ swift: event.target.value.toUpperCase() })
+              }}
             />
+            {swiftInvalid ? (
+              <span className="text-xs text-status-error-text">
+                {t('financial_pl.validation.swift', 'Enter a valid SWIFT/BIC (8 or 11 characters).')}
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}

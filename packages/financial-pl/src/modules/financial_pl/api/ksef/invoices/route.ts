@@ -68,6 +68,20 @@ type InvoiceListItem = {
   invoiceKind: string | null
 }
 
+type InvoiceListSummary = {
+  count: number
+  totalNet: string
+  totalGross: string
+  capped: boolean
+}
+
+const EMPTY_SUMMARY: InvoiceListSummary = {
+  count: 0,
+  totalNet: '0.00',
+  totalGross: '0.00',
+  capped: false,
+}
+
 function toIsoDate(value: string | Date | null | undefined): string | null {
   if (!value) return null
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
@@ -90,18 +104,20 @@ export async function GET(req: Request) {
     const parsed = ksefInvoiceListQuerySchema.safeParse({
       search: url.searchParams.get('search') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
+      issueDateFrom: url.searchParams.get('issueDateFrom') ?? undefined,
+      issueDateTo: url.searchParams.get('issueDateTo') ?? undefined,
       page: url.searchParams.get('page') ?? undefined,
       pageSize: url.searchParams.get('pageSize') ?? undefined,
     })
     if (!parsed.success) throw new CrudHttpError(400, { error: 'Invalid query', details: parsed.error.issues })
-    const { search, status, page, pageSize } = parsed.data
+    const { search, status, issueDateFrom, issueDateTo, page, pageSize } = parsed.data
 
     // Org-scope contract (mirror submissions/route.ts): filterIds===null ⇒ super-admin (all orgs in
     // the tenant); filterIds===[] ⇒ no accessible orgs ⇒ return nothing — NEVER drop the org filter,
     // which would leak other orgs' invoices. The queryEngine still requires tenantId.
     const orgIds = scope ? scope.filterIds : auth.orgId ? [auth.orgId] : null
     if (Array.isArray(orgIds) && orgIds.length === 0) {
-      return NextResponse.json({ items: [], total: 0, page, pageSize })
+      return NextResponse.json({ items: [], total: 0, page, pageSize, summary: EMPTY_SUMMARY })
     }
     const organizationIds = Array.isArray(orgIds) && orgIds.length > 0 ? orgIds : undefined
 
@@ -130,7 +146,7 @@ export async function GET(req: Request) {
       )
       statusInvoiceIds = Array.from(new Set(statusRows.map((row) => row.salesInvoiceId)))
       if (statusInvoiceIds.length === 0) {
-        return NextResponse.json({ items: [], total: 0, page, pageSize })
+        return NextResponse.json({ items: [], total: 0, page, pageSize, summary: EMPTY_SUMMARY })
       }
     }
 
@@ -138,6 +154,12 @@ export async function GET(req: Request) {
     const filters: Record<string, unknown> = {}
     if (search) filters.invoice_number = { $ilike: `%${escapeLikePattern(search)}%` }
     if (statusInvoiceIds) filters.id = { $in: statusInvoiceIds }
+    if (issueDateFrom || issueDateTo) {
+      const range: Record<string, string> = {}
+      if (issueDateFrom) range.$gte = issueDateFrom
+      if (issueDateTo) range.$lte = issueDateTo
+      filters.issue_date = range
+    }
 
     const result = await queryEngine.query<SalesInvoiceRow>(E.sales.sales_invoice, {
       tenantId: auth.tenantId,
@@ -149,6 +171,30 @@ export async function GET(req: Request) {
     const invoices = result.items ?? []
     const total = typeof result.total === 'number' ? result.total : invoices.length
     const invoiceIds = invoices.map((invoice) => invoice.id)
+
+    const summaryResult = await queryEngine.query<SalesInvoiceRow>(E.sales.sales_invoice, {
+      tenantId: auth.tenantId,
+      ...(organizationIds ? { organizationIds } : {}),
+      filters,
+      page: { page: 1, pageSize: 1000 },
+      sort: [{ field: 'issue_date', dir: 'desc' }],
+    })
+    const summaryRows = summaryResult.items ?? []
+    const summaryTotal = typeof summaryResult.total === 'number' ? summaryResult.total : summaryRows.length
+    let totalNet = 0
+    let totalGross = 0
+    for (const row of summaryRows) {
+      const net = Number(row.grand_total_net_amount)
+      if (Number.isFinite(net)) totalNet += net
+      const gross = Number(row.grand_total_gross_amount)
+      if (Number.isFinite(gross)) totalGross += gross
+    }
+    const summary: InvoiceListSummary = {
+      count: summaryTotal,
+      totalNet: totalNet.toFixed(2),
+      totalGross: totalGross.toFixed(2),
+      capped: summaryTotal > summaryRows.length,
+    }
 
     // Join the latest KsefSubmission + the SalesInvoicePlMeta row per invoice — same batched ($in),
     // own-module, org/tenant-scoped logic as the response enricher (data/enrichers.ts). Project ONLY
@@ -222,7 +268,7 @@ export async function GET(req: Request) {
       }
     })
 
-    return NextResponse.json({ items, total, page, pageSize })
+    return NextResponse.json({ items, total, page, pageSize, summary })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
@@ -251,6 +297,12 @@ const listResponseSchema = z.object({
   total: z.number(),
   page: z.number(),
   pageSize: z.number(),
+  summary: z.object({
+    count: z.number(),
+    totalNet: z.string(),
+    totalGross: z.string(),
+    capped: z.boolean(),
+  }),
 })
 const errorSchema = z.object({ error: z.string() })
 
@@ -261,7 +313,7 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'List sales invoices with their KSeF status',
       description:
-        'Self-contained invoice list for the financial_pl backoffice: reads core SalesInvoice rows for the current org/tenant via the QueryEngine and joins the latest KsefSubmission + SalesInvoicePlMeta (batched, no N+1) to attach KSeF status/number/UPO availability/offline deadline and the PL invoice kind. Supports ?search= (invoice number), ?status= (KSeF submission status), ?page=, ?pageSize= (default 25, max 100). Org/tenant scoped; encrypted columns are never projected into the response. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
+        'Self-contained invoice list for the financial_pl backoffice: reads core SalesInvoice rows for the current org/tenant via the QueryEngine and joins the latest KsefSubmission + SalesInvoicePlMeta (batched, no N+1) to attach KSeF status/number/UPO availability/offline deadline and the PL invoice kind. Supports ?search= (invoice number), ?status= (KSeF submission status), ?issueDateFrom=, ?issueDateTo=, ?page=, ?pageSize= (default 25, max 100). The response includes a summary over the full filtered period with count, net/gross totals, and a capped flag when totals cover only the first 1000 matching invoices. Org/tenant scoped; encrypted columns are never projected into the response. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
       responses: [{ status: 200, description: 'Invoice list with KSeF status', schema: listResponseSchema }],
       errors: [{ status: 400, description: 'Invalid query / status filter', schema: errorSchema }],
     },

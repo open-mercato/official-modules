@@ -15,6 +15,7 @@ import {
 import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { normalizeDecimalInput } from '../lib/pl-format'
 
 // Standard Polish VAT rates offered as quick-picks; any other numeric rate goes through "Other".
 // `zw`/`np`/`oo` (exempt / not-taxed / reverse-charge) are intentionally NOT line options: core's
@@ -141,11 +142,11 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
 
   const loadProductSuggestions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
     const q = (query ?? '').trim()
-    if (q.length < 2) return []
     try {
-      const res = await apiCall<CatalogProductsResponse>(
-        `/api/catalog/products?search=${encodeURIComponent(q)}&pageSize=10`,
-      )
+      const url = q.length >= 2
+        ? `/api/catalog/products?search=${encodeURIComponent(q)}&pageSize=10`
+        : `/api/catalog/products?pageSize=10`
+      const res = await apiCall<CatalogProductsResponse>(url)
       const items = res.ok && Array.isArray(res.result?.items) ? res.result.items : []
       if (items.length === 0) return []
       const options: ComboboxOption[] = []
@@ -284,7 +285,7 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
                   inputMode="decimal"
                   value={line.quantity}
                   disabled={busy}
-                  onChange={(event) => updateLine(index, { quantity: event.target.value })}
+                  onChange={(event) => updateLine(index, { quantity: normalizeDecimalInput(event.target.value) })}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -329,7 +330,7 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
                   inputMode="decimal"
                   value={line.unitPriceNet}
                   disabled={busy}
-                  onChange={(event) => updateLine(index, { unitPriceNet: event.target.value })}
+                  onChange={(event) => updateLine(index, { unitPriceNet: normalizeDecimalInput(event.target.value) })}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -361,7 +362,7 @@ export function InvoiceLinesField({ value, onChange, currencyCode, disabled }: I
                     inputMode="decimal"
                     value={taxValue}
                     disabled={busy}
-                    onChange={(event) => updateLine(index, { taxRate: event.target.value })}
+                    onChange={(event) => updateLine(index, { taxRate: normalizeDecimalInput(event.target.value) })}
                   />
                 ) : null}
               </div>

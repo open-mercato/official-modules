@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Send } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Send } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
@@ -23,8 +23,8 @@ type InvoiceListItem = {
   issueDate?: string | null
   dueDate?: string | null
   currencyCode?: string | null
-  grandTotalNetAmount?: number | null
-  grandTotalGrossAmount?: number | null
+  grandTotalNetAmount?: string | number | null
+  grandTotalGrossAmount?: string | number | null
   status?: string | null
   ksefStatus?: string | null
   ksefNumber?: string | null
@@ -33,11 +33,19 @@ type InvoiceListItem = {
   invoiceKind?: string | null
 }
 
+type InvoiceListSummary = {
+  count: number
+  totalNet: string
+  totalGross: string
+  capped: boolean
+}
+
 type InvoiceListResponse = {
   items?: InvoiceListItem[]
   total?: number
   page?: number
   pageSize?: number
+  summary?: InvoiceListSummary
 }
 
 type BatchSendResponse = {
@@ -58,6 +66,13 @@ type InvoiceRow = {
   ksefStatus: string | null
   ksefNumber: string | null
   offlineSendDeadlineAt: string | null
+}
+
+type PeriodMode = 'month' | 'all'
+
+type MonthPeriod = {
+  year: number
+  month: number
 }
 
 const PAGE_SIZE = 50
@@ -126,6 +141,31 @@ function formatCurrency(
   }
 }
 
+function currentMonthPeriod(): MonthPeriod {
+  const now = new Date()
+  return { year: now.getFullYear(), month: now.getMonth() }
+}
+
+function addMonths(period: MonthPeriod, delta: number): MonthPeriod {
+  const date = new Date(Date.UTC(period.year, period.month + delta, 1))
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() }
+}
+
+function firstDayOfMonth(period: MonthPeriod): string {
+  return new Date(Date.UTC(period.year, period.month, 1)).toISOString().slice(0, 10)
+}
+
+function lastDayOfMonth(period: MonthPeriod): string {
+  return new Date(Date.UTC(period.year, period.month + 1, 0)).toISOString().slice(0, 10)
+}
+
+function formatMonthLabel(period: MonthPeriod): string {
+  return new Date(Date.UTC(period.year, period.month, 1)).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
 function isInvoiceEligibleForKsefBatch(row: InvoiceRow): boolean {
   if (!isInvoiceIssued(row.status)) return false
   const ksefStatus = row.ksefStatus?.trim().toLowerCase()
@@ -141,6 +181,9 @@ export default function FinancialPlInvoicesPage() {
   const [total, setTotal] = React.useState(0)
   const [search, setSearch] = React.useState('')
   const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const [selectedPeriod, setSelectedPeriod] = React.useState<MonthPeriod>(() => currentMonthPeriod())
+  const [periodMode, setPeriodMode] = React.useState<PeriodMode>('month')
+  const [summary, setSummary] = React.useState<InvoiceListSummary | null>(null)
   const [isLoading, setLoading] = React.useState(false)
   const [reloadToken, setReloadToken] = React.useState(0)
 
@@ -178,8 +221,12 @@ export default function FinancialPlInvoicesPage() {
     if (search.trim()) params.set('search', search.trim())
     const status = typeof filterValues.status === 'string' ? filterValues.status.trim() : ''
     if (status) params.set('status', status)
+    if (periodMode === 'month') {
+      params.set('issueDateFrom', firstDayOfMonth(selectedPeriod))
+      params.set('issueDateTo', lastDayOfMonth(selectedPeriod))
+    }
     return params.toString()
-  }, [filterValues, page, search])
+  }, [filterValues, page, periodMode, search, selectedPeriod])
 
   const mapInvoice = React.useCallback((item: InvoiceListItem): InvoiceRow => {
     const id = typeof item.id === 'string' ? item.id : ''
@@ -206,17 +253,20 @@ export default function FinancialPlInvoicesPage() {
         flash(t('financial_pl.invoices.list.errors.load', 'Failed to load invoices.'), 'error')
         setRows([])
         setTotal(0)
+        setSummary(null)
         return
       }
       const payload = call.result ?? {}
       const items = Array.isArray(payload.items) ? payload.items : []
       setRows(items.map((item) => mapInvoice(item)))
       setTotal(typeof payload.total === 'number' ? payload.total : items.length)
+      setSummary(payload.summary ?? null)
     } catch (err) {
       console.error('financial_pl.invoices.list', err)
       flash(t('financial_pl.invoices.list.errors.load', 'Failed to load invoices.'), 'error')
       setRows([])
       setTotal(0)
+      setSummary(null)
     } finally {
       setLoading(false)
     }
@@ -238,6 +288,29 @@ export default function FinancialPlInvoicesPage() {
 
   const handleFiltersClear = React.useCallback(() => {
     setFilterValues({})
+    setPage(1)
+  }, [])
+
+  const handlePreviousMonth = React.useCallback(() => {
+    setSelectedPeriod((period) => addMonths(period, -1))
+    setPeriodMode('month')
+    setPage(1)
+  }, [])
+
+  const handleNextMonth = React.useCallback(() => {
+    setSelectedPeriod((period) => addMonths(period, 1))
+    setPeriodMode('month')
+    setPage(1)
+  }, [])
+
+  const handleThisMonth = React.useCallback(() => {
+    setSelectedPeriod(currentMonthPeriod())
+    setPeriodMode('month')
+    setPage(1)
+  }, [])
+
+  const handleAllInvoices = React.useCallback(() => {
+    setPeriodMode('all')
     setPage(1)
   }, [])
 
@@ -374,9 +447,77 @@ export default function FinancialPlInvoicesPage() {
     [t],
   )
 
+  const monthLabel = React.useMemo(
+    () => formatMonthLabel(selectedPeriod),
+    [selectedPeriod],
+  )
+  const summaryText = React.useMemo(() => {
+    if (!summary) return null
+    const parts = [
+      t('financial_pl.invoices.list.summary.count', '{count} invoices', { count: summary.count }),
+      `${t('financial_pl.invoices.list.summary.net', 'Net')} ${formatCurrency(Number(summary.totalNet), null)}`,
+      `${t('financial_pl.invoices.list.summary.gross', 'Gross')} ${formatCurrency(Number(summary.totalGross), null)}`,
+    ]
+    if (summary.capped) {
+      parts.push(t('financial_pl.invoices.list.summaryCapped', 'Totals cover the first 1000 invoices'))
+    }
+    return parts.join(' · ')
+  }, [summary, t])
+
   return (
     <Page>
       <PageBody>
+        <div className="mb-4 flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={periodMode === 'all'}
+              aria-label={t('financial_pl.invoices.list.period.prev', 'Previous month')}
+              onClick={handlePreviousMonth}
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <span
+              className={
+                periodMode === 'all'
+                  ? 'min-w-40 text-center text-sm font-semibold text-muted-foreground'
+                  : 'min-w-40 text-center text-sm font-semibold'
+              }
+              aria-disabled={periodMode === 'all'}
+            >
+              {monthLabel}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={periodMode === 'all'}
+              aria-label={t('financial_pl.invoices.list.period.next', 'Next month')}
+              onClick={handleNextMonth}
+            >
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={periodMode === 'month' ? 'default' : 'outline'}
+                onClick={handleThisMonth}
+              >
+                {t('financial_pl.invoices.list.period.thisMonth', 'This month')}
+              </Button>
+              <Button
+                type="button"
+                variant={periodMode === 'all' ? 'default' : 'outline'}
+                onClick={handleAllInvoices}
+              >
+                {t('financial_pl.invoices.list.period.allInvoices', 'All invoices')}
+              </Button>
+            </div>
+          </div>
+          {summaryText ? (
+            <div className="text-sm text-muted-foreground lg:text-right">{summaryText}</div>
+          ) : null}
+        </div>
         <DataTable<InvoiceRow>
           stickyActionsColumn
           title={(

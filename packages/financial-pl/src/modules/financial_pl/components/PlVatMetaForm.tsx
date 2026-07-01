@@ -21,6 +21,7 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidPolishNip } from '../lib/nip'
 import { normalizeNipDigits } from '../lib/company-lookup'
+import { normalizeDecimalInput } from '../lib/pl-format'
 import {
   GTU_CODES,
   JPK_PROCEDURE_MARKINGS,
@@ -302,6 +303,12 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
   const contextNipInvalid =
     (value.contextNip ?? '').trim().length > 0 && !isValidPolishNip(normalizeNipDigits(value.contextNip ?? ''))
 
+  // Inline FX-rate validation — a non-empty exchange rate must be a positive number (parity with the
+  // other numeric fields; a garbage rate would otherwise silently break the PLN-converted VAT).
+  const exchangeRateRaw = (value.exchangeRate ?? '').trim()
+  const exchangeRateNum = Number(exchangeRateRaw)
+  const exchangeRateInvalid = exchangeRateRaw.length > 0 && !(Number.isFinite(exchangeRateNum) && exchangeRateNum > 0)
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
@@ -422,8 +429,10 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                       inputMode="decimal"
                       value={value.exchangeRate ?? ''}
                       disabled={busy}
+                      aria-invalid={exchangeRateInvalid || undefined}
                       onChange={(event) => {
-                        patch({ exchangeRate: event.target.value.length ? event.target.value : null })
+                        const next = normalizeDecimalInput(event.target.value)
+                        patch({ exchangeRate: next.length ? next : null })
                         if (nbpLookupState !== 'idle') setNbpLookupState('idle')
                       }}
                       placeholder="4.3210"
@@ -448,6 +457,11 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                   {nbpLookupState === 'unavailable' ? (
                     <span className="text-xs text-muted-foreground">
                       {t('financial_pl.fields.nbpUnavailable', 'NBP rate unavailable — enter manually')}
+                    </span>
+                  ) : null}
+                  {exchangeRateInvalid ? (
+                    <span className="text-xs text-status-error-text">
+                      {t('financial_pl.validation.exchangeRate', 'Enter a positive exchange rate.')}
                     </span>
                   ) : null}
                 </div>

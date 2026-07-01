@@ -9,6 +9,7 @@ import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inp
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidPolishNip } from '../lib/nip'
+import { isValidPolishPostalCode } from '../lib/pl-format'
 import { normalizeNipDigits, parseWykazAddress, type CompanyLookupResult } from '../lib/company-lookup'
 import type { BuyerValue } from '../lib/buyer-snapshot'
 
@@ -91,6 +92,9 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
   // Flag any non-empty NIP field whose value isn't a valid NIP — including letters that normalise to ''
   // — so the inline state matches the save-time validation (code-jury r2, Codex).
   const nipInvalid = (value.nip ?? '').trim().length > 0 && !isValidPolishNip(nipDigits)
+  const postalRaw = (value.postalCode ?? '').trim()
+  const countryIsPl = ((value.countryCode ?? 'PL').trim().toUpperCase() || 'PL') === 'PL'
+  const postalInvalid = postalRaw.length > 0 && countryIsPl && !isValidPolishPostalCode(postalRaw)
 
   const trimText = React.useCallback((next?: string | null) => (next ?? '').trim(), [])
 
@@ -143,10 +147,13 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
   const loadCustomerSuggestions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
     const q = (query ?? '').trim()
     customerSuggestionsRef.current = new Map()
-    if (q.length < 2) return []
     try {
+      const url =
+        q.length >= 2
+          ? `/api/customers/companies?search=${encodeURIComponent(q)}&pageSize=10`
+          : `/api/customers/companies?pageSize=10`
       const res = await apiCall<{ items?: CustomerCompanyListItem[] }>(
-        `/api/customers/companies?search=${encodeURIComponent(q)}&pageSize=10`,
+        url,
       )
       if (!res.ok || !res.result?.items) return []
       const nextMap = new Map<string, CustomerSuggestion>()
@@ -168,20 +175,22 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
     }
   }, [trimText])
 
-  // Fill only BLANK fields — never silently overwrite what the operator already typed. Merges
-  // against `valueRef.current` (the latest value), so edits made during the in-flight lookup survive.
+  // Preserve a typed name, but prefer register address values on explicit lookup. Merge against
+  // `valueRef.current` (the latest value), so edits made during the in-flight lookup survive.
   const applyCompany = React.useCallback(
     (company: Extract<CompanyLookupResult, { ok: true }>['company']) => {
       const latest = valueRef.current
       const parsed = parseWykazAddress(company.address)
       const keepOr = (current: string | undefined, incoming: string) =>
         current && current.trim() ? current : incoming
+      const preferIncoming = (incoming: string, current: string | undefined) =>
+        incoming && incoming.trim() ? incoming : (current ?? '')
       onChange({
         ...latest,
         companyName: keepOr(latest.companyName, company.name ?? ''),
-        addressLine1: keepOr(latest.addressLine1, parsed.addressLine1),
-        postalCode: keepOr(latest.postalCode, parsed.postalCode),
-        city: keepOr(latest.city, parsed.city),
+        addressLine1: preferIncoming(parsed.addressLine1, latest.addressLine1),
+        postalCode: preferIncoming(parsed.postalCode, latest.postalCode),
+        city: preferIncoming(parsed.city, latest.city),
         countryCode: latest.countryCode && latest.countryCode.trim() ? latest.countryCode : 'PL',
       })
       setVatStatus(company.statusVat)
@@ -356,7 +365,13 @@ export function BuyerFields({ value, onChange, disabled }: BuyerFieldsProps) {
               patch({ postalCode: event.target.value })
             }}
             placeholder="00-000"
+            aria-invalid={postalInvalid || undefined}
           />
+          {postalInvalid ? (
+            <span className="text-xs text-status-error-text">
+              {t('financial_pl.validation.postalCode', 'Enter a valid Polish postal code (NN-NNN).')}
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-col gap-1.5">
           <label className={labelClass} htmlFor="financial_pl-buyer-city">

@@ -28,6 +28,8 @@ import {
   type PaymentValue,
 } from '../../../../../components/PaymentFields'
 import { isValidPolishNip } from '../../../../../lib/nip'
+import { searchCurrencies, isValidCurrencyCode } from '../../../../../lib/currencies'
+import { isValidBankAccount } from '../../../../../lib/bank-account'
 import { normalizeNipDigits } from '../../../../../lib/company-lookup'
 
 /** Header fields edited directly through the core sales invoice contract. */
@@ -378,7 +380,7 @@ function InvoiceTabs({
   const notesValue = typeof ctx.values.notes === 'string' ? ctx.values.notes : ''
   const orderIdValue = typeof ctx.values.orderId === 'string' ? ctx.values.orderId : ''
   const podatkiHasData = hasMeaningfulPlVatMeta(value.meta)
-  const hasDataHint = t('financial_pl.invoices.form.tabs.hasDataHint', 'Has data')
+  const hasDataHint = t('financial_pl.invoices.form.tabs.hasDataHint', 'This section contains data')
   const tabsProps = {
     value: activeTab,
     onValueChange: (next: string) => {
@@ -392,9 +394,12 @@ function InvoiceTabs({
   // sandbox runtime's Tabs did not render a count-only badge (verified live in preview),
   // so a count-only dot silently never showed. Trigger children render everywhere.
   const dataDot = (
-    <span aria-label={hasDataHint} className="ml-1.5 text-accent-indigo" role="img">
-      •
-    </span>
+    <span
+      className="ml-1.5 inline-block size-1.5 shrink-0 rounded-full bg-accent-indigo align-middle"
+      role="img"
+      aria-label={hasDataHint}
+      title={hasDataHint}
+    />
   )
 
   return (
@@ -744,6 +749,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues & { notes?: string }) => {
     if (readOnly) return
     const effectiveCurrency = header.currencyCode.trim().toUpperCase() || DEFAULT_CURRENCY
+    if (!isValidCurrencyCode(effectiveCurrency)) {
+      throw createCrudFormError(t('financial_pl.validation.currencyInvalid', 'Select a valid ISO currency code.'))
+    }
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency)
     if (!isEdit) {
       if (linesPayload.length < 1) {
@@ -834,6 +842,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       throw createCrudFormError(
         t('financial_pl.validation.termDaysRange', 'The payment term must be a whole number of days between 0 and 3650.'),
       )
+    }
+    if (value.payment.method === 'transfer') {
+      const acct = (value.payment.bankAccount ?? '').trim()
+      if (acct && !isValidBankAccount(acct)) {
+        setActiveTab('faktura')
+        throw createCrudFormError(t('financial_pl.validation.bankAccount', 'Enter a valid IBAN or 26-digit Polish account number (NRB).'))
+      }
     }
     if (
       (value.payment.paid && !cleanOptionalString(value.payment.paidDate)) ||
@@ -1013,6 +1028,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
   return (
     <div className="flex flex-col gap-4">
       {lockNotice}
+      {!isEdit ? (
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          {value.meta.issuedOutsideKsef
+            ? t('financial_pl.invoices.create.ksefHintOutside', 'This invoice is marked “issued outside KSeF” (Wystawiona poza KSeF), so it will NOT be sent to KSeF. It will be saved as a draft.')
+            : t('financial_pl.invoices.create.ksefHint', 'Creating saves the invoice as a draft — it is NOT sent to KSeF automatically. Open the saved invoice and use “Send to KSeF” to file it (unless you mark it “Wystawiona poza KSeF” in the Taxes & KSeF tab).')}
+        </div>
+      ) : null}
       <CrudForm
         title={isEdit
           ? t('financial_pl.invoices.edit.title', 'Edit invoice')
@@ -1048,8 +1070,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           {
             id: 'currencyCode',
             label: t('financial_pl.invoices.form.fields.currencyCode', 'Currency'),
-            type: 'text',
+            type: 'combobox',
             required: true,
+            allowCustomValues: false,
+            placeholder: t('financial_pl.invoices.form.fields.currencyPlaceholder', 'Search currency (e.g. PLN, EUR)…'),
+            loadOptions: async (query?: string) => searchCurrencies(query),
           },
           {
             id: 'orderId',

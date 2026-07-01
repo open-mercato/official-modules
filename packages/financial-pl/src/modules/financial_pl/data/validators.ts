@@ -571,6 +571,8 @@ export const ksefSubmissionListQuerySchema = z.object({
 export const ksefInvoiceListQuerySchema = z.object({
   search: z.string().trim().min(1).max(256).optional(),
   status: z.string().trim().min(1).max(64).optional(),
+  issueDateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  issueDateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(25),
 })
