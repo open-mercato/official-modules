@@ -6,11 +6,15 @@ import {
   asRecord,
   asString,
   assertMappedVatRates,
+  buildAnnotations,
   buildBuyer,
   buildLines,
   buildSeller,
   buildVatBreakdown,
   buildZamowienie,
+  lineCarriesTaxRate,
+  normalizeMarginScheme,
+  readPriceModeFromMetadata,
   scaled4ToMoney2dp,
   toIsoDate,
   toScaled4,
@@ -59,6 +63,8 @@ const OSS_COUNTRY_REQUIRED_DEFAULT =
   'An OSS (WSTO_EE) correction requires the consumption-country code. Set the OSS destination country before submitting it to KSeF.'
 const OSS_RATE_REQUIRED_DEFAULT =
   'An OSS (WSTO_EE) correction line requires a destination-country VAT rate. Set the consumption-country rate (or a known EU member state) before submitting it to KSeF.'
+const MARGIN_SCHEME_MIXED_LINES_DEFAULT = 'marginSchemeMixedLines'
+const MARGIN_SCHEME_REQUIRES_PLN_DEFAULT = 'marginSchemeRequiresPln'
 
 function tr(deps: ResolveKorDeps, key: string, fallback: string): string {
   return deps.translate?.(key, fallback) ?? fallback
@@ -196,6 +202,11 @@ export async function resolveFa3FromCreditMemo(
   const ossProcedure = isTruthyFlag(originalMeta?.oss_procedure)
   const consumptionCountry = asString(originalMeta?.consumption_country_code) ?? undefined
   const exchangeRate = asString(originalMeta?.exchange_rate) ?? undefined
+  const marginScheme = normalizeMarginScheme(originalMeta?.margin_scheme)
+  const priceMode =
+    readPriceModeFromMetadata(creditMemo.metadata) === 'gross'
+      ? 'gross'
+      : readPriceModeFromMetadata(original.metadata)
 
   // DataWystFaKorygowanej MUST be the ORIGINAL invoice's issue date — never the credit
   // memo's (that would file a false statutory date). It is required by the FA(3) XSD, so a
@@ -218,6 +229,20 @@ export async function resolveFa3FromCreditMemo(
       code: 'correction_lines_required',
     })
   }
+  if (marginScheme) {
+    if (currencyCode !== 'PLN') {
+      throw new CrudHttpError(422, {
+        error: tr(deps, 'financial_pl.errors.margin_scheme_requires_pln', MARGIN_SCHEME_REQUIRES_PLN_DEFAULT),
+        code: 'marginSchemeRequiresPln',
+      })
+    }
+    if (lineRows.some(lineCarriesTaxRate)) {
+      throw new CrudHttpError(422, {
+        error: tr(deps, 'financial_pl.errors.margin_scheme_mixed_lines', MARGIN_SCHEME_MIXED_LINES_DEFAULT),
+        code: 'marginSchemeMixedLines',
+      })
+    }
+  }
 
   const seller = buildSeller(deps)
   const buyer = buildBuyer(original, deps)
@@ -228,7 +253,11 @@ export async function resolveFa3FromCreditMemo(
     effectiveLineRows,
     negateMoney(creditMemo.grand_total_net_amount),
     negateMoney(creditMemo.tax_total_amount),
-    exchangeRate ? { fxRate: exchangeRate } : {},
+    {
+      ...(exchangeRate ? { fxRate: exchangeRate } : {}),
+      priceMode,
+      ...(marginScheme ? { marginScheme, headerGrossField: negateMoney(creditMemo.grand_total_gross_amount) } : {}),
+    },
   )
   assertMappedVatRates(vatBreakdown, deps.translate)
 
@@ -278,6 +307,7 @@ export async function resolveFa3FromCreditMemo(
     }
   }
   const order = invoiceKind === 'KOR_ZAL' ? buildZamowienie(asRecord(originalMeta).order_snapshot) : undefined
+  const annotations = marginScheme ? buildAnnotations(originalMeta) : undefined
 
   const fa3Invoice: Fa3InvoiceInput = {
     invoiceNumber: asString(creditMemo.credit_memo_number) ?? creditMemoId,
@@ -288,7 +318,7 @@ export async function resolveFa3FromCreditMemo(
     buyer,
     vatBreakdown,
     totalGross,
-    lines: buildLines(effectiveLineRows),
+    lines: buildLines(effectiveLineRows, { priceMode, ...(marginScheme ? { marginScheme } : {}) }),
     correction: {
       reason,
       correctedInvoices: [
@@ -302,6 +332,7 @@ export async function resolveFa3FromCreditMemo(
       ...(exchangeRate && isAdvanceOrSettlementCorrection ? { preCorrectionFxRate: exchangeRate } : {}),
     },
     ...(order ? { order } : {}),
+    ...(annotations ? { annotations } : {}),
     ...(exchangeRate ? { exchangeRate } : {}),
   }
 
@@ -395,6 +426,9 @@ async function loadNegatedCreditMemoLines(
     })
     const batch = res.items ?? []
     for (const line of batch) {
+      const metadata = asRecord(line.metadata)
+      const discountAmount = asString(metadata.discountAmount) ?? asString(metadata.discount_amount) ?? asString(line.discount_amount)
+      const discountPercent = asString(metadata.discountPercent) ?? asString(metadata.discount_percent) ?? asString(line.discount_percent)
       rows.push({
         line_number: line.line_number,
         name: asString(line.name) ?? asString(line.description) ?? undefined,
@@ -405,9 +439,13 @@ async function loadNegatedCreditMemoLines(
         // and a negative quantity reads naturally (a unit price is never negative).
         quantity: negateQuantity(line.quantity),
         unit_price_net: asString(line.unit_price_net) ?? '0',
+        unit_price_gross: asString(line.unit_price_gross) ?? undefined,
         total_net_amount: negateMoney(line.total_net_amount),
+        total_gross_amount: negateMoney(line.total_gross_amount),
         tax_amount: negateMoney(line.tax_amount),
         tax_rate: line.tax_rate,
+        ...(discountAmount ? { discount_amount: negateMoney(discountAmount) } : {}),
+        ...(discountPercent ? { discount_percent: discountPercent } : {}),
       })
     }
     if (batch.length < pageSize) break

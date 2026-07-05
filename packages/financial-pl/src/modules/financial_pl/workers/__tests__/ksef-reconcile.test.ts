@@ -11,6 +11,8 @@ jest.mock('../../lib/ksef-auth', () => ({
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
   findOneWithDecryption: (em: { findOne: (...args: unknown[]) => Promise<unknown> }, entity: unknown, where: unknown) =>
     em.findOne(entity, where),
+  findWithDecryption: (em: { find: (...args: unknown[]) => Promise<unknown> }, entity: unknown, where: unknown, options?: unknown) =>
+    em.find(entity, where, options),
 }))
 
 import { emitFinancialPlEvent } from '../../events'

@@ -9,6 +9,7 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { KsefSubmission, SalesInvoicePlMeta } from '../../../data/entities'
 import type { JpkTypDokumentuColumn } from '../../../data/entities'
@@ -84,6 +85,9 @@ function projectMeta(record: SalesInvoicePlMeta) {
     gtuCodes: record.gtuCodes ?? [],
     procedureMarkings,
     typDokumentu: record.docType ?? null,
+    marginScheme: record.marginScheme ?? null,
+    marginPurchaseCost: record.marginPurchaseCost ?? null,
+    marginVatRate: record.marginVatRate != null ? Number(record.marginVatRate) : null,
     badDebtReliefPeriod: record.badDebtReliefPeriod ?? null,
     badDebtTerminPlatnosci: record.badDebtTerminPlatnosci ?? null,
     ksefStatus: record.ksefStatus,
@@ -117,7 +121,13 @@ export async function GET(req: Request) {
     if (Array.isArray(orgIds) && orgIds.length > 0) filter.organizationId = { $in: orgIds }
 
     const em = (container.resolve('em') as EntityManager).fork()
-    const record = await em.findOne(SalesInvoicePlMeta, filter)
+    const record = await findOneWithDecryption(
+      em,
+      SalesInvoicePlMeta,
+      filter,
+      undefined,
+      { tenantId: auth.tenantId, organizationId: Array.isArray(orgIds) && orgIds.length === 1 ? orgIds[0] : null },
+    )
     return NextResponse.json({ item: record ? projectMeta(record) : null })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
@@ -172,12 +182,18 @@ export async function PUT(req: Request) {
     }
 
     const em = (container.resolve('em') as EntityManager).fork()
-    const existing = await em.findOne(SalesInvoicePlMeta, {
-      organizationId,
-      tenantId: auth.tenantId,
-      salesInvoiceId: parsed.salesInvoiceId,
-      deletedAt: null,
-    })
+    const existing = await findOneWithDecryption(
+      em,
+      SalesInvoicePlMeta,
+      {
+        organizationId,
+        tenantId: auth.tenantId,
+        salesInvoiceId: parsed.salesInvoiceId,
+        deletedAt: null,
+      },
+      undefined,
+      { organizationId, tenantId: auth.tenantId },
+    )
 
     // Optimistic lock on the existing meta row (additive — a request without the
     // header is a no-op; a stale edit gets the structured 409). Skipped on first
@@ -254,6 +270,10 @@ export async function PUT(req: Request) {
       }
     }
     if (parsed.typDokumentu !== undefined) record.docType = (parsed.typDokumentu ?? null) as JpkTypDokumentuColumn | null
+    if (parsed.marginScheme !== undefined) record.marginScheme = parsed.marginScheme ?? null
+    if (parsed.marginPurchaseCost !== undefined) record.marginPurchaseCost = parsed.marginPurchaseCost ?? null
+    if (parsed.marginVatRate !== undefined)
+      record.marginVatRate = parsed.marginVatRate == null ? null : String(parsed.marginVatRate)
     if (parsed.badDebtReliefPeriod !== undefined) record.badDebtReliefPeriod = parsed.badDebtReliefPeriod ?? null
     if (parsed.badDebtTerminPlatnosci !== undefined)
       record.badDebtTerminPlatnosci = parsed.badDebtTerminPlatnosci ? new Date(parsed.badDebtTerminPlatnosci) : null

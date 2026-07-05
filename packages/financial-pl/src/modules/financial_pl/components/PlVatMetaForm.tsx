@@ -40,6 +40,8 @@ import type {
 
 /** Procedure-markings flag map (one optional boolean per JPK procedure code). */
 export type ProcedureMarkings = Partial<Record<JpkProcedureMarking, boolean>>
+export type MarginScheme = 'travel' | 'used_goods' | 'art' | 'collectibles'
+export type MarginVatRate = 0 | 5 | 8 | 23
 
 /**
  * Controlled value shape for the PL-VAT metadata form. Mirrors the form-renderable
@@ -63,6 +65,9 @@ export type InvoiceMeta = {
   gtuCodes?: GtuCode[]
   procedureMarkings?: ProcedureMarkings
   typDokumentu?: JpkTypDokumentu | null
+  marginScheme?: MarginScheme | null
+  marginPurchaseCost?: string | null
+  marginVatRate?: MarginVatRate | null
   badDebtReliefPeriod?: string | null
   badDebtTerminPlatnosci?: string | null
 }
@@ -77,6 +82,13 @@ const OSS_CONSUMPTION_COUNTRIES = [
 ] as const
 
 const NONE_VALUE = '__none__'
+const MARGIN_VAT_RATES: readonly MarginVatRate[] = [23, 8, 5, 0]
+const MARGIN_SCHEME_TO_PROCEDURE = {
+  travel: 'MR_T',
+  used_goods: 'MR_UZ',
+  art: 'MR_UZ',
+  collectibles: 'MR_UZ',
+} as const satisfies Record<MarginScheme, JpkProcedureMarking>
 
 const labelClass = 'text-sm font-medium text-foreground'
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -111,6 +123,9 @@ function computePlVatAccordionOpenSections(value: InvoiceMeta, includeFx: boolea
   if (
     (value.gtuCodes?.length ?? 0) > 0 ||
     Object.values(value.procedureMarkings ?? {}).some(Boolean) ||
+    value.marginScheme ||
+    value.marginPurchaseCost ||
+    value.marginVatRate != null ||
     value.typDokumentu
   ) {
     open.push('jpk')
@@ -120,6 +135,21 @@ function computePlVatAccordionOpenSections(value: InvoiceMeta, includeFx: boolea
   }
 
   return open
+}
+
+export function applyMarginSchemeToMeta(value: InvoiceMeta, marginScheme: MarginScheme | null): InvoiceMeta {
+  const procedureMarkings: ProcedureMarkings = { ...(value.procedureMarkings ?? {}) }
+  procedureMarkings.MR_T = false
+  procedureMarkings.MR_UZ = false
+  if (marginScheme) procedureMarkings[MARGIN_SCHEME_TO_PROCEDURE[marginScheme]] = true
+
+  return {
+    ...value,
+    marginScheme,
+    marginPurchaseCost: marginScheme ? value.marginPurchaseCost ?? null : null,
+    marginVatRate: marginScheme ? value.marginVatRate ?? 23 : null,
+    procedureMarkings,
+  }
 }
 
 /**
@@ -182,9 +212,11 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
   const invoiceKind = value.invoiceKind ?? 'vat'
   const gtuCodes = value.gtuCodes ?? []
   const procedureMarkings = value.procedureMarkings ?? {}
+  const marginScheme = value.marginScheme ?? null
   const advancePayments = value.advancePayments ?? []
   const advanceRefs = value.advanceRefs ?? []
   const normalizedTaxPointDate = (taxPointDate ?? '').trim()
+  const marginSchemeRequiresPln = normalizedCurrencyCode !== '' && normalizedCurrencyCode !== 'PLN'
   const hasNbpCurrency = /^[A-Z]{3}$/.test(normalizedCurrencyCode)
   const hasNbpDate = DATE_ONLY_RE.test(normalizedTaxPointDate)
   const nbpInputsReady = hasNbpCurrency && normalizedCurrencyCode !== 'PLN' && hasNbpDate
@@ -746,6 +778,90 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
           </AccordionTrigger>
           <AccordionContent>
             <div className="flex flex-col gap-4">
+              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">
+                  {t('financial_pl.fields.marginScheme', 'Margin scheme')}
+                </legend>
+                <div className="flex flex-col gap-1.5">
+                  <label className={labelClass} htmlFor="financial_pl-margin-scheme">
+                    {t('financial_pl.fields.marginScheme', 'Margin scheme')}
+                  </label>
+                  <Select
+                    value={marginScheme ?? NONE_VALUE}
+                    disabled={busy || marginSchemeRequiresPln}
+                    onValueChange={(next) =>
+                      patch(applyMarginSchemeToMeta(value, next === NONE_VALUE ? null : (next as MarginScheme)))
+                    }
+                  >
+                    <SelectTrigger id="financial_pl-margin-scheme" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE_VALUE}>
+                        {t('financial_pl.fields.marginScheme.none', 'None')}
+                      </SelectItem>
+                      <SelectItem value="travel">
+                        {t('financial_pl.fields.marginScheme.travel', 'travel agencies')}
+                      </SelectItem>
+                      <SelectItem value="used_goods">
+                        {t('financial_pl.fields.marginScheme.used_goods', 'second-hand goods')}
+                      </SelectItem>
+                      <SelectItem value="art">
+                        {t('financial_pl.fields.marginScheme.art', 'works of art')}
+                      </SelectItem>
+                      <SelectItem value="collectibles">
+                        {t('financial_pl.fields.marginScheme.collectibles', 'collectibles and antiques')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {marginSchemeRequiresPln ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t('financial_pl.validation.marginSchemeRequiresPln', 'Margin-scheme invoices are available only in PLN.')}
+                    </span>
+                  ) : null}
+                </div>
+                {marginScheme ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label className={labelClass} htmlFor="financial_pl-margin-purchase-cost">
+                        {t('financial_pl.fields.marginPurchaseCost', 'Purchase cost (for JPK)')}
+                      </label>
+                      <Input
+                        id="financial_pl-margin-purchase-cost"
+                        inputMode="decimal"
+                        value={value.marginPurchaseCost ?? ''}
+                        disabled={busy}
+                        onChange={(event) => {
+                          const next = normalizeDecimalInput(event.target.value)
+                          patch({ marginPurchaseCost: next.length ? next : null })
+                        }}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className={labelClass} htmlFor="financial_pl-margin-vat-rate">
+                        {t('financial_pl.fields.marginVatRate', 'VAT rate on margin')}
+                      </label>
+                      <Select
+                        value={String(value.marginVatRate ?? 23)}
+                        disabled={busy}
+                        onValueChange={(next) => patch({ marginVatRate: Number(next) as MarginVatRate })}
+                      >
+                        <SelectTrigger id="financial_pl-margin-vat-rate" className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MARGIN_VAT_RATES.map((rate) => (
+                            <SelectItem key={rate} value={String(rate)}>
+                              {rate}%
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ) : null}
+              </fieldset>
+
               <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.gtuGroup', 'GTU markings (JPK)')}

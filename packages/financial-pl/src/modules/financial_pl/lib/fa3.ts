@@ -24,7 +24,7 @@ export type Fa3VatRate = number | 'zw' | 'np' | 'oo'
  * synthetic `'oss'` key used to roll every OSS / WSTO_EE consumer-country line into the
  * single dedicated `P_13_5`/`P_14_5` bucket (no `W` PLN-converted variant).
  */
-export type Fa3VatBucketKey = Fa3VatRate | 'oss'
+export type Fa3VatBucketKey = Fa3VatRate | 'oss' | 'margin'
 
 export type Fa3Party = {
   nip?: string
@@ -63,6 +63,8 @@ export type Fa3Annotations = {
   vatExemptionBasis?: string
   /** Self-billing (samofakturowanie, art. 106d) → P_17 ('1' when self-billed, else '2'). */
   selfBilling?: boolean
+  /** VAT marża procedure subtype → PMarzy choice. */
+  marginScheme?: 'travel' | 'used_goods' | 'art' | 'collectibles'
 }
 
 export type Fa3Line = {
@@ -71,8 +73,12 @@ export type Fa3Line = {
   unit?: string
   quantity: string
   unitNetPrice: string
+  unitGrossPrice?: string
+  discount?: string
   netValue: string
+  grossValue?: string
   vatRate: Fa3VatRate
+  marginRow?: boolean
   /**
    * OSS / WSTO_EE destination-country VAT rate as a decimal string (e.g. '19' for DE 19%).
    * When set, the line is an OSS line: `P_12` is omitted and `P_12_XII` + `Procedura=WSTO_EE`
@@ -244,6 +250,8 @@ const VAT_NET_FIELD: Record<string, string> = {
   // intra-EU services (art. 100 ust. 1 pkt 4), a different statutory field — emitting
   // the reverse-charge net under P_13_9 would mis-state the invoice.
   oo: 'P_13_10',
+  // VAT marża gross total (art. 119/120) → P_13_11. It is not a rate bucket and carries no P_14.
+  margin: 'P_13_11',
 }
 
 const VAT_TAX_FIELD: Record<string, string> = {
@@ -276,6 +284,7 @@ const VAT_FIELD_RANK: Record<string, number> = {
   zw: 7,
   np: 8,
   oo: 10,
+  margin: 11,
 }
 
 /**
@@ -424,18 +433,24 @@ function renderVatBreakdown(entries: Fa3VatBreakdownEntry[]): string {
 
 function renderLine(line: Fa3Line): string {
   const isOss = line.ossRate !== undefined
+  const isGrossMethod = line.unitGrossPrice !== undefined || line.grossValue !== undefined || line.marginRow
   const parts: string[] = [
     '<FaWiersz>',
     el('NrWierszaFa', String(line.lineNumber)),
     el('P_7', line.name),
     el('P_8A', line.unit ?? 'szt'),
     el('P_8B', line.quantity),
-    el('P_9A', line.unitNetPrice),
-    el('P_11', line.netValue),
   ]
+  if (!isGrossMethod) parts.push(el('P_9A', line.unitNetPrice))
+  if (line.unitGrossPrice !== undefined) parts.push(el('P_9B', line.unitGrossPrice))
+  if (line.discount !== undefined) parts.push(el('P_10', line.discount))
+  if (!isGrossMethod) parts.push(el('P_11', line.netValue))
+  if (line.grossValue !== undefined) parts.push(el('P_11A', line.grossValue))
   // OSS / WSTO_EE: the closed-enum `P_12` is omitted in favour of `P_12_XII` (the
   // destination-country rate as a decimal). A domestic line keeps `P_12`.
-  if (isOss) {
+  if (line.marginRow) {
+    // VAT marża rows disclose gross values only; no stawka (`P_12`) is emitted.
+  } else if (isOss) {
     parts.push(el('P_12_XII', line.ossRate as string))
   } else {
     parts.push(el('P_12', fa3LineVatRateValue(line.vatRate)))
@@ -446,6 +461,13 @@ function renderLine(line: Fa3Line): string {
   if (line.fxRate !== undefined) parts.push(el('KursWaluty', line.fxRate))
   parts.push('</FaWiersz>')
   return parts.join('')
+}
+
+const MARGIN_SCHEME_FIELD: Record<NonNullable<Fa3Annotations['marginScheme']>, string> = {
+  travel: 'P_PMarzy_2',
+  used_goods: 'P_PMarzy_3_1',
+  art: 'P_PMarzy_3_2',
+  collectibles: 'P_PMarzy_3_3',
 }
 
 /**
@@ -469,6 +491,10 @@ function renderAnnotations(annotations?: Fa3Annotations): string {
   const zwolnienie = exemptionBasis
     ? '<Zwolnienie>' + el('P_19', '1') + el('P_19C', exemptionBasis) + '</Zwolnienie>'
     : '<Zwolnienie>' + el('P_19N', '1') + '</Zwolnienie>'
+  const marginScheme = annotations?.marginScheme
+  const pMarzy = marginScheme
+    ? '<PMarzy>' + el('P_PMarzy', '1') + el(MARGIN_SCHEME_FIELD[marginScheme], '1') + '</PMarzy>'
+    : '<PMarzy>' + el('P_PMarzyN', '1') + '</PMarzy>'
   return [
     '<Adnotacje>',
     el('P_16', '2'),
@@ -478,7 +504,7 @@ function renderAnnotations(annotations?: Fa3Annotations): string {
     zwolnienie,
     '<NoweSrodkiTransportu>' + el('P_22N', '1') + '</NoweSrodkiTransportu>',
     el('P_23', '2'),
-    '<PMarzy>' + el('P_PMarzyN', '1') + '</PMarzy>',
+    pMarzy,
     '</Adnotacje>',
   ].join('')
 }

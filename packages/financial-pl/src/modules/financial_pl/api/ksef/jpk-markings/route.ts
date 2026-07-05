@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { KsefSubmission, SalesInvoicePlMeta } from '../../../data/entities'
 import { deriveJpkVatMarking } from '../../../lib/jpk-vat-marking'
@@ -56,10 +57,16 @@ export async function GET(req: Request) {
 
     // Single batched read of the latest INVOICE submission per id (no N+1; corrections
     // are excluded via document_kind so they never mislabel the original invoice).
-    const submissions = await em.find(
+    const decryptionScope = {
+      tenantId: auth.tenantId,
+      organizationId: Array.isArray(orgIds) && orgIds.length === 1 ? orgIds[0] : null,
+    }
+    const submissions = await findWithDecryption(
+      em,
       KsefSubmission,
       { ...baseScope, salesInvoiceId: { $in: ids }, documentKind: 'invoice' },
       { orderBy: { createdAt: 'desc' }, fields: ['salesInvoiceId', 'status', 'ksefNumber', 'mode', 'createdAt'] },
+      decryptionScope,
     )
     const submissionByInvoice = new Map<string, (typeof submissions)[number]>()
     for (const submission of submissions) {
@@ -68,7 +75,13 @@ export async function GET(req: Request) {
       }
     }
 
-    const metaRows = await em.find(SalesInvoicePlMeta, { ...baseScope, salesInvoiceId: { $in: ids } })
+    const metaRows = await findWithDecryption(
+      em,
+      SalesInvoicePlMeta,
+      { ...baseScope, salesInvoiceId: { $in: ids } },
+      undefined,
+      decryptionScope,
+    )
     const metaByInvoice = new Map<string, SalesInvoicePlMeta>()
     for (const row of metaRows) metaByInvoice.set(row.salesInvoiceId, row)
 

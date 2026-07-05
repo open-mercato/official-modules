@@ -10,6 +10,7 @@ jest.mock('@open-mercato/core/generated-shims/entities.ids.generated', () => ({
   M: {},
 }))
 
+import { buildFa3Xml } from '../fa3'
 import { resolveFa3FromCreditMemo } from '../resolve-fa3-from-credit-memo'
 import type { ResolveFa3QueryEngine } from '../resolve-fa3-from-invoice'
 
@@ -196,6 +197,108 @@ describe('resolveFa3FromCreditMemo', () => {
     expect(invoice.correction?.preCorrectionPaymentAmount).toBe('100.00')
     expect(invoice.lines).toHaveLength(1)
     expect(invoice.lines[0].netValue).toBe('-40.00')
+  })
+
+  it('full-reversal discounted KOR negates P_10 and P_11', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'sales:sales_credit_memo': [{ ...CREDIT_MEMO, grand_total_net_amount: '180.0000', tax_total_amount: '41.4000' }],
+      'sales:sales_credit_memo_line': [
+        {
+          line_number: 1,
+          name: 'Towar z rabatem',
+          quantity: '2',
+          unit_price_net: '100.0000',
+          total_net_amount: '180.0000',
+          tax_amount: '41.4000',
+          tax_rate: '23.0000',
+          metadata: { discountAmount: '20.00', discountPercent: '10.00' },
+        },
+      ],
+    })
+
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    const xml = buildFa3Xml({ model: { ...invoice, createdAt: '2026-06-27T10:00:00Z' }, lines: invoice.lines })
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_8B>-2</P_8B><P_9A>100.00</P_9A><P_10>-20.00</P_10><P_11>-180.00</P_11>')
+    expect(invoice.vatBreakdown).toEqual([{ rate: 23, net: '-180.00', vat: '-41.40' }])
+  })
+
+  it('full-reversal gross-mode KOR emits negated P_9B/P_11A', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'sales:sales_credit_memo': [
+        {
+          ...CREDIT_MEMO,
+          metadata: { priceMode: 'gross' },
+          grand_total_net_amount: '16.2400',
+          tax_total_amount: '3.7400',
+          grand_total_gross_amount: '19.9800',
+        },
+      ],
+      'sales:sales_credit_memo_line': [
+        {
+          line_number: 1,
+          name: 'Cena brutto',
+          quantity: '2',
+          unit_price_net: '8.1220',
+          unit_price_gross: '9.9900',
+          total_gross_amount: '19.9800',
+          tax_rate: '23.0000',
+        },
+      ],
+    })
+
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    const xml = buildFa3Xml({ model: { ...invoice, createdAt: '2026-06-27T10:00:00Z' }, lines: invoice.lines })
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_8B>-2</P_8B><P_9B>9.99</P_9B><P_11A>-19.98</P_11A><P_12>23</P_12>')
+    expect(line).not.toContain('<P_9A>')
+    expect(line).not.toContain('<P_11>')
+    expect(invoice.vatBreakdown).toEqual([{ rate: 23, net: '-16.24', vat: '-3.74' }])
+  })
+
+  it('full-reversal marża KOR carries PMarzy and negated P_13_11', async () => {
+    const rows = baseRows({
+      ...ACCEPTED_ORIGINAL,
+      'sales:sales_credit_memo': [
+        {
+          ...CREDIT_MEMO,
+          metadata: { priceMode: 'gross' },
+          grand_total_net_amount: '180.0000',
+          tax_total_amount: '0.0000',
+          grand_total_gross_amount: '180.0000',
+        },
+      ],
+      'sales:sales_credit_memo_line': [
+        {
+          line_number: 1,
+          name: 'Towar używany',
+          quantity: '2',
+          unit_price_gross: '100.0000',
+          total_gross_amount: '180.0000',
+          metadata: { discountAmount: '20.00' },
+        },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [{ sales_invoice_id: 'inv-1', margin_scheme: 'used_goods', deleted_at: null }],
+    })
+
+    const { invoice } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      args,
+    )
+    const xml = buildFa3Xml({ model: { ...invoice, createdAt: '2026-06-27T10:00:00Z' }, lines: invoice.lines })
+    expect(xml).toContain('<PMarzy><P_PMarzy>1</P_PMarzy><P_PMarzy_3_1>1</P_PMarzy_3_1></PMarzy>')
+    expect(xml).toContain('<P_13_11>-180.00</P_13_11>')
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_9B>100.00</P_9B><P_10>-20.00</P_10><P_11A>-180.00</P_11A>')
+    expect(line).not.toContain('<P_12>')
   })
 
   it('OSS correction (jury rule 2): a KOR of an OSS original carries the OSS line fields + P_13_5/P_14_5 + FX (negated)', async () => {

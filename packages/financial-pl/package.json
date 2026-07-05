@@ -75,9 +75,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@open-mercato/core": "0.6.3-develop.3778.1.25fdb35f2e",
-    "@open-mercato/shared": "0.6.3-develop.3778.1.25fdb35f2e",
-    "@open-mercato/ui": "0.6.3-develop.3778.1.25fdb35f2e",
+    "@open-mercato/core": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/shared": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/ui": "0.6.6-develop.6366.1.fba69a7362",
     "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
     "@types/qrcode": "^1.5.6",

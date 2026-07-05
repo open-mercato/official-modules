@@ -80,6 +80,7 @@ describe('financial_pl.ksef_submission.send idempotency', () => {
         status: { $in: ['queued', 'processing', 'accepted'] },
         deletedAt: null,
       }),
+      undefined,
     )
   })
 

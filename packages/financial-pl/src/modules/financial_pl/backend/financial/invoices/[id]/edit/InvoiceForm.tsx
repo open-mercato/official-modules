@@ -15,9 +15,13 @@ import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuarde
 import { createCrudFormError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import {
+  convertLinesPriceMode,
   InvoiceLinesField,
+  isValidDiscountPercent,
   withComputedTotals,
   type InvoiceLineInput,
+  type MarginScheme,
+  type PriceMode,
 } from '../../../../../components/InvoiceLinesField'
 import { PlVatMetaForm, type InvoiceMeta } from '../../../../../components/PlVatMetaForm'
 import { BuyerFields, buyerToSnapshot, type BuyerValue } from '../../../../../components/BuyerFields'
@@ -51,6 +55,8 @@ export type InvoiceFormValue = {
   /** Payment & settlement — persisted to core SalesInvoice `metadata.payment`. */
   payment?: PaymentValue
   meta: InvoiceMeta
+  /** Invoice-wide pricing mode — persisted as core SalesInvoice `metadata.priceMode`. */
+  priceMode?: PriceMode
   /** Invoice note (Uwagi) — persisted in core SalesInvoice `metadata.notes`. */
   notes?: string
   /** The core invoice `metadata` loaded in edit mode — carried so `buyerSnapshot` merges without
@@ -60,9 +66,10 @@ export type InvoiceFormValue = {
   metaUpdatedAt?: string | null
 }
 
-type ControlledInvoiceFormValue = Omit<InvoiceFormValue, 'header' | 'payment'> & {
+type ControlledInvoiceFormValue = Omit<InvoiceFormValue, 'header' | 'payment' | 'priceMode'> & {
   header: InvoiceHeaderValues & { saleDate: string }
   payment: PaymentValue
+  priceMode: PriceMode
 }
 
 export type InvoiceFormProps = {
@@ -121,6 +128,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPaymentMethod(value: unknown): value is PaymentMethod {
   return typeof value === 'string' && (PAYMENT_METHODS as readonly string[]).includes(value)
+}
+
+function isPriceMode(value: unknown): value is PriceMode {
+  return value === 'net' || value === 'gross'
+}
+
+function priceModeFromMetadata(metadata: Record<string, unknown> | null | undefined): PriceMode {
+  return isPriceMode(metadata?.priceMode) ? metadata.priceMode : 'net'
 }
 
 function cleanOptionalString(value: unknown): string | undefined {
@@ -189,6 +204,9 @@ function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boole
   const issueDate = initialValue.header.issueDate || todayInput()
   const saleDate = initialValue.header.saleDate || metadataDate(initialValue.metadata, 'saleDate') || issueDate
   const dueDate = initialValue.header.dueDate || (isEdit ? '' : addDays(issueDate, payment.termDays ?? DEFAULT_TERM_DAYS))
+  const marginScheme = initialValue.meta.marginScheme ?? null
+  const priceMode = marginScheme ? 'gross' : initialValue.priceMode ?? priceModeFromMetadata(initialValue.metadata)
+  const currencyCode = initialValue.header.currencyCode || DEFAULT_CURRENCY
   return {
     ...initialValue,
     header: {
@@ -196,9 +214,13 @@ function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boole
       issueDate,
       dueDate,
       saleDate,
-      currencyCode: initialValue.header.currencyCode || DEFAULT_CURRENCY,
+      currencyCode,
     },
+    lines: initialValue.lines.map((line, index) =>
+      withComputedTotals(line, currencyCode, index + 1, priceMode, marginScheme),
+    ),
     payment,
+    priceMode,
   }
 }
 
@@ -349,6 +371,7 @@ type InvoiceTabsProps = {
   setLines: (lines: InvoiceLineInput[]) => void
   setMeta: (meta: InvoiceMeta) => void
   setPayment: (payment: PaymentValue) => void
+  setPriceMode: (priceMode: PriceMode) => void
   dueTouched: React.MutableRefObject<boolean>
   saleTouched: React.MutableRefObject<boolean>
   lastAutoDue: React.MutableRefObject<string>
@@ -367,6 +390,7 @@ function InvoiceTabs({
   setLines,
   setMeta,
   setPayment,
+  setPriceMode,
   dueTouched,
   saleTouched,
   lastAutoDue,
@@ -460,6 +484,9 @@ function InvoiceTabs({
               onChange={setLines}
               currencyCode={liveCurrency}
               disabled={readOnly || isEdit}
+              priceMode={value.priceMode}
+              onPriceModeChange={setPriceMode}
+              marginScheme={value.meta.marginScheme ?? null}
             />
           </section>
           <section className="rounded-lg border bg-card p-4 space-y-3">
@@ -548,12 +575,13 @@ export function emptyInvoiceFormValue(): InvoiceFormValue {
     header: emptyHeader(),
     buyer: { countryCode: 'PL' },
     lines: [withComputedTotals(
-      { name: '', quantity: '1', quantityUnit: 'szt.', unitPriceNet: '0', taxRate: '23', currencyCode: DEFAULT_CURRENCY, kind: 'product' },
+      { name: '', quantity: '1', quantityUnit: 'szt.', unitPriceNet: '0', unitPriceGross: '0', taxRate: '23', currencyCode: DEFAULT_CURRENCY, kind: 'product' },
       DEFAULT_CURRENCY,
       1,
     )],
     payment: defaultPayment(),
     meta: {},
+    priceMode: 'net',
     notes: '',
     metadata: null,
   }
@@ -573,10 +601,27 @@ function buildInvoiceHeaderPayload(header: InvoiceHeaderValues): Record<string, 
   return payload
 }
 
+function roundMoneyNumber(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.round(value * 100) / 100
+}
+
+function moneyNumber(value: string | undefined): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? roundMoneyNumber(numeric) : 0
+}
+
 /** Map editor lines to the core invoice-line wire shape (drop empty optionals). */
-function buildLinesPayload(lines: InvoiceLineInput[], currencyCode: string): Array<Record<string, unknown>> {
+function buildLinesPayload(
+  lines: InvoiceLineInput[],
+  currencyCode: string,
+  priceMode: PriceMode,
+  marginScheme?: MarginScheme | null,
+): Array<Record<string, unknown>> {
+  const marginMode = Boolean(marginScheme)
   return lines.map((line, index) => {
-    const computed = withComputedTotals(line, currencyCode, index + 1)
+    const computed = withComputedTotals(line, currencyCode, index + 1, marginMode ? 'gross' : priceMode, marginScheme)
+    const discountPercent = Number((line.discountPercent ?? '').trim() || 0)
     const row: Record<string, unknown> = {
       name: computed.name,
       quantity: computed.quantity,
@@ -584,12 +629,17 @@ function buildLinesPayload(lines: InvoiceLineInput[], currencyCode: string): Arr
       currencyCode,
       lineNumber: index + 1,
       kind: computed.kind ?? 'product',
+      discountPercent: Number.isFinite(discountPercent) ? discountPercent : 0,
+      discountAmount: moneyNumber(computed.discountAmount),
+      totalNetAmount: moneyNumber(computed.totalNetAmount),
+      totalGrossAmount: moneyNumber(computed.totalGrossAmount),
+    }
+    if ((marginMode || priceMode === 'gross') && computed.unitPriceGross) {
+      row.unitPriceGross = moneyNumber(computed.unitPriceGross)
     }
     if (computed.quantityUnit && computed.quantityUnit.trim()) row.quantityUnit = computed.quantityUnit.trim()
-    if (computed.taxRate != null && computed.taxRate !== '') row.taxRate = computed.taxRate
-    if (computed.taxAmount) row.taxAmount = computed.taxAmount
-    if (computed.totalNetAmount) row.totalNetAmount = computed.totalNetAmount
-    if (computed.totalGrossAmount) row.totalGrossAmount = computed.totalGrossAmount
+    if (!marginMode && computed.taxRate != null && computed.taxRate !== '') row.taxRate = computed.taxRate
+    if (!marginMode) row.taxAmount = moneyNumber(computed.taxAmount)
     const sku = line.sku?.trim()
     if (sku) row.sku = sku
     const metadata = line.metadata ? { ...line.metadata } : {}
@@ -599,6 +649,39 @@ function buildLinesPayload(lines: InvoiceLineInput[], currencyCode: string): Arr
     if (Object.keys(metadata).length > 0) row.metadata = metadata
     return row
   })
+}
+
+function buildInvoiceTotalsPayload(
+  lines: InvoiceLineInput[],
+  currencyCode: string,
+  priceMode: PriceMode,
+  payment: PaymentValue,
+  marginScheme?: MarginScheme | null,
+): Record<string, number> {
+  const marginMode = Boolean(marginScheme)
+  const totals = lines.reduce(
+    (sum, line, index) => {
+      const computed = withComputedTotals(line, currencyCode, index + 1, marginMode ? 'gross' : priceMode, marginScheme)
+      sum.net += moneyNumber(computed.totalNetAmount)
+      sum.gross += moneyNumber(computed.totalGrossAmount)
+      sum.tax += marginMode ? 0 : moneyNumber(computed.taxAmount)
+      sum.discount += moneyNumber(computed.discountAmount)
+      return sum
+    },
+    { net: 0, gross: 0, tax: 0, discount: 0 },
+  )
+  const grandGross = roundMoneyNumber(totals.gross)
+  const paidTotalAmount = payment.paid ? grandGross : 0
+  return {
+    subtotalNetAmount: roundMoneyNumber(totals.net),
+    subtotalGrossAmount: grandGross,
+    discountTotalAmount: roundMoneyNumber(totals.discount),
+    taxTotalAmount: marginMode ? 0 : roundMoneyNumber(totals.tax),
+    grandTotalNetAmount: roundMoneyNumber(totals.net),
+    grandTotalGrossAmount: grandGross,
+    paidTotalAmount,
+    outstandingAmount: roundMoneyNumber(grandGross - paidTotalAmount),
+  }
 }
 
 /** Map the controlled PL-VAT meta value to the invoice-meta PUT body (keyed by salesInvoiceId). */
@@ -624,6 +707,14 @@ function buildMetaPayload(
   } else {
     if (body.exchangeRate === '') body.exchangeRate = null
     if (body.exchangeRateDate === '') body.exchangeRateDate = null
+  }
+  if (body.marginScheme === '') body.marginScheme = null
+  if (!body.marginScheme) {
+    body.marginPurchaseCost = null
+    body.marginVatRate = null
+  } else {
+    if (body.marginPurchaseCost === '') body.marginPurchaseCost = null
+    if (body.marginVatRate == null) body.marginVatRate = 23
   }
   if (!ADVANCE_INVOICE_KINDS.has(normalizedInvoiceKind)) {
     body.advancePayments = []
@@ -654,9 +745,12 @@ function hasMeaningfulPlVatMeta(meta: InvoiceMeta): boolean {
     hasNonEmptyString(meta.consumptionCountryCode) ||
     hasNonEmptyString(meta.exchangeRate) ||
     hasNonEmptyString(meta.exchangeRateDate) ||
+    hasNonEmptyString(meta.marginPurchaseCost) ||
     hasNonEmptyString(meta.badDebtReliefPeriod) ||
     hasNonEmptyString(meta.badDebtTerminPlatnosci) ||
-    Boolean(meta.typDokumentu)
+    Boolean(meta.typDokumentu) ||
+    Boolean(meta.marginScheme) ||
+    meta.marginVatRate != null
   ) {
     return true
   }
@@ -734,13 +828,30 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     setValue((prev) => ({ ...prev, lines }))
   }, [])
   const setMeta = React.useCallback((meta: InvoiceMeta) => {
-    setValue((prev) => ({ ...prev, meta }))
+    setValue((prev) => {
+      const marginScheme = meta.marginScheme ?? null
+      const priceMode: PriceMode = marginScheme ? 'gross' : prev.priceMode
+      const sourceLines = marginScheme && prev.priceMode !== 'gross'
+        ? convertLinesPriceMode(prev.lines, 'gross', marginScheme)
+        : prev.lines
+      return {
+        ...prev,
+        meta,
+        priceMode,
+        lines: sourceLines.map((line, index) =>
+          withComputedTotals(line, prev.header.currencyCode || DEFAULT_CURRENCY, index + 1, priceMode, marginScheme),
+        ),
+      }
+    })
   }, [])
   const setBuyer = React.useCallback((buyer: BuyerValue) => {
     setValue((prev) => ({ ...prev, buyer }))
   }, [])
   const setPayment = React.useCallback((payment: PaymentValue) => {
     setValue((prev) => ({ ...prev, payment }))
+  }, [])
+  const setPriceMode = React.useCallback((priceMode: PriceMode) => {
+    setValue((prev) => ({ ...prev, priceMode: prev.meta.marginScheme ? 'gross' : priceMode }))
   }, [])
 
   // --- Submit handler shared by create + edit -----------------------------------------------
@@ -752,7 +863,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     if (!isValidCurrencyCode(effectiveCurrency)) {
       throw createCrudFormError(t('financial_pl.validation.currencyInvalid', 'Select a valid ISO currency code.'))
     }
-    const linesPayload = buildLinesPayload(value.lines, effectiveCurrency)
+    const marginScheme = value.meta.marginScheme ?? null
+    const effectivePriceMode: PriceMode = marginScheme ? 'gross' : value.priceMode
+    const linesPayload = buildLinesPayload(value.lines, effectiveCurrency, effectivePriceMode, marginScheme)
     if (!isEdit) {
       if (linesPayload.length < 1) {
         setActiveTab('faktura')
@@ -762,6 +875,18 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         setActiveTab('faktura')
         throw createCrudFormError(t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.'))
       }
+    }
+    if (marginScheme && effectiveCurrency !== DEFAULT_CURRENCY) {
+      setActiveTab('podatki')
+      throw createCrudFormError(
+        t('financial_pl.validation.marginSchemeRequiresPln', 'Margin-scheme invoices are available only in PLN.'),
+      )
+    }
+    if (marginScheme && effectivePriceMode !== 'gross') {
+      setActiveTab('faktura')
+      throw createCrudFormError(
+        t('financial_pl.validation.grossModeMixed', 'Margin-scheme invoices must use gross price entry.'),
+      )
     }
 
     // --- Commercial-grade validations (SPEC-014) — block save before a 422 at KSeF send --------
@@ -778,10 +903,14 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.'))
         }
-        const price = Number(line.unitPriceNet)
+        const price = Number(effectivePriceMode === 'gross' ? line.unitPriceGross : line.unitPriceNet)
         if (!Number.isFinite(price) || price < 0) {
           setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.'))
+        }
+        if (!isValidDiscountPercent(line.discountPercent)) {
+          setActiveTab('faktura')
+          throw createCrudFormError(t('financial_pl.validation.discountInvalid', 'A line discount must be between 0 and 100 with up to 2 decimals.'))
         }
         // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
         // rate (e.g. "Other…" chosen but left empty) must NOT silently persist as 0%: a real 0% line is
@@ -789,7 +918,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
         // exemption / reverse-charge live in the Polish-VAT section (code-jury, Codex + Kimi).
         const rateText = (line.taxRate ?? '').trim()
         const rate = Number(rateText)
-        if (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100) {
+        if (!marginScheme && (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100)) {
           setActiveTab('faktura')
           throw createCrudFormError(t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.'))
         }
@@ -874,6 +1003,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     const cleanPayment = buildPaymentMetadata(value.payment)
     if (cleanPayment) mergedMetadata.payment = cleanPayment
     else delete mergedMetadata.payment
+    mergedMetadata.priceMode = effectivePriceMode
     const saleDate = (header.saleDate ?? '').trim()
     if (saleDate) mergedMetadata.saleDate = saleDate
     else delete mergedMetadata.saleDate
@@ -882,6 +1012,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
       Object.keys(mergedMetadata).length || hadMetadata ? { metadata: mergedMetadata } : {}
 
     const headerPayload = buildInvoiceHeaderPayload(header)
+    const totalsPayload = buildInvoiceTotalsPayload(
+      value.lines,
+      effectiveCurrency,
+      effectivePriceMode,
+      value.payment,
+      marginScheme,
+    )
 
     if (isEdit && invoiceId) {
       // EDIT — core 0.6.5 ignores lines, so only persist header + metadata here.
@@ -920,11 +1057,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     // CREATE — step 1: POST the base invoice (core persists lines + auto-numbers).
     const createCall = await runMutation({
       operation: () =>
-        apiCall<CreateResponse>('/api/sales/invoices', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ...headerPayload, ...metadataPayload, lines: linesPayload }),
-        }),
+          apiCall<CreateResponse>('/api/sales/invoices', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ...headerPayload, ...totalsPayload, ...metadataPayload, lines: linesPayload }),
+          }),
       context: buildMutationContext('createInvoice', null),
       mutationPayload: { ...headerPayload },
     })
@@ -980,6 +1117,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     value.meta,
     value.metadata,
     value.payment,
+    value.priceMode,
   ])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => [
@@ -1005,6 +1143,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
           setLines={setLines}
           setMeta={setMeta}
           setPayment={setPayment}
+          setPriceMode={setPriceMode}
           dueTouched={dueTouched}
           saleTouched={saleTouched}
           lastAutoDue={lastAutoDue}
@@ -1021,6 +1160,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice }: I
     setLines,
     setMeta,
     setPayment,
+    setPriceMode,
     t,
     value,
   ])

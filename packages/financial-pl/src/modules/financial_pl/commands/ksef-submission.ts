@@ -3,6 +3,7 @@ import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared
 import { ensureTenantScope, ensureOrganizationScope } from '@open-mercato/shared/lib/commands/scope'
 import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
 import { CrudHttpError, isUniqueViolation } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
@@ -252,7 +253,7 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
             status: { $in: activeStatuses },
             deletedAt: null,
           }
-    const existing = await em.findOne(KsefSubmission, dedupeWhere)
+    const existing = await findOneWithDecryption(em, KsefSubmission, dedupeWhere, undefined, scope)
     if (existing) return { submissionId: existing.id }
 
     const invoiceXml = buildFa3XmlFromInput(parsed.invoice)
@@ -283,7 +284,7 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
           ? 'financial_pl_ksef_submissions_credit_memo_active_unique'
           : 'financial_pl_ksef_submissions_active_unique'
       if (isUniqueViolation(err, indexName)) {
-        const winner = await em.findOne(KsefSubmission, dedupeWhere)
+        const winner = await findOneWithDecryption(em, KsefSubmission, dedupeWhere, undefined, scope)
         if (winner) return { submissionId: winner.id }
       }
       throw err
@@ -303,7 +304,7 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
   async execute(input, ctx) {
     const parsed = ksefSubmissionRetrySchema.parse(input)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const submission = await em.findOne(KsefSubmission, { id: parsed.id, deletedAt: null })
+    const submission = await findOneWithDecryption(em, KsefSubmission, { id: parsed.id, deletedAt: null })
     if (!submission) throw new CrudHttpError(404, { error: '[internal] KSeF submission not found' })
     ensureTenantScope(ctx, submission.tenantId)
     ensureOrganizationScope(ctx, submission.organizationId)
@@ -846,7 +847,7 @@ export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submis
       status: { $in: activeStatuses },
       deletedAt: null,
     }
-    const existing = await em.findOne(KsefSubmission, dedupeWhere)
+    const existing = await findOneWithDecryption(em, KsefSubmission, dedupeWhere, undefined, scope)
     if (existing) {
       return {
         submissionId: existing.id,
@@ -879,7 +880,7 @@ export const issueOfflineCommand: CommandHandler<KsefIssueOfflineInput, { submis
       await em.persist(submission).flush()
     } catch (err) {
       if (isUniqueViolation(err, 'financial_pl_ksef_submissions_active_unique')) {
-        const winner = await em.findOne(KsefSubmission, dedupeWhere)
+        const winner = await findOneWithDecryption(em, KsefSubmission, dedupeWhere, undefined, scope)
         if (winner) {
           return {
             submissionId: winner.id,

@@ -15,6 +15,9 @@ export type CorrectionLineInput = {
   quantity: string
   quantityUnit?: string
   unitPriceNet?: string
+  unitPriceGross?: string
+  discountAmount?: string
+  discountPercent?: string
   taxRate?: string
   taxAmount?: string
   totalNetAmount?: string
@@ -29,17 +32,25 @@ export type CreditMemoCreatePayload = {
   reason: string
   currencyCode: string
   issueDate: string
+  metadata?: {
+    priceMode?: 'net' | 'gross'
+  }
   lines: Array<{
     name: string
     quantity: string
     quantityUnit?: string
     unitPriceNet?: string
+    unitPriceGross?: string
     taxRate?: string
     taxAmount?: string
     totalNetAmount?: string
     totalGrossAmount?: string
     currencyCode: string
     lineNumber: number
+    metadata?: {
+      discountAmount?: string
+      discountPercent?: string
+    }
   }>
 }
 
@@ -55,6 +66,7 @@ export function buildCreditMemoPayload(input: {
   currencyCode: string
   lines: CorrectionLineInput[]
   issueDate?: string
+  priceMode?: 'net' | 'gross'
 }): CreditMemoCreatePayload {
   const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
   // core's currencyCode validator requires /^[A-Z]{3}$/, so a blank/empty value would 422.
@@ -66,6 +78,7 @@ export function buildCreditMemoPayload(input: {
     reason: input.reason,
     currencyCode,
     issueDate,
+    ...(input.priceMode ? { metadata: { priceMode: input.priceMode } } : {}),
     lines: input.lines.map((line, index) => {
       const row: CreditMemoCreatePayload['lines'][number] = {
         name: line.name,
@@ -75,10 +88,15 @@ export function buildCreditMemoPayload(input: {
       }
       if (line.quantityUnit && line.quantityUnit.trim()) row.quantityUnit = line.quantityUnit.trim()
       if (line.unitPriceNet != null && line.unitPriceNet !== '') row.unitPriceNet = line.unitPriceNet
+      if (line.unitPriceGross != null && line.unitPriceGross !== '') row.unitPriceGross = line.unitPriceGross
       if (line.taxRate != null && line.taxRate !== '') row.taxRate = line.taxRate
       if (line.taxAmount) row.taxAmount = line.taxAmount
       if (line.totalNetAmount) row.totalNetAmount = line.totalNetAmount
       if (line.totalGrossAmount) row.totalGrossAmount = line.totalGrossAmount
+      const metadata: NonNullable<CreditMemoCreatePayload['lines'][number]['metadata']> = {}
+      if (line.discountAmount != null && line.discountAmount !== '') metadata.discountAmount = line.discountAmount
+      if (line.discountPercent != null && line.discountPercent !== '') metadata.discountPercent = line.discountPercent
+      if (Object.keys(metadata).length > 0) row.metadata = metadata
       return row
     }),
   }

@@ -59,3 +59,6 @@ apps/sandbox/storage/attachments
 
 # Playwright MCP scratch output (console logs / screenshots)
 .playwright-mcp/
+
+# Playwright integration-test output (generated)
+/.ai/qa/test-results/

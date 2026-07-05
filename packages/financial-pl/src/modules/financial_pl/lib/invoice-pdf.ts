@@ -9,7 +9,8 @@
  */
 import { PDFDocument, rgb, type PDFFont } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
-import type { InvoicePdfModel } from './invoice-pdf-model'
+import { MARGIN_WORDING_PL, type InvoicePdfModel } from './invoice-pdf-model'
+import { generateQrPng } from './invoice-qr'
 
 // Polish fiscal-document labels (a PL invoice is Polish-language by law — these are
 // document constants, not UI strings).
@@ -27,12 +28,14 @@ const L = {
   net: 'Wartość netto',
   vatRate: 'VAT',
   vatAmount: 'Kwota VAT',
+  discount: 'Rabat',
   gross: 'Wartość brutto',
   summary: 'Podsumowanie VAT',
   rate: 'Stawka',
   totalNet: 'Razem netto',
   totalVat: 'Razem VAT',
   totalGross: 'Razem brutto',
+  discountTotal: 'Rabat łącznie',
   toPay: 'Do zapłaty',
   ksefNumber: 'Numer KSeF',
   notes: 'Uwagi',
@@ -42,6 +45,7 @@ const L = {
   paymentTerm: 'Termin płatności',
   paymentPaid: 'Zapłacono',
   paymentAccount: 'Nr konta',
+  paymentQr: 'Zapłać przelewem',
 } as const
 
 const A4 = { w: 595.28, h: 841.89 }
@@ -52,6 +56,7 @@ const LINE = rgb(0.8, 0.8, 0.8)
 
 // Line-table columns (x offsets from left margin; the name column flexes).
 const COL = { lp: 0, name: 26, qty: 250, unit: 300, unitNet: 330, net: 395, vat: 455, vatAmt: 480, gross: 535 }
+const DISCOUNT_COL = { lp: 0, name: 24, qty: 218, unit: 258, unitNet: 292, discount: 348, net: 403, vat: 452, vatAmt: 484, gross: 515 }
 const TABLE_RIGHT = A4.w - M - M // content width
 const ROW_HEIGHT = 13
 const TABLE_HEADER_HEIGHT = 18
@@ -65,6 +70,8 @@ const NOTE_AFTER_GAP = 4
 const PAYMENT_LINE_HEIGHT = 11
 const PAYMENT_LABEL_GAP = 13
 const PAYMENT_AFTER_GAP = 8
+const PAYMENT_QR_SIZE = 90
+const PAYMENT_QR_CAPTION_GAP = 12
 
 function clip(font: PDFFont, text: string, size: number, maxWidth: number): string {
   if (font.widthOfTextAtSize(text, size) <= maxWidth) return text
@@ -134,7 +141,10 @@ function paymentBlockLines(payment: NonNullable<InvoicePdfModel['payment']>): st
 }
 
 function paymentBlockHeight(model: InvoicePdfModel): number {
-  return model.payment ? PAYMENT_LABEL_GAP + paymentBlockLines(model.payment).length * PAYMENT_LINE_HEIGHT + PAYMENT_AFTER_GAP : 0
+  if (!model.payment) return 0
+  const textHeight = PAYMENT_LABEL_GAP + paymentBlockLines(model.payment).length * PAYMENT_LINE_HEIGHT
+  const qrHeight = model.paymentQr ? PAYMENT_QR_SIZE + PAYMENT_QR_CAPTION_GAP : 0
+  return Math.max(textHeight, qrHeight) + PAYMENT_AFTER_GAP
 }
 
 function partyBottomY(p: InvoicePdfModel['seller'], partyTopY: number): number {
@@ -160,8 +170,10 @@ function estimateSinglePageYBeforeNotes(model: InvoicePdfModel): number {
   y -= 10
   y -= 12 * model.vatSummary.length
   y -= 8
+  if (model.hasDiscounts) y -= 13
   y -= 44
   if (model.correctionReason) y -= 16
+  if (model.marginWordingKey) y -= 16
   return y
 }
 
@@ -172,8 +184,10 @@ function estimateContinuationFinalYBeforeNotes(model: InvoicePdfModel, finalLine
   y -= 10
   y -= 12 * model.vatSummary.length
   y -= 8
+  if (model.hasDiscounts) y -= 13
   y -= 44
   if (model.correctionReason) y -= 16
+  if (model.marginWordingKey) y -= 16
   return y
 }
 
@@ -193,6 +207,7 @@ export async function renderInvoicePdf(
   doc.registerFontkit(fontkit)
   const font = await doc.embedFont(deps.fontBytes, { subset: true })
   const noteLines = model.notes ? wrapText(font, model.notes, NOTE_FONT_SIZE, TABLE_RIGHT) : []
+  const paymentQrPng = model.paymentQr ? await doc.embedPng(await generateQrPng(model.paymentQr.payload)) : undefined
 
   if (
     model.lines.length <= SINGLE_PAGE_LINE_LIMIT &&
@@ -227,13 +242,20 @@ export async function renderInvoicePdf(
     }
     const drawPaymentBlock = (yy: number): number => {
       if (!model.payment) return yy
+      const top = yy
       text(L.payment, M, yy, 9, GREY)
       yy -= PAYMENT_LABEL_GAP
       for (const line of paymentBlockLines(model.payment)) {
         text(clip(font, line, 8, TABLE_RIGHT), M, yy, 8, DARK)
         yy -= PAYMENT_LINE_HEIGHT
       }
-      return yy - PAYMENT_AFTER_GAP
+      if (paymentQrPng && model.paymentQr) {
+        const qrX = A4.w - M - PAYMENT_QR_SIZE
+        const qrY = top - PAYMENT_QR_SIZE
+        page.drawImage(paymentQrPng, { x: qrX, y: qrY, width: PAYMENT_QR_SIZE, height: PAYMENT_QR_SIZE })
+        text(clip(font, model.paymentQr.label || L.paymentQr, 8, PAYMENT_QR_SIZE + 20), qrX, qrY - PAYMENT_QR_CAPTION_GAP, 8, GREY)
+      }
+      return top - paymentBlockHeight(model)
     }
     const yLeft = drawParty(L.seller, M, model.seller)
     const yRight = drawParty(L.buyer, M + colW + 20, model.buyer)
@@ -244,15 +266,28 @@ export async function renderInvoicePdf(
     const x0 = M
     const hSize = 7.5
     page.drawLine({ start: { x: x0, y: y + 10 }, end: { x: A4.w - M, y: y + 10 }, thickness: 0.5, color: LINE })
-    text(L.lp, x0 + COL.lp, y, hSize, GREY)
-    text(L.name, x0 + COL.name, y, hSize, GREY)
-    right(L.qty, x0 + COL.unit - 4, y, hSize, GREY)
-    text(L.unit, x0 + COL.unit, y, hSize, GREY)
-    right(L.unitNet, x0 + COL.net - 4, y, hSize, GREY)
-    right(L.net, x0 + COL.vat - 4, y, hSize, GREY)
-    text(L.vatRate, x0 + COL.vat, y, hSize, GREY)
-    right(L.vatAmount, x0 + COL.gross - 4, y, hSize, GREY)
-    right(L.gross, x0 + COL.gross + 40, y, hSize, GREY)
+    if (model.hasDiscounts) {
+      text(L.lp, x0 + DISCOUNT_COL.lp, y, hSize, GREY)
+      text(L.name, x0 + DISCOUNT_COL.name, y, hSize, GREY)
+      right(L.qty, x0 + DISCOUNT_COL.unit - 4, y, hSize, GREY)
+      text(L.unit, x0 + DISCOUNT_COL.unit, y, hSize, GREY)
+      right(L.unitNet, x0 + DISCOUNT_COL.discount - 4, y, hSize, GREY)
+      right(L.discount, x0 + DISCOUNT_COL.net - 4, y, hSize, GREY)
+      right(L.net, x0 + DISCOUNT_COL.vat - 4, y, hSize, GREY)
+      text(L.vatRate, x0 + DISCOUNT_COL.vat, y, hSize, GREY)
+      right(L.vatAmount, x0 + DISCOUNT_COL.gross - 38, y, hSize, GREY)
+      right(L.gross, x0 + DISCOUNT_COL.gross, y, hSize, GREY)
+    } else {
+      text(L.lp, x0 + COL.lp, y, hSize, GREY)
+      text(L.name, x0 + COL.name, y, hSize, GREY)
+      right(L.qty, x0 + COL.unit - 4, y, hSize, GREY)
+      text(L.unit, x0 + COL.unit, y, hSize, GREY)
+      right(L.unitNet, x0 + COL.net - 4, y, hSize, GREY)
+      right(L.net, x0 + COL.vat - 4, y, hSize, GREY)
+      text(L.vatRate, x0 + COL.vat, y, hSize, GREY)
+      right(L.vatAmount, x0 + COL.gross - 4, y, hSize, GREY)
+      right(L.gross, x0 + COL.gross + 40, y, hSize, GREY)
+    }
     y -= 6
     page.drawLine({ start: { x: x0, y }, end: { x: A4.w - M, y }, thickness: 0.5, color: LINE })
     y -= 12
@@ -260,15 +295,28 @@ export async function renderInvoicePdf(
     // Line rows
     const rSize = 8
     for (const ln of model.lines) {
-      text(String(ln.lp), x0 + COL.lp, y, rSize)
-      text(clip(font, ln.name, rSize, COL.qty - COL.name - 6), x0 + COL.name, y, rSize)
-      right(ln.quantity, x0 + COL.unit - 4, y, rSize)
-      text(clip(font, ln.unit, rSize, 26), x0 + COL.unit, y, rSize)
-      right(ln.unitNet, x0 + COL.net - 4, y, rSize)
-      right(ln.net, x0 + COL.vat - 4, y, rSize)
-      text(ln.vatRateLabel, x0 + COL.vat, y, rSize)
-      right(ln.vat, x0 + COL.gross - 4, y, rSize)
-      right(ln.gross, x0 + COL.gross + 40, y, rSize)
+      if (model.hasDiscounts) {
+        text(String(ln.lp), x0 + DISCOUNT_COL.lp, y, rSize)
+        text(clip(font, ln.name, rSize, DISCOUNT_COL.qty - DISCOUNT_COL.name - 6), x0 + DISCOUNT_COL.name, y, rSize)
+        right(ln.quantity, x0 + DISCOUNT_COL.unit - 4, y, rSize)
+        text(clip(font, ln.unit, rSize, 26), x0 + DISCOUNT_COL.unit, y, rSize)
+        right(ln.unitNet, x0 + DISCOUNT_COL.discount - 4, y, rSize)
+        right(ln.discountAmount ?? '', x0 + DISCOUNT_COL.net - 4, y, rSize)
+        right(ln.net, x0 + DISCOUNT_COL.vat - 4, y, rSize)
+        text(ln.vatRateLabel, x0 + DISCOUNT_COL.vat, y, rSize)
+        right(ln.vat, x0 + DISCOUNT_COL.gross - 38, y, rSize)
+        right(ln.gross, x0 + DISCOUNT_COL.gross, y, rSize)
+      } else {
+        text(String(ln.lp), x0 + COL.lp, y, rSize)
+        text(clip(font, ln.name, rSize, COL.qty - COL.name - 6), x0 + COL.name, y, rSize)
+        right(ln.quantity, x0 + COL.unit - 4, y, rSize)
+        text(clip(font, ln.unit, rSize, 26), x0 + COL.unit, y, rSize)
+        right(ln.unitNet, x0 + COL.net - 4, y, rSize)
+        right(ln.net, x0 + COL.vat - 4, y, rSize)
+        text(ln.vatRateLabel, x0 + COL.vat, y, rSize)
+        right(ln.vat, x0 + COL.gross - 4, y, rSize)
+        right(ln.gross, x0 + COL.gross + 40, y, rSize)
+      }
       y -= 13
     }
     y -= 4
@@ -277,14 +325,26 @@ export async function renderInvoicePdf(
 
     // VAT summary + totals (right-aligned block)
     text(L.summary, x0, y, 9, GREY)
-    for (const r of model.vatSummary) {
-      text(`${L.rate} ${r.vatRateLabel}`, x0, y - 12, 8)
-      right(`${r.net}`, x0 + 320, y - 12, 8)
-      right(`${r.vat}`, x0 + 400, y - 12, 8)
-      right(`${r.gross}`, x0 + 480, y - 12, 8)
+    if (model.marginWordingKey) {
+      const wording = MARGIN_WORDING_PL[model.marginWordingKey]
+      const gross = model.vatSummary[0]?.gross ?? model.totalGross
+      text(clip(font, wording, 8, 360), x0, y - 12, 8)
+      right(`${gross}`, x0 + 480, y - 12, 8)
       y -= 12
+    } else {
+      for (const r of model.vatSummary) {
+        text(`${L.rate} ${r.vatRateLabel}`, x0, y - 12, 8)
+        right(`${r.net}`, x0 + 320, y - 12, 8)
+        right(`${r.vat}`, x0 + 400, y - 12, 8)
+        right(`${r.gross}`, x0 + 480, y - 12, 8)
+        y -= 12
+      }
     }
     y -= 8
+    if (model.hasDiscounts && model.discountTotal) {
+      right(`${L.discountTotal}: ${model.discountTotal} ${model.currencyCode}`, A4.w - M, y, 9)
+      y -= 13
+    }
     right(`${L.totalNet}: ${model.totalNet} ${model.currencyCode}`, A4.w - M, y, 9)
     right(`${L.totalVat}: ${model.totalVat} ${model.currencyCode}`, A4.w - M, y - 13, 9)
     right(`${L.toPay}: ${model.totalGross} ${model.currencyCode}`, A4.w - M, y - 28, 12)
@@ -292,6 +352,11 @@ export async function renderInvoicePdf(
 
     if (model.correctionReason) {
       text(clip(font, `${L.correctionReason}: ${model.correctionReason}`, 8, TABLE_RIGHT), x0, y, 8, GREY)
+      y -= 16
+    }
+
+    if (model.marginWordingKey) {
+      text(clip(font, MARGIN_WORDING_PL[model.marginWordingKey], 8, TABLE_RIGHT), x0, y, 8, GREY)
       y -= 16
     }
 
@@ -341,7 +406,12 @@ export async function renderInvoicePdf(
   const continuationRowsStartY = A4.h - M - TABLE_HEADER_HEIGHT
   const firstPageCapacity = Math.max(1, Math.floor((firstRowsStartY - MULTI_PAGE_BOTTOM_Y) / ROW_HEIGHT))
   const continuationCapacity = Math.max(1, Math.floor((continuationRowsStartY - MULTI_PAGE_BOTTOM_Y) / ROW_HEIGHT))
-  const finalBlockHeight = 12 * model.vatSummary.length + 52 + (model.correctionReason ? 16 : 0)
+  const finalBlockHeight =
+    12 * model.vatSummary.length +
+    52 +
+    (model.hasDiscounts ? 13 : 0) +
+    (model.correctionReason ? 16 : 0) +
+    (model.marginWordingKey ? 16 : 0)
   const finalPageCapacity = Math.max(0, Math.floor((continuationRowsStartY - 14 - finalBlockHeight - FINAL_BLOCK_BOTTOM_Y) / ROW_HEIGHT))
   const finalPageMinimumRows = finalPageCapacity > 0 ? 1 : 0
 
@@ -394,30 +464,56 @@ export async function renderInvoicePdf(
     page.drawText(s, { x: xRight - font.widthOfTextAtSize(s, size), y: yy, size, font, color })
   const drawTableHeader = (yy: number): number => {
     page.drawLine({ start: { x: x0, y: yy + 10 }, end: { x: A4.w - M, y: yy + 10 }, thickness: 0.5, color: LINE })
-    text(L.lp, x0 + COL.lp, yy, hSize, GREY)
-    text(L.name, x0 + COL.name, yy, hSize, GREY)
-    right(L.qty, x0 + COL.unit - 4, yy, hSize, GREY)
-    text(L.unit, x0 + COL.unit, yy, hSize, GREY)
-    right(L.unitNet, x0 + COL.net - 4, yy, hSize, GREY)
-    right(L.net, x0 + COL.vat - 4, yy, hSize, GREY)
-    text(L.vatRate, x0 + COL.vat, yy, hSize, GREY)
-    right(L.vatAmount, x0 + COL.gross - 4, yy, hSize, GREY)
-    right(L.gross, x0 + COL.gross + 40, yy, hSize, GREY)
+    if (model.hasDiscounts) {
+      text(L.lp, x0 + DISCOUNT_COL.lp, yy, hSize, GREY)
+      text(L.name, x0 + DISCOUNT_COL.name, yy, hSize, GREY)
+      right(L.qty, x0 + DISCOUNT_COL.unit - 4, yy, hSize, GREY)
+      text(L.unit, x0 + DISCOUNT_COL.unit, yy, hSize, GREY)
+      right(L.unitNet, x0 + DISCOUNT_COL.discount - 4, yy, hSize, GREY)
+      right(L.discount, x0 + DISCOUNT_COL.net - 4, yy, hSize, GREY)
+      right(L.net, x0 + DISCOUNT_COL.vat - 4, yy, hSize, GREY)
+      text(L.vatRate, x0 + DISCOUNT_COL.vat, yy, hSize, GREY)
+      right(L.vatAmount, x0 + DISCOUNT_COL.gross - 38, yy, hSize, GREY)
+      right(L.gross, x0 + DISCOUNT_COL.gross, yy, hSize, GREY)
+    } else {
+      text(L.lp, x0 + COL.lp, yy, hSize, GREY)
+      text(L.name, x0 + COL.name, yy, hSize, GREY)
+      right(L.qty, x0 + COL.unit - 4, yy, hSize, GREY)
+      text(L.unit, x0 + COL.unit, yy, hSize, GREY)
+      right(L.unitNet, x0 + COL.net - 4, yy, hSize, GREY)
+      right(L.net, x0 + COL.vat - 4, yy, hSize, GREY)
+      text(L.vatRate, x0 + COL.vat, yy, hSize, GREY)
+      right(L.vatAmount, x0 + COL.gross - 4, yy, hSize, GREY)
+      right(L.gross, x0 + COL.gross + 40, yy, hSize, GREY)
+    }
     yy -= 6
     page.drawLine({ start: { x: x0, y: yy }, end: { x: A4.w - M, y: yy }, thickness: 0.5, color: LINE })
     return yy - 12
   }
   const drawLineRows = (yy: number, lines: InvoicePdfModel['lines']): number => {
     for (const ln of lines) {
-      text(String(ln.lp), x0 + COL.lp, yy, rSize)
-      text(clip(font, ln.name, rSize, COL.qty - COL.name - 6), x0 + COL.name, yy, rSize)
-      right(ln.quantity, x0 + COL.unit - 4, yy, rSize)
-      text(clip(font, ln.unit, rSize, 26), x0 + COL.unit, yy, rSize)
-      right(ln.unitNet, x0 + COL.net - 4, yy, rSize)
-      right(ln.net, x0 + COL.vat - 4, yy, rSize)
-      text(ln.vatRateLabel, x0 + COL.vat, yy, rSize)
-      right(ln.vat, x0 + COL.gross - 4, yy, rSize)
-      right(ln.gross, x0 + COL.gross + 40, yy, rSize)
+      if (model.hasDiscounts) {
+        text(String(ln.lp), x0 + DISCOUNT_COL.lp, yy, rSize)
+        text(clip(font, ln.name, rSize, DISCOUNT_COL.qty - DISCOUNT_COL.name - 6), x0 + DISCOUNT_COL.name, yy, rSize)
+        right(ln.quantity, x0 + DISCOUNT_COL.unit - 4, yy, rSize)
+        text(clip(font, ln.unit, rSize, 26), x0 + DISCOUNT_COL.unit, yy, rSize)
+        right(ln.unitNet, x0 + DISCOUNT_COL.discount - 4, yy, rSize)
+        right(ln.discountAmount ?? '', x0 + DISCOUNT_COL.net - 4, yy, rSize)
+        right(ln.net, x0 + DISCOUNT_COL.vat - 4, yy, rSize)
+        text(ln.vatRateLabel, x0 + DISCOUNT_COL.vat, yy, rSize)
+        right(ln.vat, x0 + DISCOUNT_COL.gross - 38, yy, rSize)
+        right(ln.gross, x0 + DISCOUNT_COL.gross, yy, rSize)
+      } else {
+        text(String(ln.lp), x0 + COL.lp, yy, rSize)
+        text(clip(font, ln.name, rSize, COL.qty - COL.name - 6), x0 + COL.name, yy, rSize)
+        right(ln.quantity, x0 + COL.unit - 4, yy, rSize)
+        text(clip(font, ln.unit, rSize, 26), x0 + COL.unit, yy, rSize)
+        right(ln.unitNet, x0 + COL.net - 4, yy, rSize)
+        right(ln.net, x0 + COL.vat - 4, yy, rSize)
+        text(ln.vatRateLabel, x0 + COL.vat, yy, rSize)
+        right(ln.vat, x0 + COL.gross - 4, yy, rSize)
+        right(ln.gross, x0 + COL.gross + 40, yy, rSize)
+      }
       yy -= ROW_HEIGHT
     }
     return yy
@@ -441,13 +537,20 @@ export async function renderInvoicePdf(
   }
   const drawPaymentBlock = (yy: number): number => {
     if (!model.payment) return yy
+    const top = yy
     text(L.payment, x0, yy, 9, GREY)
     yy -= PAYMENT_LABEL_GAP
     for (const line of paymentBlockLines(model.payment)) {
       text(clip(font, line, 8, TABLE_RIGHT), x0, yy, 8, DARK)
       yy -= PAYMENT_LINE_HEIGHT
     }
-    return yy - PAYMENT_AFTER_GAP
+    if (paymentQrPng && model.paymentQr) {
+      const qrX = A4.w - M - PAYMENT_QR_SIZE
+      const qrY = top - PAYMENT_QR_SIZE
+      page.drawImage(paymentQrPng, { x: qrX, y: qrY, width: PAYMENT_QR_SIZE, height: PAYMENT_QR_SIZE })
+      text(clip(font, model.paymentQr.label || L.paymentQr, 8, PAYMENT_QR_SIZE + 20), qrX, qrY - PAYMENT_QR_CAPTION_GAP, 8, GREY)
+    }
+    return top - paymentBlockHeight(model)
   }
 
   let noteIndex = 0
@@ -486,14 +589,26 @@ export async function renderInvoicePdf(
       y -= 10
 
       text(L.summary, x0, y, 9, GREY)
-      for (const r of model.vatSummary) {
-        text(`${L.rate} ${r.vatRateLabel}`, x0, y - 12, 8)
-        right(`${r.net}`, x0 + 320, y - 12, 8)
-        right(`${r.vat}`, x0 + 400, y - 12, 8)
-        right(`${r.gross}`, x0 + 480, y - 12, 8)
+      if (model.marginWordingKey) {
+        const wording = MARGIN_WORDING_PL[model.marginWordingKey]
+        const gross = model.vatSummary[0]?.gross ?? model.totalGross
+        text(clip(font, wording, 8, 360), x0, y - 12, 8)
+        right(`${gross}`, x0 + 480, y - 12, 8)
         y -= 12
+      } else {
+        for (const r of model.vatSummary) {
+          text(`${L.rate} ${r.vatRateLabel}`, x0, y - 12, 8)
+          right(`${r.net}`, x0 + 320, y - 12, 8)
+          right(`${r.vat}`, x0 + 400, y - 12, 8)
+          right(`${r.gross}`, x0 + 480, y - 12, 8)
+          y -= 12
+        }
       }
       y -= 8
+      if (model.hasDiscounts && model.discountTotal) {
+        right(`${L.discountTotal}: ${model.discountTotal} ${model.currencyCode}`, A4.w - M, y, 9)
+        y -= 13
+      }
       right(`${L.totalNet}: ${model.totalNet} ${model.currencyCode}`, A4.w - M, y, 9)
       right(`${L.totalVat}: ${model.totalVat} ${model.currencyCode}`, A4.w - M, y - 13, 9)
       right(`${L.toPay}: ${model.totalGross} ${model.currencyCode}`, A4.w - M, y - 28, 12)
@@ -501,6 +616,11 @@ export async function renderInvoicePdf(
 
       if (model.correctionReason) {
         text(clip(font, `${L.correctionReason}: ${model.correctionReason}`, 8, TABLE_RIGHT), x0, y, 8, GREY)
+        y -= 16
+      }
+
+      if (model.marginWordingKey) {
+        text(clip(font, MARGIN_WORDING_PL[model.marginWordingKey], 8, TABLE_RIGHT), x0, y, 8, GREY)
         y -= 16
       }
 

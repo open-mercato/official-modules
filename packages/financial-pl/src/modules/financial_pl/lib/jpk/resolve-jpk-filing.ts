@@ -20,12 +20,15 @@
  * builders so the XML and the declaration are internally consistent by construction.
  */
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { PurchaseVatRecord, type JpkVatFiling } from '../../data/entities'
 import {
   asRecord,
   asString,
   buildVatBreakdown,
+  lineCarriesTaxRate,
+  normalizeMarginScheme,
   scaled4ToMoney2dp,
   toIsoDate,
   toScaled4,
@@ -110,6 +113,23 @@ function scaled4ToString4dp(scaled4: bigint): string {
  *  (amount[4dp] × fx[4dp] = 8dp → /1e4 = 4dp). JPK_V7 amounts are statutorily in PLN. */
 function toPlnString4dp(amount: unknown, fxScaled4: bigint): string {
   return scaled4ToString4dp((toScaled4(amount) * fxScaled4) / 10000n)
+}
+
+function readMarginVatRate(value: unknown): 0 | 5 | 8 | 23 {
+  const numeric = typeof value === 'number' ? value : Number(asString(value))
+  return numeric === 0 || numeric === 5 || numeric === 8 || numeric === 23 ? numeric : 23
+}
+
+function buildMarginVatBreakdown(meta: MetaRow | undefined, signedGross: string): JpkVatBucket[] {
+  const purchaseCost = asString(meta?.margin_purchase_cost)
+  if (!purchaseCost) return []
+  const marginScaled = toScaled4(signedGross) - toScaled4(purchaseCost)
+  if (marginScaled <= 0n) return []
+  const rate = readMarginVatRate(meta?.margin_vat_rate)
+  const baseScaled = rate === 0 ? marginScaled : (marginScaled * 100n) / BigInt(100 + rate)
+  const base = scaled4ToMoney2dp(baseScaled)
+  const vat = scaled4ToMoney2dp(marginScaled - toScaled4(base))
+  return [{ rate, net: base, vat }]
 }
 
 /** Read the buyer/supplier party from a sales document's plaintext `metadata.buyerSnapshot`. */
@@ -248,6 +268,7 @@ async function resolveSalesRow(
 
   // OSS invoices are excluded from JPK_V7M (reported in VIU-DO); skip them wholesale.
   if (isTruthyFlag(meta?.oss_procedure)) return null
+  const marginScheme = normalizeMarginScheme(meta?.margin_scheme)
 
   // The issue date places the row in the register. Fall back through the alternative date columns
   // (issued_at, then the metadata sale date) before dropping a document — silently dropping a
@@ -291,10 +312,21 @@ async function resolveSalesRow(
   if (!ksef) return null
 
   const lines = await loadLines(deps.queryEngine, scope, opts.lineEntityId, opts.lineIdField, opts.docId)
+  const currencyCode = (asString(doc.currency_code) ?? 'PLN').toUpperCase()
+  if (marginScheme) {
+    if (currencyCode !== 'PLN') throw new Error('marginSchemeRequiresPln')
+    if (lines.some(lineCarriesTaxRate)) throw new Error('marginSchemeMixedLines')
+  }
   // Per-rate buckets; a credit memo's stored magnitudes are negated so the correction files the
   // negative difference (consistent with the FA(3) KOR path).
   const headerNet = opts.sign === 1 ? doc.grand_total_net_amount : scaled4ToMoney2dp(-toScaled4(doc.grand_total_net_amount))
   const headerVat = opts.sign === 1 ? doc.tax_total_amount : scaled4ToMoney2dp(-toScaled4(doc.tax_total_amount))
+  const headerGross =
+    opts.sign === 1
+      ? scaled4ToMoney2dp(toScaled4(doc.grand_total_gross_amount) || toScaled4(doc.grand_total_net_amount) + toScaled4(doc.tax_total_amount))
+      : scaled4ToMoney2dp(
+          -(toScaled4(doc.grand_total_gross_amount) || toScaled4(doc.grand_total_net_amount) + toScaled4(doc.tax_total_amount)),
+        )
   const signedLines: InvoiceLineRow[] =
     opts.sign === 1
       ? lines
@@ -309,7 +341,6 @@ async function resolveSalesRow(
   // which converts only the output VAT (`P_14_xW`). A foreign-currency document with no resolvable
   // rate cannot be lawfully placed in the register, so generation fails loud rather than filing a
   // foreign-currency amount under a PLN field (H2). OSS rows are already excluded above.
-  const currencyCode = (asString(doc.currency_code) ?? 'PLN').toUpperCase()
   let plnLines = signedLines
   let plnHeaderNet = headerNet
   let plnHeaderVat = headerVat
@@ -329,7 +360,7 @@ async function resolveSalesRow(
     plnHeaderNet = toPlnString4dp(headerNet, fxScaled)
     plnHeaderVat = toPlnString4dp(headerVat, fxScaled)
   }
-  const vatBreakdown = buildVatBreakdown(plnLines, plnHeaderNet, plnHeaderVat) as JpkVatBucket[]
+  const vatBreakdown = marginScheme ? buildMarginVatBreakdown(meta, headerGross) : (buildVatBreakdown(plnLines, plnHeaderNet, plnHeaderVat) as JpkVatBucket[])
 
   const { gtu, procedures, typDokumentu } = readSalesMarkers(meta)
   return buildSprzedazRow({
@@ -339,6 +370,7 @@ async function resolveSalesRow(
     dataSprzedazy: toIsoDate(asRecord(doc.metadata).saleDate) ?? undefined,
     ksef,
     vatBreakdown,
+    ...(marginScheme ? { margGross: headerGross } : {}),
     // A credit memo (faktura korygująca) must NOT inherit the corrected invoice's TypDokumentu —
     // an original marked FP would otherwise tag the correction FP and exclude it from the
     // declaration/control aggregates (double-count guard), understating the corrected totals.
@@ -489,14 +521,20 @@ async function gatherMonthEvidence(
   }
 
   // --- (3) Purchase records for the period (optionally NIP-scoped) -------------------------------
-  const purchases = await deps.em.find(PurchaseVatRecord, {
-    organizationId,
-    tenantId,
-    year,
-    month,
-    deletedAt: null,
-    ...(contextNip ? { contextNip } : {}),
-  })
+  const purchases = await findWithDecryption(
+    deps.em,
+    PurchaseVatRecord,
+    {
+      organizationId,
+      tenantId,
+      year,
+      month,
+      deletedAt: null,
+      ...(contextNip ? { contextNip } : {}),
+    },
+    undefined,
+    { organizationId, tenantId },
+  )
   for (const record of purchases) {
     const { zakup: zakupRow, sprzedaz: selfAssess } = buildZakupRows({
       supplier: { nip: record.supplierNip, name: record.supplierName, countryCode: record.supplierCountryCode },

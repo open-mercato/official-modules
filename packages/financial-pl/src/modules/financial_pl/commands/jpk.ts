@@ -172,12 +172,18 @@ export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsert
     }
 
     if (parsed.id) {
-      const existing = await em.findOne(PurchaseVatRecord, {
-        id: parsed.id,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        deletedAt: null,
-      })
+      const existing = await findOneWithDecryption(
+        em,
+        PurchaseVatRecord,
+        {
+          id: parsed.id,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          deletedAt: null,
+        },
+        undefined,
+        scope,
+      )
       if (!existing) throw new CrudHttpError(404, { error: '[internal] purchase record not found' })
       const before = snapshotFields(existing, Object.keys(fields))
       Object.assign(existing, fields, { updatedAt: now })
@@ -208,7 +214,13 @@ export const upsertPurchaseRecordCommand: CommandHandler<JpkPurchaseRecordUpsert
     const snap = readJpkUndo(logEntry)
     if (!snap || snap.kind !== 'purchase_record') return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const record = await em.findOne(PurchaseVatRecord, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    const record = await findOneWithDecryption(
+      em,
+      PurchaseVatRecord,
+      { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId },
+      undefined,
+      { tenantId: snap.tenantId, organizationId: snap.organizationId },
+    )
     if (!record) return
     if (snap.op === 'create') {
       record.deletedAt = new Date()
@@ -230,12 +242,18 @@ export const deletePurchaseRecordCommand: CommandHandler<{ id: string }, { id: s
     ensureOrganizationScope(ctx, scope.organizationId)
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const existing = await em.findOne(PurchaseVatRecord, {
-      id: parsed.id,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
+    const existing = await findOneWithDecryption(
+      em,
+      PurchaseVatRecord,
+      {
+        id: parsed.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      },
+      undefined,
+      scope,
+    )
     if (!existing) throw new CrudHttpError(404, { error: '[internal] purchase record not found' })
     existing.deletedAt = new Date()
     existing.updatedAt = existing.deletedAt
@@ -252,7 +270,13 @@ export const deletePurchaseRecordCommand: CommandHandler<{ id: string }, { id: s
     const snap = readJpkUndo(logEntry)
     if (!snap || snap.kind !== 'purchase_record' || snap.op !== 'delete') return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const record = await em.findOne(PurchaseVatRecord, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    const record = await findOneWithDecryption(
+      em,
+      PurchaseVatRecord,
+      { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId },
+      undefined,
+      { tenantId: snap.tenantId, organizationId: snap.organizationId },
+    )
     if (!record) return
     record.deletedAt = null
     record.updatedAt = new Date()
@@ -285,12 +309,18 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
     }
 
     if (parsed.id) {
-      const existing = await em.findOne(JpkVatFiling, {
-        id: parsed.id,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        deletedAt: null,
-      })
+      const existing = await findOneWithDecryption(
+        em,
+        JpkVatFiling,
+        {
+          id: parsed.id,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          deletedAt: null,
+        },
+        undefined,
+        scope,
+      )
       if (!existing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
       const before = snapshotFields(existing, Object.keys(fields))
       Object.assign(existing, fields, { updatedAt: now })
@@ -317,16 +347,22 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
       // operator double-submit. Surface a clean 409 (with the existing filing id) instead of a
       // raw 500, so the UI can route to the existing filing.
       if (isUniqueViolation(err, 'financial_pl_jpk_filing_active_unique')) {
-        const winner = await em.findOne(JpkVatFiling, {
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-          contextNip: parsed.contextNip ?? null,
-          variant: parsed.variant,
-          year: parsed.year,
-          month: parsed.month,
-          celZlozenia: parsed.celZlozenia,
-          deletedAt: null,
-        })
+        const winner = await findOneWithDecryption(
+          em,
+          JpkVatFiling,
+          {
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            contextNip: parsed.contextNip ?? null,
+            variant: parsed.variant,
+            year: parsed.year,
+            month: parsed.month,
+            celZlozenia: parsed.celZlozenia,
+            deletedAt: null,
+          },
+          undefined,
+          scope,
+        )
         throw new CrudHttpError(409, {
           error: '[internal] a JPK filing already exists for this NIP, variant, period and purpose',
           ...(winner ? { filingId: winner.id } : {}),
@@ -346,7 +382,13 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
     const snap = readJpkUndo(logEntry)
     if (!snap || snap.kind !== 'filing') return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const filing = await em.findOne(JpkVatFiling, { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId })
+    const filing = await findOneWithDecryption(
+      em,
+      JpkVatFiling,
+      { id: snap.id, tenantId: snap.tenantId, organizationId: snap.organizationId },
+      undefined,
+      { tenantId: snap.tenantId, organizationId: snap.organizationId },
+    )
     if (!filing) return
     if (snap.op === 'create') {
       filing.deletedAt = new Date()
@@ -368,12 +410,18 @@ export const generateCommand: CommandHandler<JpkGenerateInput, { filingId: strin
 
     const { translate } = await resolveTranslations()
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const filing = await em.findOne(JpkVatFiling, {
-      id: parsed.filingId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
+    const filing = await findOneWithDecryption(
+      em,
+      JpkVatFiling,
+      {
+        id: parsed.filingId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      },
+      undefined,
+      scope,
+    )
     if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
     // A filing already submitted to the Ministry must not be silently regenerated/clobbered
     // (a terminal state). Fail loud rather than overwrite the filed XML + status.

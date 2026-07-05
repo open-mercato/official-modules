@@ -23,6 +23,9 @@ export type KsefSubmissionDocumentKind = 'invoice' | 'credit_memo'
  */
 export type InvoiceKindColumn = 'vat' | 'zal' | 'roz' | 'upr' | 'kor_zal' | 'kor_roz'
 
+/** Invoice-wide VAT marża procedure subtype (art. 119/120). */
+export type MarginSchemeColumn = 'travel' | 'used_goods' | 'art' | 'collectibles'
+
 /** Pure-JPK `TypDokumentu` sales-register flag (never appears in the FA(3) XML). */
 export type JpkTypDokumentuColumn = 'RO' | 'WEW' | 'FP'
 
@@ -328,6 +331,17 @@ export class SalesInvoicePlMeta {
 
   @Property({ name: 'bad_debt_termin_platnosci', type: 'date', nullable: true })
   badDebtTerminPlatnosci?: Date | null
+
+  @Property({ name: 'margin_scheme', type: 'text', nullable: true })
+  marginScheme?: MarginSchemeColumn | null
+
+  @Property({ name: 'margin_purchase_cost', type: 'text', nullable: true })
+  marginPurchaseCost?: string | null
+
+  // Stored as text like every other numeric in this module (the module has no numeric columns);
+  // the small enum value (0|5|8|23) is coerced to a number at the API boundary.
+  @Property({ name: 'margin_vat_rate', type: 'text', nullable: true })
+  marginVatRate?: string | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

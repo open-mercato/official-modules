@@ -214,6 +214,25 @@ liveDescribe('KSeF TEST live smoke — SPEC-009 document types', () => {
     expect(result.sessionReference).toBeTruthy()
   }
 
+  async function submitAndExpectAccepted(label: string, xml: string): Promise<void> {
+    const client = new KsefClient(env)
+    const result = await submitInvoiceToKsef(client, { auth: auth(), invoiceXml: xml })
+    // eslint-disable-next-line no-console
+    console.log(`[ksef-live] ${label} result`, {
+      status: result.status,
+      ksefNumber: result.ksefNumber,
+      lastStatusCode: result.lastStatusCode,
+      error: result.errorMessage,
+      upoBytes: result.upoXml?.length,
+    })
+    expect(result.status).toBe('accepted')
+    expect(result.sessionReference).toBeTruthy()
+    if (process.env.OM_KSEF_TEST_STRICT === '1') {
+      expect(result.ksefNumber).toBeTruthy()
+      expect(result.upoXml && result.upoXml.length > 0).toBe(true)
+    }
+  }
+
   it('(a) ZAL — advance invoice (ZaliczkaCzesciowa + Zamowienie, no FaWiersz)', async () => {
     const today = new Date().toISOString().slice(0, 10)
     const doc: Fa3Document = {
@@ -328,6 +347,100 @@ liveDescribe('KSeF TEST live smoke — SPEC-009 document types', () => {
       ],
     }
     await submitAndLog('OSS EUR', buildFa3Xml(doc))
+  })
+
+  it('(e) VAT invoice with a discounted line (P_10) is accepted', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+        invoiceNumber: `OM-DISC-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'VAT',
+        vatBreakdown: [{ rate: 23, net: '180.00', vat: '41.40' }],
+        totalGross: '221.40',
+      },
+      lines: [
+        {
+          lineNumber: 1,
+          name: 'Discounted goods',
+          unit: 'szt',
+          quantity: '2',
+          unitNetPrice: '100.00',
+          discount: '20.00',
+          netValue: '180.00',
+          vatRate: 23,
+        },
+      ],
+    }
+    await submitAndExpectAccepted('discounted VAT', buildFa3Xml(doc))
+  })
+
+  it('(f) gross-mode VAT invoice (P_9B/P_11A) is accepted', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+        invoiceNumber: `OM-GROSS-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'VAT',
+        vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+        totalGross: '123.00',
+      },
+      lines: [
+        {
+          lineNumber: 1,
+          name: 'Gross-price goods',
+          unit: 'szt',
+          quantity: '1',
+          unitNetPrice: '100.00',
+          unitGrossPrice: '123.00',
+          netValue: '100.00',
+          grossValue: '123.00',
+          vatRate: 23,
+        },
+      ],
+    }
+    await submitAndExpectAccepted('gross-mode VAT', buildFa3Xml(doc))
+  })
+
+  it('(g) used-goods VAT margin invoice (PMarzy + P_13_11) is accepted', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const doc: Fa3Document = {
+      model: {
+        createdAt: new Date().toISOString(),
+        seller: seller(),
+        buyer: { nip: '3755747347', name: 'Open Mercato Test Buyer', countryCode: 'PL', addressLine1: 'ul. Kliencka 2, 00-002 Kraków' },
+        invoiceNumber: `OM-MARGIN-${Date.now()}`,
+        issueDate: today,
+        currencyCode: 'PLN',
+        invoiceKind: 'VAT',
+        annotations: { marginScheme: 'used_goods' },
+        vatBreakdown: [{ rate: 'margin', net: '123.00', vat: '0.00' }],
+        totalGross: '123.00',
+      },
+      lines: [
+        {
+          lineNumber: 1,
+          name: 'Used goods margin sale',
+          unit: 'szt',
+          quantity: '1',
+          unitNetPrice: '123.00',
+          unitGrossPrice: '123.00',
+          netValue: '123.00',
+          grossValue: '123.00',
+          vatRate: 23,
+          marginRow: true,
+        },
+      ],
+    }
+    await submitAndExpectAccepted('used-goods margin VAT', buildFa3Xml(doc))
   })
 })
 

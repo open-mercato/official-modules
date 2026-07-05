@@ -9,6 +9,7 @@ jest.mock('@open-mercato/core/generated-shims/entities.ids.generated', () => ({
 }))
 
 import { fa3InvoiceSchema } from '../../data/validators'
+import { buildFa3Xml } from '../fa3'
 import {
   resolveFa3FromSalesInvoice,
   roundMoneyTo2dp,
@@ -135,6 +136,158 @@ describe('resolveFa3FromSalesInvoice', () => {
     expect(result.vatBreakdown[0].rate).toBe(23)
     expect(result.vatBreakdown[0].net).toBe('200.00')
     expect(result.vatBreakdown[0].vat).toBe('46.00')
+  })
+
+  it('computes discounted net rows from pre-discount unit price and emits discounted buckets', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [baseInvoice],
+      'sales:sales_invoice_line': [
+        {
+          line_number: 1,
+          name: 'Towar z rabatem',
+          quantity: '2',
+          unit_price_net: '100.0000',
+          discount_amount: '20.0000',
+          total_net_amount: '999.0000',
+          tax_amount: '999.0000',
+          tax_rate: '23.0000',
+        },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [],
+    })
+
+    const result = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip: '7980332920', seller: SELLER },
+      { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+    )
+
+    expect(result.lines[0]).toMatchObject({ unitNetPrice: '100.00', discount: '20.00', netValue: '180.00' })
+    expect(result.vatBreakdown).toEqual([{ rate: 23, net: '180.00', vat: '41.40' }])
+    expect(result.totalGross).toBe('221.40')
+  })
+
+  it('uses invoice metadata.priceMode=gross for P_9B/P_11A and per-line VAT-from-gross math', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [
+        {
+          ...baseInvoice,
+          metadata: { ...(baseInvoice.metadata as Record<string, unknown>), priceMode: 'gross' },
+        },
+      ],
+      'sales:sales_invoice_line': [
+        {
+          line_number: 1,
+          name: 'Cena brutto',
+          quantity: '2',
+          unit_price_net: '8.1220',
+          unit_price_gross: '9.9900',
+          tax_rate: '23.0000',
+        },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [],
+    })
+
+    const result = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip: '7980332920', seller: SELLER },
+      { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+    )
+    const xml = buildFa3Xml({ model: { ...result, createdAt: '2026-06-20T10:00:00Z' }, lines: result.lines })
+
+    expect(result.lines[0]).toMatchObject({ unitGrossPrice: '9.99', grossValue: '19.98', netValue: '16.24' })
+    expect(result.vatBreakdown).toEqual([{ rate: 23, net: '16.24', vat: '3.74' }])
+    expect(xml).toContain('<P_9B>9.99</P_9B><P_11A>19.98</P_11A><P_12>23</P_12>')
+    expect(xml).not.toContain('<P_9A>')
+    expect(xml).not.toContain('<P_11>')
+  })
+
+  it('maps VAT marża invoices to PMarzy, gross-only rows, and P_13_11 only', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [baseInvoice],
+      'sales:sales_invoice_line': [
+        {
+          line_number: 1,
+          name: 'Towar używany',
+          quantity: '2',
+          unit_price_gross: '100.0000',
+          discount_amount: '20.0000',
+          total_gross_amount: '180.0000',
+        },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [{ margin_scheme: 'used_goods' }],
+    })
+
+    const result = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip: '7980332920', seller: SELLER },
+      { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+    )
+    const xml = buildFa3Xml({ model: { ...result, createdAt: '2026-06-20T10:00:00Z' }, lines: result.lines })
+
+    expect(result.annotations?.marginScheme).toBe('used_goods')
+    expect(result.vatBreakdown).toEqual([{ rate: 'margin', net: '180.00', vat: '0.00' }])
+    expect(result.totalGross).toBe('180.00')
+    expect(result.lines[0]).toMatchObject({ marginRow: true, unitGrossPrice: '100.00', discount: '20.00', grossValue: '180.00' })
+    expect(xml).toContain('<P_13_11>180.00</P_13_11>')
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).not.toContain('<P_12>')
+  })
+
+  it('accepts a marża invoice whose lines persist tax_rate="0" (core default for an omitted rate)', async () => {
+    // Regression: core 0.6.5 stores an omitted line taxRate as 0, so a real persisted margin line
+    // carries tax_rate '0.0000'. The mixed-mode guard must NOT treat that as a taxable line —
+    // only a POSITIVE rate does. (The live KSeF smoke bypassed this by building the doc directly.)
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [baseInvoice],
+      'sales:sales_invoice_line': [
+        {
+          line_number: 1,
+          name: 'Towar używany',
+          quantity: '2',
+          unit_price_gross: '100.0000',
+          discount_amount: '20.0000',
+          total_gross_amount: '180.0000',
+          tax_rate: '0.0000',
+        },
+      ],
+      'financial_pl:sales_invoice_pl_meta': [{ margin_scheme: 'used_goods' }],
+    })
+
+    const result = await resolveFa3FromSalesInvoice(
+      { queryEngine, contextNip: '7980332920', seller: SELLER },
+      { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+    )
+    expect(result.annotations?.marginScheme).toBe('used_goods')
+    expect(result.vatBreakdown).toEqual([{ rate: 'margin', net: '180.00', vat: '0.00' }])
+    expect(result.totalGross).toBe('180.00')
+  })
+
+  it('rejects marża invoices with tax-rate-bearing lines', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [baseInvoice],
+      'sales:sales_invoice_line': [{ line_number: 1, name: 'Mixed', quantity: '1', unit_price_gross: '100.0000', tax_rate: '23.0000' }],
+      'financial_pl:sales_invoice_pl_meta': [{ margin_scheme: 'used_goods' }],
+    })
+
+    await expect(
+      resolveFa3FromSalesInvoice(
+        { queryEngine, contextNip: '7980332920', seller: SELLER },
+        { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'marginSchemeMixedLines' } })
+  })
+
+  it('rejects non-PLN marża invoices', async () => {
+    const { queryEngine } = makeQueryEngine({
+      'sales:sales_invoice': [{ ...baseInvoice, currency_code: 'EUR' }],
+      'sales:sales_invoice_line': [{ line_number: 1, name: 'Marza EUR', quantity: '1', unit_price_gross: '100.0000' }],
+      'financial_pl:sales_invoice_pl_meta': [{ margin_scheme: 'travel' }],
+    })
+
+    await expect(
+      resolveFa3FromSalesInvoice(
+        { queryEngine, contextNip: '7980332920', seller: SELLER },
+        { salesInvoiceId: 'inv-1', organizationId: 'org-1', tenantId: 'tenant-1' },
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'marginSchemeRequiresPln' } })
   })
 
   it('falls back to metadata.lines for the VAT breakdown when there are no first-class line rows', async () => {

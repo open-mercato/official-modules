@@ -41,6 +41,9 @@ export type CorrectionFormProps = {
   originalInvoiceNumber: string
   originalLines: InvoiceLineInput[]
   currencyCode: string
+  /** Pricing mode of the corrected original — carried onto the KOR so a gross-priced invoice
+   *  corrects in gross mode (FA(3) P_9B/P_11A). Absent ⇒ net (the default). */
+  priceMode?: 'net' | 'gross'
   features: string[]
   onSubmitted?: () => void
   disabled?: boolean
@@ -59,6 +62,7 @@ export function CorrectionForm({
   originalInvoiceNumber,
   originalLines,
   currencyCode,
+  priceMode,
   features,
   onSubmitted,
   disabled,
@@ -82,7 +86,7 @@ export function CorrectionForm({
       flash(t('financial_pl.correction.reasonRequired', 'A correction reason is required.'), 'error')
       return
     }
-    const payload = buildCreditMemoPayload({ invoiceId, reason: reason.trim(), currencyCode, lines })
+    const payload = buildCreditMemoPayload({ invoiceId, reason: reason.trim(), currencyCode, lines, priceMode })
     setBusy(true)
     try {
       const creditMemoId = await runMutation<string>({
@@ -132,7 +136,7 @@ export function CorrectionForm({
     } finally {
       setBusy(false)
     }
-  }, [canManage, reason, lines, invoiceId, currencyCode, runMutation, retryLastMutation, onSubmitted, t])
+  }, [canManage, reason, lines, invoiceId, currencyCode, priceMode, runMutation, retryLastMutation, onSubmitted, t])
 
   if (!canManage) {
     return (

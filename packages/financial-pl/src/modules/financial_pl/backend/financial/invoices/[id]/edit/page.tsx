@@ -14,7 +14,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { InvoiceForm, IssueCorrectionLink, type InvoiceFormValue } from './InvoiceForm'
 import { withComputedTotals, type InvoiceLineInput } from '../../../../../components/InvoiceLinesField'
 import { buyerFromMetadata } from '../../../../../components/BuyerFields'
-import type { InvoiceMeta, ProcedureMarkings } from '../../../../../components/PlVatMetaForm'
+import type { InvoiceMeta, MarginScheme, ProcedureMarkings } from '../../../../../components/PlVatMetaForm'
 import type { InvoiceKindColumn } from '../../../../../data/entities'
 import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../../lib/jpk-markings-codes'
 
@@ -75,6 +75,9 @@ type InvoiceMetaWire = {
   advanceRefs?: InvoiceMeta['advanceRefs']
   orderSnapshot?: InvoiceMeta['orderSnapshot']
   gtuCodes?: string[]
+  marginScheme?: string | null
+  marginPurchaseCost?: string | null
+  marginVatRate?: number | null
   wstoEe?: boolean
   ied?: boolean
   tp?: boolean
@@ -111,6 +114,7 @@ const PROCEDURE_FLAG_MAP: ReadonlyArray<[keyof InvoiceMetaWire, JpkProcedureMark
 
 const INVOICE_KINDS: ReadonlySet<string> = new Set(['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'])
 const TYP_DOKUMENTU: ReadonlySet<string> = new Set(['RO', 'WEW', 'FP'])
+const MARGIN_SCHEMES: ReadonlySet<string> = new Set(['travel', 'used_goods', 'art', 'collectibles'])
 
 /** Project the flat wire meta into the controlled `InvoiceMeta` the PlVatMetaForm edits. */
 function toFormMeta(meta: InvoiceMetaWire): InvoiceMeta {
@@ -135,6 +139,13 @@ function toFormMeta(meta: InvoiceMetaWire): InvoiceMeta {
     advanceRefs: meta.advanceRefs,
     orderSnapshot: meta.orderSnapshot ?? null,
     gtuCodes: (meta.gtuCodes ?? []) as GtuCode[],
+    marginScheme:
+      meta.marginScheme && MARGIN_SCHEMES.has(meta.marginScheme) ? (meta.marginScheme as MarginScheme) : null,
+    marginPurchaseCost: meta.marginPurchaseCost ?? null,
+    marginVatRate:
+      meta.marginVatRate === 0 || meta.marginVatRate === 5 || meta.marginVatRate === 8 || meta.marginVatRate === 23
+        ? meta.marginVatRate
+        : null,
     procedureMarkings,
     typDokumentu: meta.docType && TYP_DOKUMENTU.has(meta.docType) ? (meta.docType as JpkTypDokumentu) : null,
     badDebtReliefPeriod: meta.badDebtReliefPeriod ?? null,

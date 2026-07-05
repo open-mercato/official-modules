@@ -119,6 +119,101 @@ describe('renderInvoicePdf', () => {
     expect(Buffer.compare(Buffer.from(single), Buffer.from(dual))).not.toBe(0)
   })
 
+  it('renders the discount table variant and discount total row', async () => {
+    const doc = sampleDoc()
+    doc.model.vatBreakdown = [{ rate: 23, net: '90.00', vat: '20.70' }]
+    doc.model.totalGross = '110.70'
+    doc.lines = [{
+      lineNumber: 1,
+      name: 'Usługa testowa z rabatem',
+      unit: 'szt',
+      quantity: '1',
+      unitNetPrice: '100.00',
+      discount: '10.00',
+      netValue: '90.00',
+      vatRate: 23,
+    }]
+    const model = buildInvoicePdfModel(doc, { ksefNumber: null, ksefStatus: 'queued', notice: 'Wizualizacja faktury.' })
+    expect(model.hasDiscounts).toBe(true)
+    expect(model.discountTotal).toBe('10.00')
+
+    const bytes = await renderInvoicePdf(model, { fontBytes: loadInvoiceFontBytes() })
+    expect(isPdf(bytes)).toBe(true)
+
+    // A renderer that dropped the Rabat column + discount-total row would emit the SAME bytes as an
+    // otherwise-identical no-discount invoice. Prove the discount actually reaches the page by
+    // rendering a no-discount twin (same net values, no discount) and asserting the bytes DIFFER.
+    const noDiscountDoc = sampleDoc()
+    noDiscountDoc.model.vatBreakdown = [{ rate: 23, net: '90.00', vat: '20.70' }]
+    noDiscountDoc.model.totalGross = '110.70'
+    noDiscountDoc.lines = [{
+      lineNumber: 1,
+      name: 'Usługa testowa z rabatem',
+      unit: 'szt',
+      quantity: '1',
+      unitNetPrice: '90.00',
+      netValue: '90.00',
+      vatRate: 23,
+    }]
+    const noDiscountModel = buildInvoicePdfModel(noDiscountDoc, { ksefNumber: null, ksefStatus: 'queued', notice: 'Wizualizacja faktury.' })
+    expect(noDiscountModel.hasDiscounts).toBe(false)
+    const noDiscountBytes = await renderInvoicePdf(noDiscountModel, { fontBytes: loadInvoiceFontBytes() })
+    expect(Buffer.compare(Buffer.from(bytes), Buffer.from(noDiscountBytes))).not.toBe(0)
+  })
+
+  it('renders VAT marża statutory wording and gross-only summary model', async () => {
+    const doc = sampleDoc()
+    doc.model.annotations = { marginScheme: 'travel' }
+    doc.model.vatBreakdown = [{ rate: 'margin', net: '123.00', vat: '0.00' }]
+    doc.model.totalGross = '123.00'
+    doc.lines = [{
+      lineNumber: 1,
+      name: 'Usługa turystyczna',
+      unit: 'szt',
+      quantity: '1',
+      unitNetPrice: '123.00',
+      unitGrossPrice: '123.00',
+      netValue: '123.00',
+      grossValue: '123.00',
+      vatRate: 'np',
+      marginRow: true,
+    }]
+    const model = buildInvoicePdfModel(doc, { ksefNumber: null, ksefStatus: 'queued', notice: 'Wizualizacja faktury.' })
+    expect(model.marginWordingKey).toBe('travel')
+    expect(model.vatSummary).toEqual([{ vatRateLabel: 'procedura marży dla biur podróży', gross: '123.00' }])
+
+    const bytes = await renderInvoicePdf(model, { fontBytes: loadInvoiceFontBytes() })
+    expect(isPdf(bytes)).toBe(true)
+
+    // Prove the marża statutory wording + collapsed summary actually reach the page: a plain 23%
+    // twin with the same gross must render DIFFERENT bytes (a renderer ignoring marginWordingKey
+    // would emit identical output).
+    const plainDoc = sampleDoc()
+    plainDoc.model.vatBreakdown = [{ rate: 23, net: '100.00', vat: '23.00' }]
+    plainDoc.model.totalGross = '123.00'
+    plainDoc.lines = [{ lineNumber: 1, name: 'Usługa turystyczna', unit: 'szt', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 }]
+    const plainModel = buildInvoicePdfModel(plainDoc, { ksefNumber: null, ksefStatus: 'queued', notice: 'Wizualizacja faktury.' })
+    expect(plainModel.marginWordingKey).toBeUndefined()
+    const plainBytes = await renderInvoicePdf(plainModel, { fontBytes: loadInvoiceFontBytes() })
+    expect(Buffer.compare(Buffer.from(bytes), Buffer.from(plainBytes))).not.toBe(0)
+  })
+
+  it('renders payment QR without altering the KOD I QR path', async () => {
+    const doc = sampleDoc()
+    doc.model.payment = { formaCode: '6', bankAccount: '61109010140000071219812874' }
+    const model = buildInvoicePdfModel(doc, { ksefNumber: '2481632647-20260201-ABC-09', ksefStatus: 'accepted', notice: 'Wizualizacja faktury.' })
+    expect(model.paymentQr?.label).toBe('Zapłać przelewem')
+    const withoutPaymentQr = { ...model, paymentQr: undefined }
+
+    const url = buildKodIUrl({ environment: 'test', sellerNip: '2481632647', issueDate: '2026-02-01', invoiceXml: '<Faktura/>' })
+    const qrPng = await generateQrPng(url)
+    const singleQr = await renderInvoicePdf(withoutPaymentQr, { fontBytes: loadInvoiceFontBytes(), qrPng })
+    const withPaymentQr = await renderInvoicePdf(model, { fontBytes: loadInvoiceFontBytes(), qrPng })
+
+    expect(isPdf(withPaymentQr)).toBe(true)
+    expect(Buffer.compare(Buffer.from(singleQr), Buffer.from(withPaymentQr))).not.toBe(0)
+  })
+
   it('paginates a long line-items table', async () => {
     const url = buildKodIUrl({ environment: 'test', sellerNip: '2481632647', issueDate: '2026-02-01', invoiceXml: '<Faktura/>' })
     const qrPng = await generateQrPng(url)

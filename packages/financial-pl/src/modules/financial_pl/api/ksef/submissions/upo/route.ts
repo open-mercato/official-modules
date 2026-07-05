@@ -51,9 +51,13 @@ export async function GET(req: Request) {
     // Access/ownership check only — project the encrypted columns (invoice_xml/upo_xml) OUT so this
     // raw findOne never materializes ciphertext; the receipt is read via findOneWithDecryption below
     // (L1: same project-out carve-out the list routes carry).
-    const located = await em.findOne(KsefSubmission, accessFilter, {
-      fields: ['id', 'status', 'organizationId', 'tenantId'],
-    })
+    const located = await findOneWithDecryption(
+      em,
+      KsefSubmission,
+      accessFilter,
+      { fields: ['id', 'status', 'organizationId', 'tenantId'] },
+      { tenantId: auth.tenantId, organizationId: Array.isArray(orgIds) && orgIds.length === 1 ? orgIds[0] : null },
+    )
     if (!located) throw new CrudHttpError(404, { error: '[internal] KSeF submission not found' })
     // A UPO only exists once KSeF accepted the invoice; never serve a blank/partial
     // receipt for a queued/processing/rejected submission.

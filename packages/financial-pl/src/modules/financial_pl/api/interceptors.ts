@@ -52,6 +52,10 @@ function resolveInvoiceId(request: InterceptorRequest): string | undefined {
  * original, so the discriminator prevents an accepted correction from locking the original.
  */
 async function isInvoiceKsefLocked(invoiceId: string, context: InterceptorContext): Promise<boolean> {
+  // Fail closed on missing caller scope: without a real org/tenant the submission lookup cannot be
+  // tenant-scoped (and an empty-string uuid would make the query itself throw a 500). An unscopable
+  // mutation must not slip past the immutability guard, so treat it as locked.
+  if (!asString(context.organizationId) || !asString(context.tenantId)) return true
   const em = context.em.fork()
   const count = await em.count(KsefSubmission, {
     salesInvoiceId: invoiceId,

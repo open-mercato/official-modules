@@ -6,8 +6,12 @@
  * there is no float drift. This module has no DB/DI/network deps and is fully
  * unit-testable.
  */
-import type { Fa3Document, Fa3Party, Fa3VatRate, Fa3VatBucketKey } from './fa3'
+import type { Fa3Annotations, Fa3Document, Fa3Line, Fa3Party, Fa3VatBucketKey, Fa3VatRate } from './fa3'
+import { isValidPolishAccountNumber, normalizeAccountNumber } from './bank-account'
+import { buildZbpTransferString } from './payment-qr'
 import type { KsefSubmissionStatusColumn } from '../data/entities'
+
+type MarginScheme = NonNullable<Fa3Annotations['marginScheme']>
 
 export type InvoicePartyView = {
   name: string
@@ -24,6 +28,8 @@ export type InvoiceLineView = {
   unit: string
   quantity: string
   unitNet: string
+  discountPct?: string
+  discountAmount?: string
   net: string
   vatRateLabel: string
   vat: string
@@ -32,8 +38,8 @@ export type InvoiceLineView = {
 
 export type InvoiceVatSummaryRow = {
   vatRateLabel: string
-  net: string
-  vat: string
+  net?: string
+  vat?: string
   gross: string
 }
 
@@ -47,6 +53,10 @@ export type InvoicePdfModel = {
   buyer: InvoicePartyView
   lines: InvoiceLineView[]
   vatSummary: InvoiceVatSummaryRow[]
+  hasDiscounts: boolean
+  discountTotal?: string
+  marginScheme?: MarginScheme
+  marginWordingKey?: MarginScheme
   totalNet: string
   totalVat: string
   totalGross: string
@@ -63,9 +73,17 @@ export type InvoicePdfModel = {
   notes?: string
   /** Optional payment block (Płatność), rendered only when present. */
   payment?: { methodLabel: string; term?: string; account?: string; bankName?: string; paid?: boolean }
+  paymentQr?: { payload: string; label: string }
   correctionReason?: string
   /** The "this is a visualization" footer notice (translated by the caller). */
   notice: string
+}
+
+export const MARGIN_WORDING_PL: Record<MarginScheme, string> = {
+  travel: 'procedura marży dla biur podróży',
+  used_goods: 'procedura marży - towary używane',
+  art: 'procedura marży - dzieła sztuki',
+  collectibles: 'procedura marży - przedmioty kolekcjonerskie i antyki',
 }
 
 const FORMA_LABEL_PL: Record<string, string> = {
@@ -98,6 +116,12 @@ function sumMoney(values: string[]): string {
   return fromCents(values.reduce((acc, v) => acc + toCents(v), 0n))
 }
 
+/** Exact money difference a − b (2dp). Used to recover gross-mode per-line VAT as gross − net,
+ *  which is what the resolver/FA(3)/header already carry — recomputing net×rate would drift. */
+function diffMoney(a: string, b: string): string {
+  return fromCents(toCents(a) - toCents(b))
+}
+
 /** Per-line VAT = round-half-up(net * rate%, 2dp), by magnitude (sign-preserving). Non-numeric rates
  *  → 0. The rate is taken in basis points (rate × 100) so a FRACTIONAL rate (e.g. Finland 25.5%) is
  *  applied exactly instead of being truncated to a whole percent. */
@@ -113,6 +137,7 @@ function lineVat(net: string, rate: Fa3VatRate): string {
 
 export function vatRateLabel(rate: Fa3VatBucketKey): string {
   if (typeof rate === 'number') return `${rate}%`
+  if (rate === 'margin') return 'marża'
   if (rate === 'oo') return 'o.o.'
   if (rate === 'oss') return 'OSS' // WSTO_EE destination-rate bucket (P_13_5/P_14_5)
   return rate // 'zw' | 'np'
@@ -122,6 +147,67 @@ function party(p: Fa3Party): InvoicePartyView {
   // A UPR (simplified-invoice) NIP-only buyer legitimately omits Nazwa/Adres; fall back to empty
   // strings so the PDF view stays well-typed (the buyer is then identified by NIP alone).
   return { name: p.name ?? '', nip: p.nip, euVatId: p.euVatId, addressLine1: p.addressLine1 ?? '', addressLine2: p.addressLine2, countryCode: p.countryCode }
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const s = value.trim()
+    return s ? s : undefined
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
+function lineRecord(line: Fa3Line): Record<string, unknown> {
+  return line as unknown as Record<string, unknown>
+}
+
+function lineDiscountAmount(line: Fa3Line): string | undefined {
+  const row = lineRecord(line)
+  return (
+    line.discount ??
+    optionalString(row.discountAmount) ??
+    optionalString(row.discount_amount)
+  )
+}
+
+function lineDiscountPct(line: Fa3Line): string | undefined {
+  const row = lineRecord(line)
+  return optionalString(row.discountPct) ?? optionalString(row.discountPercent) ?? optionalString(row.discount_percent)
+}
+
+function isNonZeroMoney(value: string | undefined): value is string {
+  return value !== undefined && toCents(value) !== 0n
+}
+
+function paymentQrPayload(input: {
+  seller: InvoicePartyView
+  invoiceNumber: string
+  currencyCode: string
+  totalGross: string
+  payment?: { paidDate?: string; bankAccount?: string }
+}): string | undefined {
+  const bankAccount = input.payment?.bankAccount
+  if (input.currencyCode !== 'PLN' || input.payment?.paidDate || !isValidPolishAccountNumber(bankAccount)) return undefined
+  const amountGrosze = toCents(input.totalGross)
+  if (amountGrosze < 0n || amountGrosze > BigInt(Number.MAX_SAFE_INTEGER)) return undefined
+  // Normalise the seller NIP to bare digits: it may be stored with a 'PL' prefix or dashes
+  // (e.g. 'PL123-456-78-90'). Pass it only when it reduces to exactly 10 digits, else omit the NIP
+  // field (the ZBP payload allows an empty NIP). Never let a malformed NIP crash the whole PDF —
+  // fall back to no QR on any builder validation error.
+  const nipDigits = (input.seller.nip ?? '').replace(/\D/g, '')
+  try {
+    return buildZbpTransferString({
+      nip: /^\d{10}$/.test(nipDigits) ? nipDigits : '',
+      countryCode: 'PL',
+      nrb: normalizeAccountNumber(bankAccount),
+      amountGrosze: Number(amountGrosze),
+      name: input.seller.name,
+      title: `FV ${input.invoiceNumber}`,
+    })
+  } catch {
+    return undefined
+  }
 }
 
 export function buildInvoicePdfModel(
@@ -149,28 +235,48 @@ export function buildInvoicePdfModel(
   const { model, lines } = doc
   const isKor = model.invoiceKind === 'KOR' || model.invoiceKind === 'KOR_ZAL' || model.invoiceKind === 'KOR_ROZ'
   const notes = typeof opts.notes === 'string' ? opts.notes.trim() : ''
+  const marginScheme = model.annotations?.marginScheme
+  const seller = party(model.seller)
+  const buyer = party(model.buyer)
 
   const lineViews: InvoiceLineView[] = lines.map((l) => {
-    const vat = lineVat(l.netValue, l.vatRate)
+    const isMarginLine = Boolean(marginScheme) || Boolean(l.marginRow)
+    // Gross-mode lines (grossValue present, non-margin): VAT is derived FROM gross, so the exact
+    // per-line VAT is gross − net (what the resolver/FA(3)/header carry). Net-mode lines keep the
+    // net×rate computation unchanged (BC). Margin lines show no VAT.
+    const vat = isMarginLine
+      ? ''
+      : l.grossValue
+        ? diffMoney(l.grossValue, l.netValue)
+        : lineVat(l.netValue, l.vatRate)
+    const gross = l.grossValue ?? (isMarginLine ? l.netValue : sumMoney([l.netValue, vat]))
+    const discountAmount = lineDiscountAmount(l)
+    const discountPct = lineDiscountPct(l)
     return {
       lp: l.lineNumber,
       name: l.name,
       unit: l.unit ?? 'szt',
       quantity: l.quantity,
-      unitNet: l.unitNetPrice,
-      net: l.netValue,
-      vatRateLabel: vatRateLabel(l.vatRate),
+      unitNet: isMarginLine ? (l.unitGrossPrice ?? l.unitNetPrice) : l.unitNetPrice,
+      ...(discountPct ? { discountPct } : {}),
+      ...(discountAmount ? { discountAmount } : {}),
+      net: isMarginLine ? gross : l.netValue,
+      vatRateLabel: isMarginLine ? 'marża' : vatRateLabel(l.vatRate),
       vat,
-      gross: sumMoney([l.netValue, vat]),
+      gross,
     }
   })
+  const discountAmounts = lineViews.map((l) => l.discountAmount).filter(isNonZeroMoney)
+  const hasDiscounts = discountAmounts.length > 0
 
-  const vatSummary: InvoiceVatSummaryRow[] = model.vatBreakdown.map((e) => ({
-    vatRateLabel: vatRateLabel(e.rate),
-    net: e.net,
-    vat: e.vat,
-    gross: sumMoney([e.net, e.vat]),
-  }))
+  const vatSummary: InvoiceVatSummaryRow[] = marginScheme
+    ? [{ vatRateLabel: MARGIN_WORDING_PL[marginScheme], gross: model.totalGross }]
+    : model.vatBreakdown.map((e) => ({
+        vatRateLabel: vatRateLabel(e.rate),
+        net: e.net,
+        vat: e.vat,
+        gross: sumMoney([e.net, e.vat]),
+      }))
 
   const number = opts.ksefNumber ?? undefined
   // KOD I keeps its existing label logic: the assigned number, else the OFFLINE
@@ -187,16 +293,26 @@ export function buildInvoicePdfModel(
           paid: Boolean(pay.paidDate),
         }
       : undefined
+  const paymentQr = paymentQrPayload({
+    seller,
+    invoiceNumber: model.invoiceNumber,
+    currencyCode: model.currencyCode,
+    totalGross: model.totalGross,
+    payment: pay,
+  })
   return {
     title: isKor ? 'FAKTURA KORYGUJĄCA' : 'FAKTURA',
     invoiceNumber: model.invoiceNumber,
     issueDate: model.issueDate,
     saleDate: model.saleDate,
     currencyCode: model.currencyCode,
-    seller: party(model.seller),
-    buyer: party(model.buyer),
+    seller,
+    buyer,
     lines: lineViews,
     vatSummary,
+    hasDiscounts,
+    ...(hasDiscounts ? { discountTotal: sumMoney(discountAmounts) } : {}),
+    ...(marginScheme ? { marginScheme, marginWordingKey: marginScheme } : {}),
     totalNet: sumMoney(model.vatBreakdown.map((e) => e.net)),
     totalVat: sumMoney(model.vatBreakdown.map((e) => e.vat)),
     totalGross: model.totalGross,
@@ -204,6 +320,7 @@ export function buildInvoicePdfModel(
     ...(opts.hasKodII ? { ksefCert: { label: opts.qrCertyfikatLabel ?? 'CERTYFIKAT' } } : {}),
     ...(notes ? { notes } : {}),
     ...(paymentView ? { payment: paymentView } : {}),
+    ...(paymentQr ? { paymentQr: { payload: paymentQr, label: 'Zapłać przelewem' } } : {}),
     correctionReason: model.correction?.reason,
     notice: opts.notice,
   }

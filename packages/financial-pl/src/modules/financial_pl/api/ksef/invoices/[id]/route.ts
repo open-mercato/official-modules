@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { KsefSubmission, SalesInvoicePlMeta } from '../../../../data/entities'
@@ -66,6 +67,9 @@ type SalesInvoiceLineRow = {
   quantity?: string | number | null
   quantity_unit?: string | null
   unit_price_net?: string | number | null
+  unit_price_gross?: string | number | null
+  discount_amount?: string | number | null
+  discount_percent?: string | number | null
   tax_rate?: string | number | null
   total_net_amount?: string | number | null
   tax_amount?: string | number | null
@@ -99,6 +103,9 @@ type InvoiceLineDetail = {
   quantity: string | null
   quantityUnit: string | null
   unitPriceNet: string | null
+  unitPriceGross: string | null
+  discountAmount: string | null
+  discountPercent: string | null
   taxRate: string | null
   totalNetAmount: string | null
   taxAmount: string | null
@@ -142,6 +149,9 @@ type InvoiceMetaDetail = {
   bSpvDostawa: boolean
   bMpvProwizja: boolean
   docType: string | null
+  marginScheme: string | null
+  marginPurchaseCost: string | null
+  marginVatRate: number | null
   badDebtReliefPeriod: string | null
   badDebtTerminPlatnosci: string | null
 }
@@ -214,6 +224,9 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
           'quantity',
           'quantity_unit',
           'unit_price_net',
+          'unit_price_gross',
+          'discount_amount',
+          'discount_percent',
           'tax_rate',
           'total_net_amount',
           'tax_amount',
@@ -240,7 +253,12 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
     // read at all. Only the invoice's OWN submissions (document_kind='invoice'): a correction stores
     // sales_invoice_id = the CORRECTED original, so without this filter an accepted correction would
     // bleed its status onto the original.
-    const metaRow = await em.findOne(
+    const decryptionScope = {
+      tenantId: auth.tenantId,
+      organizationId: Array.isArray(organizationIds) && organizationIds.length === 1 ? organizationIds[0] : null,
+    }
+    const metaRow = await findOneWithDecryption(
+      em,
       SalesInvoicePlMeta,
       {
         salesInvoiceId: id,
@@ -248,9 +266,12 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
         ...(organizationIds ? { organizationId: { $in: organizationIds } } : {}),
         deletedAt: null,
       },
+      undefined,
+      decryptionScope,
     )
 
-    const submissionRow = await em.findOne(
+    const submissionRow = await findOneWithDecryption(
+      em,
       KsefSubmission,
       {
         salesInvoiceId: id,
@@ -263,6 +284,7 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
         orderBy: { createdAt: 'desc' },
         fields: ['id', 'status', 'ksefNumber', 'offlineSendDeadlineAt', 'createdAt'],
       },
+      decryptionScope,
     )
 
     const invoice: InvoiceDetail = {
@@ -287,6 +309,9 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
       quantity: toAmount(row.quantity),
       quantityUnit: row.quantity_unit ?? null,
       unitPriceNet: toAmount(row.unit_price_net),
+      unitPriceGross: toAmount(row.unit_price_gross),
+      discountAmount: toAmount(row.discount_amount),
+      discountPercent: toAmount(row.discount_percent),
       taxRate: toAmount(row.tax_rate),
       totalNetAmount: toAmount(row.total_net_amount),
       taxAmount: toAmount(row.tax_amount),
@@ -330,6 +355,9 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
           bSpvDostawa: metaRow.bSpvDostawa,
           bMpvProwizja: metaRow.bMpvProwizja,
           docType: metaRow.docType ?? null,
+          marginScheme: metaRow.marginScheme ?? null,
+          marginPurchaseCost: metaRow.marginPurchaseCost ?? null,
+          marginVatRate: metaRow.marginVatRate != null ? Number(metaRow.marginVatRate) : null,
           badDebtReliefPeriod: metaRow.badDebtReliefPeriod ?? null,
           badDebtTerminPlatnosci: metaRow.badDebtTerminPlatnosci
             ? metaRow.badDebtTerminPlatnosci.toISOString()
@@ -381,6 +409,9 @@ const lineSchema = z.object({
   quantity: z.string().nullable(),
   quantityUnit: z.string().nullable(),
   unitPriceNet: z.string().nullable(),
+  unitPriceGross: z.string().nullable().optional(),
+  discountAmount: z.string().nullable().optional(),
+  discountPercent: z.string().nullable().optional(),
   taxRate: z.string().nullable(),
   totalNetAmount: z.string().nullable(),
   taxAmount: z.string().nullable(),

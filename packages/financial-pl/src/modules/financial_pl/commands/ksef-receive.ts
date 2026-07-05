@@ -174,9 +174,13 @@ async function upsertReceivedInvoice(
   if (!fields.ksefNumber) return false
 
   const where = receivedWhere(scope, contextNip, fields.ksefNumber)
-  const existing = await em.findOne(ReceivedInvoice, where, {
-    fields: ['id', 'organizationId', 'tenantId', 'contextNip', 'ksefNumber', 'fetchedAt'],
-  })
+  const existing = await findOneWithDecryption(
+    em,
+    ReceivedInvoice,
+    where,
+    { fields: ['id', 'organizationId', 'tenantId', 'contextNip', 'ksefNumber', 'fetchedAt'] },
+    scope,
+  )
   if (existing) {
     existing.fetchedAt = new Date()
     await em.flush()
@@ -216,9 +220,13 @@ async function upsertReceivedInvoice(
   } catch (err) {
     if (isUniqueViolation(err, RECEIVED_INVOICE_UNIQUE_INDEX)) {
       em.clear()
-      const winner = await em.findOne(ReceivedInvoice, where, {
-        fields: ['id', 'organizationId', 'tenantId', 'contextNip', 'ksefNumber', 'fetchedAt'],
-      })
+      const winner = await findOneWithDecryption(
+        em,
+        ReceivedInvoice,
+        where,
+        { fields: ['id', 'organizationId', 'tenantId', 'contextNip', 'ksefNumber', 'fetchedAt'] },
+        scope,
+      )
       if (winner) {
         winner.fetchedAt = new Date()
         await em.flush()
@@ -243,7 +251,7 @@ async function updateCursor(
     deletedAt: null,
   }
   const now = new Date()
-  const existing = await em.findOne(ReceiveCursor, where)
+  const existing = await findOneWithDecryption(em, ReceiveCursor, where, undefined, scope)
   if (existing) {
     if (permanentStorageHwmDate) existing.permanentStorageHwmDate = permanentStorageHwmDate
     existing.lastSyncedAt = now
@@ -267,7 +275,7 @@ async function updateCursor(
   } catch (err) {
     if (isUniqueViolation(err, RECEIVE_CURSOR_UNIQUE_INDEX)) {
       em.clear()
-      const winner = await em.findOne(ReceiveCursor, where)
+      const winner = await findOneWithDecryption(em, ReceiveCursor, where, undefined, scope)
       if (winner) {
         if (permanentStorageHwmDate) winner.permanentStorageHwmDate = permanentStorageHwmDate
         winner.lastSyncedAt = now

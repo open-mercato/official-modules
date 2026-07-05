@@ -232,6 +232,79 @@ describe('resolveJpkFiling — foreign-currency conversion to PLN (H2)', () => {
   })
 })
 
+describe('resolveJpkFiling — VAT marża sales', () => {
+  const marginRows = (meta: Row, invoiceExtra: Row = {}, lineExtra: Row = {}): Rows => ({
+    'sales:sales_invoice': [
+      {
+        id: 'inv-margin',
+        invoice_number: 'FV/MARZA',
+        issue_date: '2026-06-10',
+        currency_code: 'PLN',
+        grand_total_net_amount: '1230.0000',
+        tax_total_amount: '0.0000',
+        grand_total_gross_amount: '1230.0000',
+        status: 'issued',
+        document_type: 'invoice',
+        deleted_at: null,
+        metadata: { buyerSnapshot: { nip: '3755747347', companyName: 'Nabywca' } },
+        ...invoiceExtra,
+      },
+    ],
+    'sales:sales_invoice_line': [
+      {
+        line_number: 1,
+        invoice_id: 'inv-margin',
+        total_net_amount: '1230.0000',
+        total_gross_amount: '1230.0000',
+        deleted_at: null,
+        ...lineExtra,
+      },
+    ],
+    'financial_pl:ksef_submission': [
+      { sales_invoice_id: 'inv-margin', document_kind: 'invoice', status: 'accepted', ksef_number: 'MARZA-NR', deleted_at: null, created_at: '2026-06-10' },
+    ],
+    'financial_pl:sales_invoice_pl_meta': [
+      { sales_invoice_id: 'inv-margin', margin_scheme: 'used_goods', mr_uz: true, deleted_at: null, ...meta },
+    ],
+  })
+
+  it('emits SprzedazVAT_Marza and MR marker without normal K buckets when purchase cost is absent', async () => {
+    const result = await resolveJpkFiling(deps(marginRows({}), []), args(makeFiling({ variant: 'V7M', month: 6 })))
+    const row = result.ewidencja!.sprzedaz[0]
+    expect(row.sprzedazVatMarza).toBe('1230.00')
+    expect(row.procedures).toEqual({ MR_UZ: true })
+    expect(row.k).toBeUndefined()
+  })
+
+  it('decomposes a positive margin at the configured VAT rate while keeping SprzedazVAT_Marza', async () => {
+    const result = await resolveJpkFiling(
+      deps(marginRows({ margin_purchase_cost: '1000.00', margin_vat_rate: 23 }), []),
+      args(makeFiling({ variant: 'V7M', month: 6 })),
+    )
+    const row = result.ewidencja!.sprzedaz[0]
+    expect(row.sprzedazVatMarza).toBe('1230.00')
+    expect(row.k).toEqual({ K_19: '186.99', K_20: '43.01' })
+  })
+
+  it('throws when a marża document has a tax-rate-bearing line', async () => {
+    await expect(
+      resolveJpkFiling(
+        deps(marginRows({}, {}, { tax_rate: '23.0000', tax_amount: '230.0000' }), []),
+        args(makeFiling({ variant: 'V7M', month: 6 })),
+      ),
+    ).rejects.toThrow('marginSchemeMixedLines')
+  })
+
+  it('throws when a marża document is not PLN', async () => {
+    await expect(
+      resolveJpkFiling(
+        deps(marginRows({}, { currency_code: 'EUR' }), []),
+        args(makeFiling({ variant: 'V7M', month: 6 })),
+      ),
+    ).rejects.toThrow('marginSchemeRequiresPln')
+  })
+})
+
 describe('resolveJpkFiling — line-less credit memo rate (M1)', () => {
   it('derives the rate from the header magnitude (8%), not the old 23% fallback', async () => {
     const rows: Rows = {

@@ -8,6 +8,7 @@ import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/er
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission, SalesInvoicePlMeta, type KsefSubmissionStatusColumn } from '../../../data/entities'
 import { ksefInvoiceListQuerySchema } from '../../../data/validators'
 
@@ -133,7 +134,12 @@ export async function GET(req: Request) {
       if (!KSEF_SUBMISSION_STATUSES.has(status as KsefSubmissionStatusColumn)) {
         throw new CrudHttpError(400, { error: 'Invalid status filter' })
       }
-      const statusRows = await em.find(
+      const decryptionScope = {
+        tenantId: auth.tenantId,
+        organizationId: Array.isArray(organizationIds) && organizationIds.length === 1 ? organizationIds[0] : null,
+      }
+      const statusRows = await findWithDecryption(
+        em,
         KsefSubmission,
         {
           status: status as KsefSubmissionStatusColumn,
@@ -143,6 +149,7 @@ export async function GET(req: Request) {
           deletedAt: null,
         },
         { fields: ['salesInvoiceId'] },
+        decryptionScope,
       )
       statusInvoiceIds = Array.from(new Set(statusRows.map((row) => row.salesInvoiceId)))
       if (statusInvoiceIds.length === 0) {
@@ -208,7 +215,12 @@ export async function GET(req: Request) {
     const submissionByInvoice = new Map<string, { status: KsefSubmissionStatusColumn; ksefNumber: string | null; offlineSendDeadlineAt: Date | null }>()
     const metaByInvoice = new Map<string, { invoiceKind: string }>()
     if (invoiceIds.length > 0) {
-      const submissions = await em.find(
+      const decryptionScope = {
+        tenantId: auth.tenantId,
+        organizationId: Array.isArray(organizationIds) && organizationIds.length === 1 ? organizationIds[0] : null,
+      }
+      const submissions = await findWithDecryption(
+        em,
         KsefSubmission,
         {
           salesInvoiceId: { $in: invoiceIds },
@@ -221,6 +233,7 @@ export async function GET(req: Request) {
           orderBy: { createdAt: 'desc' },
           fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'offlineSendDeadlineAt', 'createdAt'],
         },
+        decryptionScope,
       )
       for (const submission of submissions) {
         if (!submissionByInvoice.has(submission.salesInvoiceId)) {
@@ -231,7 +244,8 @@ export async function GET(req: Request) {
           })
         }
       }
-      const metaRows = await em.find(
+      const metaRows = await findWithDecryption(
+        em,
         SalesInvoicePlMeta,
         {
           salesInvoiceId: { $in: invoiceIds },
@@ -240,6 +254,7 @@ export async function GET(req: Request) {
           deletedAt: null,
         },
         { fields: ['salesInvoiceId', 'invoiceKind', 'ksefStatus', 'ksefNumber'] },
+        decryptionScope,
       )
       for (const row of metaRows) metaByInvoice.set(row.salesInvoiceId, { invoiceKind: row.invoiceKind })
     }

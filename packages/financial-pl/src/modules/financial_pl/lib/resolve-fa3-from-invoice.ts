@@ -12,12 +12,15 @@ import {
   deriveHeaderVatRate,
   headerVatRateReconciles,
   metadataLinesToRows,
+  normalizeMarginScheme,
   roundMoneyTo2dp,
+  readPriceModeFromMetadata,
   scaled4ToMoney2dp,
   toIsoDate,
   toScaled4,
   asRecord,
   asString,
+  lineCarriesTaxRate,
   type Fa3MappingDeps,
   type InvoiceLineRow,
   type InvoiceRow,
@@ -63,6 +66,8 @@ const OSS_COUNTRY_REQUIRED_DEFAULT =
   'An OSS (WSTO_EE) invoice requires the consumption-country code. Set the OSS destination country before submitting it to KSeF.'
 const OSS_RATE_REQUIRED_DEFAULT =
   'An OSS (WSTO_EE) line requires a destination-country VAT rate. Set the consumption-country rate (or a known EU member state) before submitting it to KSeF.'
+const MARGIN_SCHEME_MIXED_LINES_DEFAULT = 'marginSchemeMixedLines'
+const MARGIN_SCHEME_REQUIRES_PLN_DEFAULT = 'marginSchemeRequiresPln'
 
 /** The PL-meta `invoice_kind` text column → the FA(3) `RodzajFaktury` enum. */
 type InvoiceKindMeta = 'vat' | 'zal' | 'roz' | 'upr' | 'kor_zal' | 'kor_roz'
@@ -205,8 +210,29 @@ export async function resolveFa3FromSalesInvoice(
   const exchangeRate = resolveMetaExchangeRate(meta)
 
   const currencyCode = (asString(invoice.currency_code) ?? 'PLN').toUpperCase()
+  const invoiceMetadata = asRecord(invoice.metadata)
+  const priceMode = readPriceModeFromMetadata(invoiceMetadata)
+  const marginScheme = normalizeMarginScheme(meta?.margin_scheme)
 
   const baseLineRows = lineRows.length > 0 ? lineRows : metadataLinesToRows(invoice)
+  if (marginScheme) {
+    if (currencyCode !== 'PLN') {
+      throw new CrudHttpError(422, {
+        error:
+          deps.translate?.('financial_pl.errors.margin_scheme_requires_pln', MARGIN_SCHEME_REQUIRES_PLN_DEFAULT) ??
+          MARGIN_SCHEME_REQUIRES_PLN_DEFAULT,
+        code: 'marginSchemeRequiresPln',
+      })
+    }
+    if (baseLineRows.some(lineCarriesTaxRate)) {
+      throw new CrudHttpError(422, {
+        error:
+          deps.translate?.('financial_pl.errors.margin_scheme_mixed_lines', MARGIN_SCHEME_MIXED_LINES_DEFAULT) ??
+          MARGIN_SCHEME_MIXED_LINES_DEFAULT,
+        code: 'marginSchemeMixedLines',
+      })
+    }
+  }
   const ossLineRows = applyOssMarkers(baseLineRows, ossProcedure, consumptionCountry, exchangeRate, deps)
   // Non-OSS foreign-currency invoice: stamp the FX rate on every line too, so each FaWiersz emits
   // `KursWaluty` consistently with the `P_14_xW` (PLN-converted output VAT) the summary carries
@@ -220,13 +246,17 @@ export async function resolveFa3FromSalesInvoice(
     effectiveLineRows,
     invoice.grand_total_net_amount,
     invoice.tax_total_amount,
-    exchangeRate ? { fxRate: exchangeRate } : {},
+    {
+      ...(exchangeRate ? { fxRate: exchangeRate } : {}),
+      priceMode,
+      ...(marginScheme ? { marginScheme, headerGrossField: invoice.grand_total_gross_amount } : {}),
+    },
   )
   assertMappedVatRates(vatBreakdown, deps.translate)
 
   // Header-only fallback reconcile guard (a rounded effective rate must reproduce the stored tax).
   // Skipped for OSS, whose buckets carry the destination rate, not a Polish-mappable one.
-  if (effectiveLineRows.length === 0 && !ossProcedure) {
+  if (effectiveLineRows.length === 0 && !ossProcedure && !marginScheme) {
     const headerNet = toScaled4(invoice.grand_total_net_amount)
     const headerVat = toScaled4(invoice.tax_total_amount)
     if (!headerVatRateReconciles(headerNet, headerVat, deriveHeaderVatRate(headerNet, headerVat))) {
@@ -247,6 +277,7 @@ export async function resolveFa3FromSalesInvoice(
 
   const headerNet = invoice.grand_total_net_amount
   const headerVat = invoice.tax_total_amount
+  const fallbackGross = scaled4ToMoney2dp(toScaled4(headerNet) + toScaled4(headerVat))
   const fallbackLine: Fa3InvoiceInput['lines'][number] = {
     lineNumber: 1,
     name: asString(invoice.invoice_number) ?? 'Faktura',
@@ -254,12 +285,23 @@ export async function resolveFa3FromSalesInvoice(
     unitNetPrice: roundMoneyTo2dp(headerNet),
     netValue: roundMoneyTo2dp(headerNet),
     vatRate: deriveHeaderVatRate(toScaled4(headerNet), toScaled4(headerVat)),
+    ...(priceMode === 'gross' || marginScheme
+      ? {
+          unitGrossPrice: roundMoneyTo2dp(invoice.grand_total_gross_amount ?? fallbackGross),
+          grossValue: roundMoneyTo2dp(invoice.grand_total_gross_amount ?? fallbackGross),
+        }
+      : {}),
+    ...(marginScheme ? { marginRow: true } : {}),
     // Header-only foreign-currency invoice: the single fallback line carries KursWaluty too (H3).
     ...(exchangeRate ? { fxRate: exchangeRate } : {}),
   }
 
   const lines =
-    effectiveLineRows.length > 0 ? buildLines(effectiveLineRows) : metaKind === 'zal' ? [] : [fallbackLine]
+    effectiveLineRows.length > 0
+      ? buildLines(effectiveLineRows, { priceMode, ...(marginScheme ? { marginScheme } : {}) })
+      : metaKind === 'zal'
+        ? []
+        : [fallbackLine]
 
   // --- Per-kind blocks --------------------------------------------------------------------------
   let order: Fa3InvoiceInput['order']
@@ -281,7 +323,7 @@ export async function resolveFa3FromSalesInvoice(
 
   // SPEC-017 F1: optional payment block from metadata.payment. Fail-open: a malformed stored
   // payment must not block a send; just omit the <Platnosc> node. TerminPlatnosci = invoice due date.
-  const rawPayment = asRecord(invoice.metadata).payment
+  const rawPayment = invoiceMetadata.payment
   const parsedPayment = rawPayment !== undefined ? invoicePaymentSchema.safeParse(rawPayment) : null
   const payment =
     parsedPayment && parsedPayment.success
@@ -291,7 +333,7 @@ export async function resolveFa3FromSalesInvoice(
   const fa3Invoice: Fa3InvoiceInput = {
     invoiceNumber: asString(invoice.invoice_number) ?? salesInvoiceId,
     issueDate,
-    saleDate: toIsoDate(asRecord(invoice.metadata).saleDate) ?? toIsoDate(invoice.issue_date) ?? undefined,
+    saleDate: toIsoDate(invoiceMetadata.saleDate) ?? toIsoDate(invoice.issue_date) ?? undefined,
     currencyCode,
     invoiceKind,
     seller,

@@ -30,6 +30,22 @@ export type Fa3MappingDeps = {
 
 export type InvoiceRow = Record<string, unknown>
 export type InvoiceLineRow = Record<string, unknown>
+export type Fa3PriceMode = 'net' | 'gross'
+export type Fa3MarginScheme = 'travel' | 'used_goods' | 'art' | 'collectibles'
+
+type ComputedLineAmounts = {
+  unitNetPrice: string
+  unitGrossPrice: string
+  netValue: string
+  grossValue: string
+  vatValue: string
+  discount?: string
+}
+
+type BuildLineOptions = {
+  priceMode?: Fa3PriceMode
+  marginScheme?: Fa3MarginScheme
+}
 
 export const BUYER_REQUIRED_DEFAULT =
   'This invoice has no buyer details. Add the buyer to the invoice before submitting it to KSeF.'
@@ -113,6 +129,133 @@ export function normalizeVatRate(value: unknown): Fa3VatRate {
   if (text === null && typeof value !== 'number') return 0
   const numeric = typeof value === 'number' ? value : Number(text)
   return Number.isFinite(numeric) ? numeric : Number.NaN
+}
+
+export function readPriceModeFromMetadata(metadata: unknown): Fa3PriceMode {
+  return asString(asRecord(metadata).priceMode) === 'gross' ? 'gross' : 'net'
+}
+
+export function normalizeMarginScheme(value: unknown): Fa3MarginScheme | undefined {
+  const text = asString(value)
+  if (text === 'travel' || text === 'used_goods' || text === 'art' || text === 'collectibles') return text
+  return undefined
+}
+
+export function lineCarriesTaxRate(row: InvoiceLineRow): boolean {
+  // Only a POSITIVE VAT rate marks a real taxable line for the margin mixed-mode guard.
+  // Core 0.6.5 persists an omitted line `taxRate` as `0`, and margin lines carry no VAT, so a
+  // rate of 0 / null / unset is NOT evidence of a mixed taxable line — treating it as such would
+  // reject every valid VAT-margin invoice (all rows persist rate 0). Guard on rate > 0 only.
+  if (row.tax_rate === undefined || row.tax_rate === null) return false
+  const rate = typeof row.tax_rate === 'number' ? row.tax_rate : Number(asString(row.tax_rate) ?? '')
+  return Number.isFinite(rate) && rate > 0
+}
+
+function roundDivSigned(numerator: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) return 0n
+  const negative = numerator < 0n
+  const magnitude = negative ? -numerator : numerator
+  const rounded = (magnitude + denominator / 2n) / denominator
+  return negative ? -rounded : rounded
+}
+
+function centsToMoney(cents: bigint): string {
+  const negative = cents < 0n
+  const magnitude = negative ? -cents : cents
+  const whole = magnitude / 100n
+  const fraction = magnitude % 100n
+  return `${negative ? '-' : ''}${whole.toString()}.${fraction.toString().padStart(2, '0')}`
+}
+
+function moneyToCents(value: unknown): bigint {
+  const text = roundMoneyTo2dp(value)
+  const match = /^(-?)(\d+)\.(\d{2})$/.exec(text)
+  if (!match) return 0n
+  const sign = match[1] === '-' ? -1n : 1n
+  return sign * (BigInt(match[2]) * 100n + BigInt(match[3]))
+}
+
+function hasMoneyInput(value: unknown): boolean {
+  return typeof value === 'number' ? Number.isFinite(value) : asString(value) !== null
+}
+
+function subtotalCents(quantity: unknown, unitPrice: unknown): bigint {
+  const quantityScaled = toScaled4(quantity)
+  const unitCents = moneyToCents(unitPrice)
+  return roundDivSigned(quantityScaled * unitCents, 10000n)
+}
+
+function numericRateScaled4(value: unknown): bigint | null {
+  const rate = normalizeVatRate(value)
+  return typeof rate === 'number' && Number.isFinite(rate) ? toScaled4(rate) : null
+}
+
+function vatFromNetCents(netCents: bigint, rateValue: unknown): bigint {
+  const rateScaled = numericRateScaled4(rateValue)
+  return rateScaled === null ? 0n : roundDivSigned(netCents * rateScaled, 100n * 10000n)
+}
+
+function vatFromGrossCents(grossCents: bigint, rateValue: unknown): bigint {
+  const rateScaled = numericRateScaled4(rateValue)
+  if (rateScaled === null) return 0n
+  return roundDivSigned(grossCents * rateScaled, 100n * 10000n + rateScaled)
+}
+
+function deriveDiscountCents(row: InvoiceLineRow, unitField: 'unit_price_net' | 'unit_price_gross'): bigint {
+  if (hasMoneyInput(row.discount_amount)) return moneyToCents(row.discount_amount)
+  const percentScaled = toScaled4(row.discount_percent)
+  if (percentScaled === 0n) return 0n
+  const baseCents = subtotalCents(row.quantity ?? '1', row[unitField])
+  return roundDivSigned(baseCents * percentScaled, 100n * 10000n)
+}
+
+function computeLineAmounts(row: InvoiceLineRow, opts: BuildLineOptions = {}): ComputedLineAmounts {
+  const useGross = opts.priceMode === 'gross' || opts.marginScheme !== undefined
+  const unitField = useGross ? 'unit_price_gross' : 'unit_price_net'
+  const discountCents = deriveDiscountCents(row, unitField)
+  const hasUnit = hasMoneyInput(row[unitField])
+  const netUnit = hasMoneyInput(row.unit_price_net) ? row.unit_price_net : row.total_net_amount
+  const grossUnit = hasMoneyInput(row.unit_price_gross) ? row.unit_price_gross : row.total_gross_amount
+
+  if (useGross) {
+    const grossCents = hasUnit
+      ? subtotalCents(row.quantity ?? '1', row.unit_price_gross) - discountCents
+      : moneyToCents(row.total_gross_amount)
+    const vatCents = opts.marginScheme ? 0n : vatFromGrossCents(grossCents, row.tax_rate)
+    const netCents = grossCents - vatCents
+    return {
+      unitNetPrice: roundMoneyTo2dp(netUnit),
+      unitGrossPrice: roundMoneyTo2dp(grossUnit),
+      netValue: centsToMoney(netCents),
+      grossValue: centsToMoney(grossCents),
+      vatValue: centsToMoney(vatCents),
+      ...(discountCents !== 0n ? { discount: centsToMoney(discountCents) } : {}),
+    }
+  }
+
+  // BC: a net-mode line WITHOUT a discount serialises from its STORED totals exactly as before this
+  // feature existed (the old buildLines used `row.total_net_amount`/`tax_amount` verbatim). Only a
+  // discounted line recomputes net = qty×unit − discount (the new P_10 path). This keeps every
+  // pre-existing invoice — where a stored total may differ from qty×unit by a rounding cent —
+  // byte-identical.
+  const recompute = hasUnit && discountCents !== 0n
+  const netCents = recompute
+    ? subtotalCents(row.quantity ?? '1', row.unit_price_net) - discountCents
+    : moneyToCents(row.total_net_amount)
+  const vatCents = recompute
+    ? vatFromNetCents(netCents, row.tax_rate)
+    : hasMoneyInput(row.tax_amount)
+      ? moneyToCents(row.tax_amount)
+      : vatFromNetCents(netCents, row.tax_rate)
+  const grossCents = netCents + vatCents
+  return {
+    unitNetPrice: roundMoneyTo2dp(netUnit),
+    unitGrossPrice: roundMoneyTo2dp(grossUnit),
+    netValue: centsToMoney(netCents),
+    grossValue: centsToMoney(grossCents),
+    vatValue: centsToMoney(vatCents),
+    ...(discountCents !== 0n ? { discount: centsToMoney(discountCents) } : {}),
+  }
 }
 
 /**
@@ -231,36 +374,71 @@ export function toCents(value: number): number {
  * the invoice has no first-class line records. Per-line net/VAT use integer-cent math.
  */
 export function metadataLinesToRows(invoice: InvoiceRow): InvoiceLineRow[] {
-  const rawLines = asRecord(invoice.metadata).lines
+  const metadata = asRecord(invoice.metadata)
+  const rawLines = metadata.lines
   if (!Array.isArray(rawLines)) return []
+  const priceMode = readPriceModeFromMetadata(metadata)
   const rows: InvoiceLineRow[] = []
   for (let index = 0; index < rawLines.length; index += 1) {
     const line = asRecord(rawLines[index])
     const quantity = asFiniteNumber(line.quantity)
     const unitNetPrice = asFiniteNumber(line.unitNetPrice)
+    const unitGrossPrice = asFiniteNumber(line.unitGrossPrice)
     const rateText =
       asString(line.vatRate) ??
       (typeof line.vatRate === 'number' && Number.isFinite(line.vatRate) ? String(line.vatRate) : '0')
     const numericRate = rateText === 'zw' || rateText === 'np' || rateText === 'oo' ? null : asFiniteNumber(rateText)
     const quantityScaled = toScaledInt(quantity, 4)
     const unitNetCents = toCents(unitNetPrice)
-    const netCents = Math.round((quantityScaled * unitNetCents) / 10000)
-    const vatCents = numericRate != null ? Math.round((netCents * numericRate) / 100) : 0
+    const unitGrossCents = toCents(unitGrossPrice)
+    const discountAmount = asString(line.discountAmount) ?? asString(line.discount_amount)
+    const discountPercent = asString(line.discountPercent) ?? asString(line.discount_percent)
+    const baseCents =
+      priceMode === 'gross'
+        ? Math.round((quantityScaled * unitGrossCents) / 10000)
+        : Math.round((quantityScaled * unitNetCents) / 10000)
+    const discountCents = discountAmount
+      ? Number(moneyToCents(discountAmount))
+      : discountPercent
+        ? Number(roundDivSigned(BigInt(baseCents) * toScaled4(discountPercent), 100n * 10000n))
+        : 0
+    const grossCents =
+      priceMode === 'gross'
+        ? baseCents - discountCents
+        : 0
+    const grossVatCents =
+      priceMode === 'gross' && numericRate != null
+        ? Number(vatFromGrossCents(BigInt(grossCents), rateText))
+        : 0
+    const netCents =
+      priceMode === 'gross'
+        ? grossCents - grossVatCents
+        : baseCents - discountCents
+    const vatCents =
+      priceMode === 'gross'
+        ? grossVatCents
+        : numericRate != null
+          ? Math.round((netCents * numericRate) / 100)
+          : 0
     rows.push({
       line_number: index + 1,
       description: asString(line.description) ?? '',
       quantity_unit: asString(line.unit) ?? undefined,
       quantity: String(quantityScaled / 10000),
       unit_price_net: unitNetCents / 100,
+      ...(priceMode === 'gross' ? { unit_price_gross: unitGrossCents / 100 } : {}),
+      ...(discountCents !== 0 ? { discount_amount: (discountCents / 100).toFixed(2) } : {}),
+      ...(discountPercent ? { discount_percent: discountPercent } : {}),
       total_net_amount: (netCents / 100).toFixed(2),
       tax_amount: (vatCents / 100).toFixed(2),
+      total_gross_amount: ((netCents + vatCents) / 100).toFixed(2),
       tax_rate: rateText,
     })
   }
   return rows
 }
 
-export function buildLines(lineRows: InvoiceLineRow[]): Fa3InvoiceInput['lines'] {
+export function buildLines(lineRows: InvoiceLineRow[], opts: BuildLineOptions = {}): Fa3InvoiceInput['lines'] {
   return lineRows.map((row, index) => {
     const lineNumber =
       typeof row.line_number === 'number' && row.line_number > 0 ? row.line_number : index + 1
@@ -271,14 +449,19 @@ export function buildLines(lineRows: InvoiceLineRow[]): Fa3InvoiceInput['lines']
     const procedureText = asString(row.procedure)
     const procedure = procedureText === 'WSTO_EE' ? ('WSTO_EE' as const) : undefined
     const fxRate = asString(row.fx_rate)
+    const amounts = computeLineAmounts(row, opts)
+    const isGrossMethod = opts.priceMode === 'gross' || opts.marginScheme !== undefined
     return {
       lineNumber,
       name: asString(row.name) ?? asString(row.description) ?? `Pozycja ${lineNumber}`,
       unit: asString(row.quantity_unit) ?? undefined,
       quantity: asString(row.quantity) ?? '1',
-      unitNetPrice: roundMoneyTo2dp(row.unit_price_net),
-      netValue: roundMoneyTo2dp(row.total_net_amount),
+      unitNetPrice: amounts.unitNetPrice,
+      netValue: amounts.netValue,
       vatRate: normalizeVatRate(row.tax_rate),
+      ...(isGrossMethod ? { unitGrossPrice: amounts.unitGrossPrice, grossValue: amounts.grossValue } : {}),
+      ...(amounts.discount !== undefined ? { discount: amounts.discount } : {}),
+      ...(opts.marginScheme ? { marginRow: true } : {}),
       ...(ossRate ? { ossRate } : {}),
       ...(procedure ? { procedure } : {}),
       ...(fxRate ? { fxRate } : {}),
@@ -350,8 +533,16 @@ export function buildVatBreakdown(
   lineRows: InvoiceLineRow[],
   headerNetField: unknown,
   headerVatField: unknown,
-  opts: { fxRate?: string } = {},
+  opts: { fxRate?: string; priceMode?: Fa3PriceMode; marginScheme?: Fa3MarginScheme; headerGrossField?: unknown } = {},
 ): Fa3InvoiceInput['vatBreakdown'] {
+  if (opts.marginScheme) {
+    const grossScaled =
+      lineRows.length > 0
+        ? lineRows.reduce((sum, row) => sum + toScaled4(computeLineAmounts(row, opts).grossValue), 0n)
+        : toScaled4(opts.headerGrossField) || toScaled4(headerNetField) + toScaled4(headerVatField)
+    return [{ rate: 'margin', net: scaled4ToMoney2dp(grossScaled), vat: '0.00' }]
+  }
+
   // The OSS / WSTO_EE bucket is keyed by the synthetic `'oss'` rate so consumer-country lines
   // NEVER merge into a Polish-rate bucket and roll up into a SINGLE P_13_5/P_14_5 summary
   // regardless of how many distinct destination rates appear (no `W` PLN-converted variant).
@@ -361,8 +552,9 @@ export function buildVatBreakdown(
     const rate: Fa3VatBucketKey = isOss ? 'oss' : normalizeVatRate(row.tax_rate)
     const key = rateKey(rate)
     const existing = buckets.get(key) ?? { rate, netScaled: 0n, vatScaled: 0n }
-    existing.netScaled += toScaled4(row.total_net_amount)
-    existing.vatScaled += toScaled4(row.tax_amount)
+    const amounts = computeLineAmounts(row, opts)
+    existing.netScaled += toScaled4(amounts.netValue)
+    existing.vatScaled += toScaled4(amounts.vatValue)
     buckets.set(key, existing)
   }
   // FX: for a Polish-rate bucket on a foreign-currency invoice, emit the PLN-converted output
@@ -391,7 +583,7 @@ export function buildVatBreakdown(
       net: scaled4ToMoney2dp(bucket.netScaled),
       vat: scaled4ToMoney2dp(bucket.vatScaled),
     }
-    if (hasFx && bucket.rate !== 'oss') {
+    if (hasFx && bucket.rate !== 'oss' && bucket.rate !== 'margin') {
       // vatScaled (4dp) × fxScaled (4dp) = an 8dp-scaled product; divide by 1e4 back to 4dp,
       // then round to 2dp money via the shared helper.
       const productScaled8 = bucket.vatScaled * fxScaled
@@ -432,12 +624,14 @@ export function buildAnnotations(meta: Record<string, unknown> | undefined): Fa3
   const selfBilling = flag(meta?.self_billing)
   const reverseCharge = flag(meta?.reverse_charge)
   const vatExemptionBasis = asString(meta?.vat_exemption_basis) ?? undefined
-  if (!splitPayment && !selfBilling && !reverseCharge && !vatExemptionBasis) return undefined
+  const marginScheme = normalizeMarginScheme(meta?.margin_scheme)
+  if (!splitPayment && !selfBilling && !reverseCharge && !vatExemptionBasis && !marginScheme) return undefined
   return {
     ...(splitPayment ? { splitPayment: true } : {}),
     ...(reverseCharge ? { reverseCharge: true } : {}),
     ...(selfBilling ? { selfBilling: true } : {}),
     ...(vatExemptionBasis ? { vatExemptionBasis } : {}),
+    ...(marginScheme ? { marginScheme } : {}),
   }
 }
 

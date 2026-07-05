@@ -207,6 +207,121 @@ describe('FA(3) XML mapper', () => {
     expect(xml).toContain('<P_8A>godz</P_8A>')
   })
 
+  it('emits a discounted net line with P_10 between P_9A and P_11 and discounted VAT sums', () => {
+    const doc = sampleDocument()
+    doc.model.vatBreakdown = [{ rate: 23, net: '180.00', vat: '41.40' }]
+    doc.model.totalGross = '221.40'
+    doc.lines = [
+      {
+        lineNumber: 1,
+        name: 'Towar z rabatem',
+        unit: 'szt',
+        quantity: '2',
+        unitNetPrice: '100.00',
+        discount: '20.00',
+        netValue: '180.00',
+        vatRate: 23,
+      },
+    ]
+
+    const xml = buildFa3Xml(doc)
+    expect(xml).toContain('<P_13_1>180.00</P_13_1>')
+    expect(xml).toContain('<P_14_1>41.40</P_14_1>')
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_9A>100.00</P_9A><P_10>20.00</P_10><P_11>180.00</P_11>')
+  })
+
+  it('emits gross-method rows with P_9B/P_11A, keeps P_12, and omits P_9A/P_11', () => {
+    const doc = sampleDocument()
+    doc.model.vatBreakdown = [{ rate: 23, net: '16.24', vat: '3.74' }]
+    doc.model.totalGross = '19.98'
+    doc.lines = [
+      {
+        lineNumber: 1,
+        name: 'Cena brutto',
+        unit: 'szt',
+        quantity: '2',
+        unitNetPrice: '8.12',
+        unitGrossPrice: '9.99',
+        netValue: '16.24',
+        grossValue: '19.98',
+        vatRate: 23,
+      },
+    ]
+
+    const xml = buildFa3Xml(doc)
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_9B>9.99</P_9B><P_11A>19.98</P_11A><P_12>23</P_12>')
+    expect(line).not.toContain('<P_9A>')
+    expect(line).not.toContain('<P_11>')
+    expect(xml).toContain('<P_13_1>16.24</P_13_1>')
+    expect(xml).toContain('<P_14_1>3.74</P_14_1>')
+  })
+
+  it.each([
+    ['travel', 'P_PMarzy_2'],
+    ['used_goods', 'P_PMarzy_3_1'],
+    ['art', 'P_PMarzy_3_2'],
+    ['collectibles', 'P_PMarzy_3_3'],
+  ] as const)('emits VAT marża scheme %s as gross-only rows and P_13_11', (scheme, field) => {
+    const doc = sampleDocument()
+    doc.model.annotations = { marginScheme: scheme }
+    doc.model.vatBreakdown = [{ rate: 'margin', net: '100.00', vat: '0.00' }]
+    doc.model.totalGross = '100.00'
+    doc.lines = [
+      {
+        lineNumber: 1,
+        name: 'Marza',
+        unit: 'szt',
+        quantity: '1',
+        unitNetPrice: '100.00',
+        unitGrossPrice: '100.00',
+        netValue: '100.00',
+        grossValue: '100.00',
+        vatRate: 0,
+        marginRow: true,
+      },
+    ]
+
+    const xml = buildFa3Xml(doc)
+    expect(xml).toContain(`<PMarzy><P_PMarzy>1</P_PMarzy><${field}>1</${field}></PMarzy>`)
+    expect(xml).toContain('<P_13_11>100.00</P_13_11>')
+    expect(xml).not.toContain('<P_13_1>')
+    expect(xml).not.toContain('<P_14_1>')
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_9B>100.00</P_9B><P_11A>100.00</P_11A>')
+    expect(line).not.toContain('<P_9A>')
+    expect(line).not.toContain('<P_11>')
+    expect(line).not.toContain('<P_12>')
+  })
+
+  it('uses P_10 with gross semantics for discounted VAT marża rows', () => {
+    const doc = sampleDocument()
+    doc.model.annotations = { marginScheme: 'used_goods' }
+    doc.model.vatBreakdown = [{ rate: 'margin', net: '180.00', vat: '0.00' }]
+    doc.model.totalGross = '180.00'
+    doc.lines = [
+      {
+        lineNumber: 1,
+        name: 'Marza z rabatem',
+        unit: 'szt',
+        quantity: '2',
+        unitNetPrice: '100.00',
+        unitGrossPrice: '100.00',
+        discount: '20.00',
+        netValue: '180.00',
+        grossValue: '180.00',
+        vatRate: 0,
+        marginRow: true,
+      },
+    ]
+
+    const xml = buildFa3Xml(doc)
+    const line = xml.slice(xml.indexOf('<FaWiersz>'), xml.indexOf('</FaWiersz>'))
+    expect(line).toContain('<P_9B>100.00</P_9B><P_10>20.00</P_10><P_11A>180.00</P_11A>')
+    expect(xml).toContain('<P_13_11>180.00</P_13_11>')
+  })
+
   it('throws when there are no invoice lines', () => {
     const doc = sampleDocument()
     doc.lines = []

@@ -51,6 +51,9 @@ type InvoiceLineDetail = {
   quantity: string | null
   quantityUnit: string | null
   unitPriceNet: string | null
+  unitPriceGross?: string | null
+  discountAmount?: string | null
+  discountPercent?: string | null
   taxRate: string | null
   totalNetAmount: string | null
   taxAmount: string | null
@@ -196,6 +199,9 @@ function toLineInput(line: InvoiceLineDetail, currencyFallback: string): Invoice
     quantity: line.quantity ?? '',
     quantityUnit: line.quantityUnit ?? undefined,
     unitPriceNet: line.unitPriceNet ?? '',
+    unitPriceGross: line.unitPriceGross ?? undefined,
+    discountAmount: line.discountAmount ?? undefined,
+    discountPercent: line.discountPercent ?? undefined,
     taxRate: line.taxRate ?? undefined,
     totalNetAmount: line.totalNetAmount ?? undefined,
     taxAmount: line.taxAmount ?? undefined,
@@ -203,6 +209,7 @@ function toLineInput(line: InvoiceLineDetail, currencyFallback: string): Invoice
     currencyCode: line.currencyCode ?? currencyFallback,
     lineNumber: line.lineNumber ?? undefined,
     kind: line.kind && LINE_KINDS.has(line.kind) ? (line.kind as InvoiceLineInput['kind']) : undefined,
+    metadata: line.metadata ?? undefined,
   }
 }
 
@@ -691,6 +698,7 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
                 originalInvoiceNumber={number}
                 originalLines={correctionLines}
                 currencyCode={currency}
+                priceMode={invoice.metadata?.priceMode === 'gross' ? 'gross' : undefined}
                 features={grantedFeatures}
                 onSubmitted={refetch}
               />

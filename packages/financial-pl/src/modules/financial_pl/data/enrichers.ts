@@ -14,6 +14,7 @@
 import type { ResponseEnricher, EnricherContext } from '@open-mercato/shared/lib/crud/response-enricher'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission, SalesInvoicePlMeta } from './entities'
 import { deriveJpkVatMarking, type JpkVatMarking } from '../lib/jpk-vat-marking'
 
@@ -66,7 +67,8 @@ async function enrichInvoices(
   // Only the invoice's OWN submissions (document_kind='invoice'): a correction
   // submission stores sales_invoice_id = the CORRECTED original, so without this filter
   // an accepted correction would bleed its status/number/marking onto the original.
-  const submissions = await em.find(
+  const submissions = await findWithDecryption(
+    em,
     KsefSubmission,
     {
       salesInvoiceId: { $in: invoiceIds },
@@ -79,6 +81,7 @@ async function enrichInvoices(
       orderBy: { createdAt: 'desc' },
       fields: ['id', 'salesInvoiceId', 'status', 'ksefNumber', 'mode', 'offlineSendDeadlineAt', 'createdAt'],
     },
+    { organizationId: context.organizationId, tenantId: context.tenantId },
   )
   const submissionByInvoice = new Map<string, (typeof submissions)[number]>()
   for (const submission of submissions) {
@@ -88,12 +91,18 @@ async function enrichInvoices(
   }
 
   // The meta row is the FALLBACK status/number source when no submission exists yet.
-  const metaRows = await em.find(SalesInvoicePlMeta, {
-    salesInvoiceId: { $in: invoiceIds },
-    organizationId: context.organizationId,
-    tenantId: context.tenantId,
-    deletedAt: null,
-  })
+  const metaRows = await findWithDecryption(
+    em,
+    SalesInvoicePlMeta,
+    {
+      salesInvoiceId: { $in: invoiceIds },
+      organizationId: context.organizationId,
+      tenantId: context.tenantId,
+      deletedAt: null,
+    },
+    undefined,
+    { organizationId: context.organizationId, tenantId: context.tenantId },
+  )
   const metaByInvoice = new Map<string, SalesInvoicePlMeta>()
   for (const row of metaRows) metaByInvoice.set(row.salesInvoiceId, row)
 

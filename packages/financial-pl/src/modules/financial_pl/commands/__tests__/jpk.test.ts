@@ -114,7 +114,11 @@ function filingInput(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  ;(findOneWithDecryption as jest.Mock).mockReset()
+  ;(findOneWithDecryption as jest.Mock)
+    .mockReset()
+    .mockImplementation((em: { findOne: (...args: unknown[]) => Promise<unknown> }, entity: unknown, where: unknown, options?: unknown) =>
+      em.findOne(entity, where, options),
+    )
   mockPollJpkStatus.mockReset()
   mockSubmitJpk.mockReset()
   delete process.env.OM_JPK_MF_CERT_PEM

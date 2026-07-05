@@ -1,5 +1,5 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
-import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission } from '../data/entities'
 import { chooseRecovery } from '../lib/recovery'
 import { emitFinancialPlEvent } from '../events'
@@ -470,15 +470,20 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
   // `updatedAt`; re-emitting one is always safe because the subscriber claim
   // deduplicates. Over-ceiling rows are excluded from the candidate set so they
   // can never starve recoverable rows out of the bounded batch.
-  const orphanedProcessing = await em.find(
+  const scope = { organizationId, tenantId }
+  const orphanedProcessing = await findWithDecryption(
+    em,
     KsefSubmission,
     { organizationId, tenantId, deletedAt: null, status: 'processing', attemptCount: { $lt: maxAttempts }, submittedAt: { $lt: cutoff } },
     { fields, limit: CANDIDATE_BATCH },
+    scope,
   )
-  const stuckQueued = await em.find(
+  const stuckQueued = await findWithDecryption(
+    em,
     KsefSubmission,
     { organizationId, tenantId, deletedAt: null, status: 'queued', attemptCount: { $lt: maxAttempts }, updatedAt: { $lt: cutoff } },
     { fields, limit: CANDIDATE_BATCH },
+    scope,
   )
 
   // Offline-issued rows (offline24 / awaryjny) need their INITIAL send within the statutory
@@ -493,7 +498,8 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
   // `submittedAt` (set at the claim below) keys re-drive staleness: a freshly-claimed offline row
   // a live subscriber is still sending is excluded (only never-claimed or stale-claim rows match),
   // mirroring how `processing` rows are gated. A never-sent row has `submittedAt = null`.
-  const offlineIssued = await em.find(
+  const offlineIssued = await findWithDecryption(
+    em,
     KsefSubmission,
     {
       organizationId,
@@ -505,6 +511,7 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
       $or: [{ submittedAt: null }, { submittedAt: { $lt: cutoff } }],
     },
     { fields, limit: CANDIDATE_BATCH, orderBy: { offlineSendDeadlineAt: 'asc' } },
+    scope,
   )
 
   const now = new Date()
@@ -612,10 +619,12 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
   // give-up is never silent: they stay visible in the submissions list (status +
   // lastErrorMessage + attemptCount) and their ids are named in the log here so an
   // operator knows exactly which invoices need manual attention.
-  const gaveUpRows = await em.find(
+  const gaveUpRows = await findWithDecryption(
+    em,
     KsefSubmission,
     { organizationId, tenantId, deletedAt: null, status: { $in: ['queued', 'processing', 'offline_issued'] }, attemptCount: { $gte: maxAttempts } },
     { fields: ['id'], limit: CANDIDATE_BATCH },
+    scope,
   )
 
   if (requeued > 0 || repolled > 0 || offlineSent > 0 || batchAccepted > 0 || batchRejected > 0 || gaveUpRows.length > 0) {

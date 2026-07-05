@@ -233,16 +233,24 @@ export async function GET(req: Request) {
     } else {
       // No accepted submission: fall back to the meta KSeF number (if any) and the
       // latest invoice submission's status (else not_applicable). No registered XML.
-      const meta = await em.findOne(SalesInvoicePlMeta, {
-        organizationId,
-        tenantId,
-        salesInvoiceId,
-        deletedAt: null,
-      })
-      const latest = await em.findOne(
+      const meta = await findOneWithDecryption(
+        em,
+        SalesInvoicePlMeta,
+        {
+          organizationId,
+          tenantId,
+          salesInvoiceId,
+          deletedAt: null,
+        },
+        undefined,
+        { organizationId, tenantId },
+      )
+      const latest = await findOneWithDecryption(
+        em,
         KsefSubmission,
         { organizationId, tenantId, salesInvoiceId, documentKind: 'invoice', deletedAt: null },
         { orderBy: { createdAt: 'desc' }, fields: ['status'] },
+        { organizationId, tenantId },
       )
       ksefNumber = meta?.ksefNumber ?? null
       ksefStatus = latest?.status ?? 'not_applicable'

@@ -13,6 +13,14 @@ const nipSchema = z
   .refine((value) => isValidPolishNip(value), 'NIP checksum is invalid')
 const vatRateSchema = z.union([z.number(), z.enum(['zw', 'np', 'oo'])])
 const moneySchema = z.string().regex(/^-?\d+(\.\d{1,2})?$/, 'Amount must be a decimal with up to 2 fraction digits')
+const optionalMoneySchema = z
+  .string()
+  // The trailing `?` makes the whole amount optional so an EMPTY string (a cleared form field)
+  // is accepted alongside a valid decimal — a partially-filled purchase row upserts without a
+  // spurious 422 (matching the comment above).
+  .regex(/^(-?\d+(\.\d{1,2})?)?$/, 'Amount must be a decimal with up to 2 fraction digits')
+  .optional()
+const marginSchemeSchema = z.enum(['travel', 'used_goods', 'art', 'collectibles'])
 
 // FA(3) simplified-invoice (UPR) statutory threshold: total ≤ 450 PLN (art. 106e ust. 5 pkt 3).
 // An EUR/OSS invoice is PLN-converted via the resolved rate for the threshold check, or
@@ -49,7 +57,7 @@ export const fa3PartySchema = z.object({
 // OSS / WSTO_EE bucket) in addition to the Polish rates; `vatPln` is the PLN-converted output
 // VAT (`P_14_xW`, art. 106e ust. 11) emitted for a Polish-rate bucket on a foreign-currency
 // invoice. The OSS bucket never carries a `W` variant.
-const vatBucketKeySchema = z.union([z.number(), z.enum(['zw', 'np', 'oo', 'oss'])])
+const vatBucketKeySchema = z.union([z.number(), z.enum(['zw', 'np', 'oo', 'oss', 'margin'])])
 export const fa3VatEntrySchema = z.object({
   rate: vatBucketKeySchema,
   net: moneySchema,
@@ -71,6 +79,8 @@ export const fa3AnnotationsSchema = z.object({
   vatExemptionBasis: z.string().min(1).optional(),
   /** Self-billing (samofakturowanie, art. 106d) → FA(3) field P_17. */
   selfBilling: z.boolean().optional(),
+  /** VAT marża subtype → FA(3) PMarzy choice. */
+  marginScheme: marginSchemeSchema.optional(),
 })
 
 /** One corrected-invoice reference → FA(3) `DaneFaKorygowanej`. */
@@ -112,8 +122,12 @@ export const fa3LineSchema = z.object({
   unit: z.string().max(256).optional(),
   quantity: z.string().min(1),
   unitNetPrice: moneySchema,
+  unitGrossPrice: optionalMoneySchema,
+  discount: optionalMoneySchema,
   netValue: moneySchema,
+  grossValue: optionalMoneySchema,
   vatRate: vatRateSchema,
+  marginRow: z.boolean().optional(),
   /**
    * OSS / WSTO_EE destination-country VAT rate as a decimal string (e.g. '19' for DE 19%). When
    * set, the line is an OSS line: `P_12` is omitted and `P_12_XII` + `Procedura=WSTO_EE` are
@@ -581,14 +595,6 @@ export const ksefInvoiceListQuerySchema = z.object({
 // as decimal strings (mirroring `moneySchema`) so they round-trip the JPK exporter's fixed-point
 // amounts without float drift. The optional-monetary helper additionally accepts an empty string
 // (a cleared form field) so a partially-filled purchase row upserts without a spurious 422.
-const optionalMoneySchema = z
-  .string()
-  // The trailing `?` makes the whole amount optional so an EMPTY string (a cleared form field)
-  // is accepted alongside a valid decimal — a partially-filled purchase row upserts without a
-  // spurious 422 (matching the comment above).
-  .regex(/^(-?\d+(\.\d{1,2})?)?$/, 'Amount must be a decimal with up to 2 fraction digits')
-  .optional()
-
 /** A purchase (zakup) evidence row staged for the JPK_V7 ewidencja. */
 export const jpkPurchaseRecordUpsertSchema = z.object({
   id: z.string().uuid().optional(),
@@ -787,6 +793,9 @@ export const invoiceMetaPutSchema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'badDebtTerminPlatnosci must be YYYY-MM-DD')
     .nullish(),
+  marginScheme: marginSchemeSchema.nullish(),
+  marginPurchaseCost: moneySchema.nullish(),
+  marginVatRate: z.union([z.literal(0), z.literal(5), z.literal(8), z.literal(23)]).nullish(),
 })
 
 export type Fa3PartyInput = z.infer<typeof fa3PartySchema>
