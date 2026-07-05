@@ -48,8 +48,8 @@ export async function POST(req: Request) {
     }
 
     const commandBus = ctx.container.resolve('commandBus') as CommandBus
-    const { result } = await commandBus.execute<BatchSendInput, { batchReference: string; count: number }>(
-      'financial_pl.ksef_submission.send_batch',
+    const { result } = await commandBus.execute<BatchSendInput, { progressJobId: string; count: number }>(
+      'financial_pl.ksef_submission.queue_batch',
       { input: parsed, ctx },
     )
 
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
         organizationId: ctx.selectedOrganizationId,
         userId: auth.sub ?? null,
         resourceKind: 'financial_pl.ksef_submission',
-        resourceId: result?.batchReference ?? 'batch',
+        resourceId: result?.progressJobId ?? 'batch',
         operation: 'custom',
         requestMethod: req.method,
         requestHeaders: req.headers,
@@ -71,23 +71,23 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         ok: true,
-        batchReference: result?.batchReference,
+        progressJobId: result?.progressJobId,
         count: result?.count ?? 0,
-        message: translate('financial_pl.actions.sendBatchToKsefQueued', 'Batch submitted to KSeF.'),
+        message: translate('financial_pl.actions.sendBatchToKsefQueued', 'Batch send queued.'),
       },
       { status: 202 },
     )
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
-    console.error('[internal] financial_pl.ksef_submission.send_batch failed', err)
+    console.error('[internal] financial_pl.ksef_submission.queue_batch failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 const okResponseSchema = z.object({
   ok: z.boolean(),
-  batchReference: z.string().optional(),
+  progressJobId: z.string().uuid().optional(),
   count: z.number(),
   message: z.string().optional(),
 })
@@ -95,14 +95,14 @@ const errorSchema = z.object({ error: z.string() })
 
 export const openApi: OpenApiRouteDoc = {
   tag: 'Polish Financials (KSeF)',
-  summary: 'Submit a batch of sales invoices to KSeF',
+  summary: 'Queue a batch of sales invoices for KSeF submission',
   methods: {
     POST: {
-      summary: 'Submit a batch of sales invoices to KSeF',
+      summary: 'Queue a batch of sales invoices for KSeF submission',
       description:
-        'Builds an encrypted FA(3) batch package for eligible sales invoices, opens a KSeF batch session, uploads the encrypted package part, closes the session, and creates per-invoice processing submissions sharing one batch reference.',
+        'Creates a progress job and enqueues a worker that builds an encrypted FA(3) batch package for eligible sales invoices, opens a KSeF batch session, uploads the encrypted package part, closes the session, and creates per-invoice processing submissions sharing one batch reference.',
       requestBody: { contentType: 'application/json', schema: batchSendSchema },
-      responses: [{ status: 202, description: 'Batch submitted', schema: okResponseSchema }],
+      responses: [{ status: 202, description: 'Batch queued', schema: okResponseSchema }],
       errors: [
         { status: 400, description: 'Validation failed', schema: errorSchema },
         { status: 401, description: 'Unauthorized', schema: errorSchema },

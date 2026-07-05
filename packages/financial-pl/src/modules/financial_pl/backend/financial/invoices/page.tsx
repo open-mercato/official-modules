@@ -12,6 +12,7 @@ import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { KsefStatusBadge } from '../../../components/KsefStatusBadge'
@@ -50,8 +51,9 @@ type InvoiceListResponse = {
 
 type BatchSendResponse = {
   ok?: boolean
-  batchReference?: string | null
+  progressJobId?: string | null
   count?: number
+  message?: string | null
 }
 
 type InvoiceRow = {
@@ -186,6 +188,9 @@ export default function FinancialPlInvoicesPage() {
   const [summary, setSummary] = React.useState<InvoiceListSummary | null>(null)
   const [isLoading, setLoading] = React.useState(false)
   const [reloadToken, setReloadToken] = React.useState(0)
+  const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
+    contextId: 'financial_pl.invoices',
+  })
 
   const title = t('financial_pl.nav.invoices', 'Invoices')
   const subtitle = t(
@@ -345,17 +350,22 @@ export default function FinancialPlInvoicesPage() {
           }
 
           try {
-            const call = await apiCall<BatchSendResponse>('/api/financial_pl/ksef/submissions/batch', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ invoiceIds }),
+            const call = await runMutation({
+              operation: async () => {
+                const response = await apiCall<BatchSendResponse>('/api/financial_pl/ksef/submissions/batch', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ invoiceIds }),
+                })
+                if (!response.ok || response.result?.ok !== true || !response.result?.progressJobId) {
+                  throw new Error(t('financial_pl.invoices.list.batchFailed', 'Batch send failed.'))
+                }
+                return response
+              },
+              context: { retryLastMutation },
+              mutationPayload: { invoiceIds },
             })
-            const batchReference = call.result?.batchReference?.trim() || ''
             const count = typeof call.result?.count === 'number' ? call.result.count : invoiceIds.length
-            if (!call.ok || call.result?.ok !== true || !batchReference) {
-              flash(t('financial_pl.invoices.list.batchFailed', 'Batch send failed.'), 'error')
-              return false
-            }
             if (skippedCount > 0) {
               flash(
                 t(
@@ -369,8 +379,8 @@ export default function FinancialPlInvoicesPage() {
             flash(
               t(
                 'financial_pl.invoices.list.batchQueued',
-                '{count} invoice(s) queued to KSeF (batch {ref}).',
-                { count, ref: batchReference },
+                '{count} invoice(s) queued to KSeF.',
+                { count },
               ),
               'success',
             )
@@ -383,7 +393,7 @@ export default function FinancialPlInvoicesPage() {
         },
       },
     ],
-    [handleRefresh, t],
+    [handleRefresh, retryLastMutation, runMutation, t],
   )
 
   const columns = React.useMemo<ColumnDef<InvoiceRow>[]>(

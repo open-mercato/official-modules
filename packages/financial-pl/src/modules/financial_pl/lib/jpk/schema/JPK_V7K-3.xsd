@@ -730,7 +730,7 @@
 								<xsd:annotation>
 									<xsd:documentation>Wartość 1 oznacza potwierdzenie zapoznania się z treścią i akceptację poniższych pouczeń:
 W przypadku niewpłacenia w obowiązującym terminie podatku podlegającego wpłacie do urzędu skarbowego lub wpłacenia go w niepełnej wysokości niniejsza deklaracja stanowi podstawę do wystawienia tytułu wykonawczego zgodnie z przepisami o postępowaniu egzekucyjnym w administracji. Niniejsza deklaracja stanowi podstawę do wystawienia tytułu wykonawczego również na członka grupy VAT.
- 
+
 Za podanie nieprawdy lub zatajenie prawdy i przez to narażenie podatku na uszczuplenie grozi odpowiedzialność przewidziana w przepisach Kodeksu karnego skarbowego.</xsd:documentation>
 								</xsd:annotation>
 								<xsd:simpleType>

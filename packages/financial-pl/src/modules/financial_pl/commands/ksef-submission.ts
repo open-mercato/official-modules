@@ -6,6 +6,7 @@ import { CrudHttpError, isUniqueViolation } from '@open-mercato/shared/lib/crud/
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
+import type { ProgressService, ProgressServiceContext } from '@open-mercato/core/modules/progress/lib/progressService'
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { KsefSubmission, type KsefSubmissionStatusColumn } from '../data/entities'
 import { createPrivateKey, randomUUID } from 'node:crypto'
@@ -47,6 +48,7 @@ import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
 import { isInvoiceIssued } from '../lib/invoice-status'
 import { buildBatchPackage } from '../lib/batch-package'
+import { FINANCIAL_PL_QUEUES, getFinancialPlQueue, type KsefBatchSendJobPayload } from '../lib/queue'
 
 type CredentialsService = {
   getRaw: (
@@ -303,11 +305,23 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
   id: 'financial_pl.ksef_submission.retry',
   async execute(input, ctx) {
     const parsed = ksefSubmissionRetrySchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const submission = await findOneWithDecryption(em, KsefSubmission, { id: parsed.id, deletedAt: null })
+    const submission = await findOneWithDecryption(
+      em,
+      KsefSubmission,
+      {
+        id: parsed.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      },
+      undefined,
+      scope,
+    )
     if (!submission) throw new CrudHttpError(404, { error: '[internal] KSeF submission not found' })
-    ensureTenantScope(ctx, submission.tenantId)
-    ensureOrganizationScope(ctx, submission.organizationId)
     enforceCommandOptimisticLock({
       resourceKind: 'financial_pl.ksef_submission',
       resourceId: submission.id,
@@ -493,14 +507,14 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
     try {
       claimedSubmissions = await em.transactional(async (tx) => {
         for (const invoice of batchInvoices) {
-          const existing = await tx.findOne(KsefSubmission, {
+          const existing = await findOneWithDecryption(tx, KsefSubmission, {
             organizationId: scope.organizationId,
             tenantId: scope.tenantId,
             documentKind: 'invoice',
             salesInvoiceId: invoice.invoiceId,
             status: { $in: activeStatuses },
             deletedAt: null,
-          })
+          }, undefined, scope)
           if (existing) {
             throw new CrudHttpError(409, {
               error: '[internal] invoice already has an active KSeF submission',
@@ -663,6 +677,76 @@ export const sendBatchCommand: CommandHandler<BatchSendInput, { batchReference: 
       })
     }
     return { batchReference: referenceNumber, count: claimedSubmissions.length }
+  },
+}
+
+export const queueBatchCommand: CommandHandler<BatchSendInput, { progressJobId: string; count: number }> = {
+  id: 'financial_pl.ksef_submission.queue_batch',
+  async execute(input, ctx) {
+    const parsed = batchSendSchema.parse(input)
+    const scope = resolveCommandScope(ctx)
+    ensureTenantScope(ctx, scope.tenantId)
+    ensureOrganizationScope(ctx, scope.organizationId)
+
+    const invoiceIds = [...new Set(parsed.invoiceIds)]
+    const progressService = ctx.container.resolve('progressService') as ProgressService
+    const progressContext: ProgressServiceContext = {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      userId: ctx.auth?.sub ?? null,
+    }
+    const { translate } = await resolveTranslations()
+    const progressJob = await progressService.createJob(
+      {
+        jobType: 'financial_pl.ksef_submission.send_batch',
+        name: translate('financial_pl.progress.ksefBatchSend.name', 'Send invoices to KSeF'),
+        description: translate(
+          'financial_pl.progress.ksefBatchSend.description',
+          '{count} invoice(s) queued for KSeF batch send',
+          { count: invoiceIds.length },
+        ),
+        totalCount: invoiceIds.length,
+        cancellable: false,
+        meta: {
+          source: 'financial_pl.ksef_submission.queue_batch',
+          invoiceCount: invoiceIds.length,
+        },
+      },
+      progressContext,
+    )
+
+    const payload: KsefBatchSendJobPayload = {
+      progressJobId: progressJob.id,
+      invoiceIds,
+      scope: {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        userId: ctx.auth?.sub ?? null,
+      },
+    }
+
+    try {
+      const queue = getFinancialPlQueue(FINANCIAL_PL_QUEUES.ksefBatchSend)
+      await queue.enqueue(payload as unknown as Record<string, unknown>)
+    } catch (err) {
+      await progressService
+        .failJob(
+          progressJob.id,
+          {
+            errorMessage:
+              err instanceof Error
+                ? err.message
+                : translate('financial_pl.progress.ksefBatchSend.enqueueFailed', 'Failed to enqueue KSeF batch send'),
+          },
+          progressContext,
+        )
+        .catch((failErr) => {
+          console.warn('[internal] financial_pl.ksef_submission.queue_batch failed to mark progress job failed', failErr)
+        })
+      throw err
+    }
+
+    return { progressJobId: progressJob.id, count: invoiceIds.length }
   },
 }
 
@@ -941,5 +1025,6 @@ registerCommand(retryCommand)
 registerCommand(sendFromInvoiceCommand)
 registerCommand(sendFromCreditMemoCommand)
 registerCommand(sendBatchCommand)
+registerCommand(queueBatchCommand)
 registerCommand(issueOfflineCommand)
 registerCommand(recomputeOfflineDeadlineCommand)

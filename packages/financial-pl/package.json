@@ -67,6 +67,7 @@
     "@mikro-orm/migrations": "^7.0.14",
     "@mikro-orm/postgresql": "^7.0.14",
     "@open-mercato/core": "^0.6.0",
+    "@open-mercato/queue": "^0.6.0",
     "@open-mercato/shared": "^0.6.0",
     "@open-mercato/ui": "^0.6.0",
     "lucide-react": "^1.21.0",
@@ -76,6 +77,7 @@
   },
   "devDependencies": {
     "@open-mercato/core": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/queue": "0.6.6-develop.6366.1.fba69a7362",
     "@open-mercato/shared": "0.6.6-develop.6366.1.fba69a7362",
     "@open-mercato/ui": "0.6.6-develop.6366.1.fba69a7362",
     "@playwright/test": "^1.58.2",

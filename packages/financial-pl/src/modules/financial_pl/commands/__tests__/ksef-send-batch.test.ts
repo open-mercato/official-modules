@@ -5,6 +5,7 @@ const mockBuildBatchPackage = jest.fn()
 const mockBuildFa3XmlFromInput = jest.fn()
 const mockResolveFa3FromSalesInvoice = jest.fn()
 const mockPutToAbsoluteUrl = jest.fn()
+const mockQueueEnqueue = jest.fn()
 
 jest.mock('../../lib/ksef-auth', () => ({
   authenticate: (...args: unknown[]) => mockAuthenticate(...args),
@@ -26,11 +27,16 @@ jest.mock('../../lib/http-put', () => ({
   putToAbsoluteUrl: (...args: unknown[]) => mockPutToAbsoluteUrl(...args),
 }))
 
+jest.mock('../../lib/queue', () => ({
+  FINANCIAL_PL_QUEUES: { ksefBatchSend: 'financial-pl-ksef-batch-send' },
+  getFinancialPlQueue: jest.fn(() => ({ enqueue: mockQueueEnqueue })),
+}))
+
 jest.mock('@open-mercato/shared/lib/i18n/server', () => ({
   resolveTranslations: async () => ({ translate: (_key: string, fallback: string) => fallback }),
 }))
 
-import { sendBatchCommand } from '../ksef-submission'
+import { queueBatchCommand, sendBatchCommand } from '../ksef-submission'
 
 const ORG = '11111111-1111-4111-8111-111111111111'
 const TEN = '22222222-2222-4222-8222-222222222222'
@@ -139,8 +145,25 @@ function makeCtx(em: unknown, transport: KsefTransport) {
   } as unknown as Parameters<typeof sendBatchCommand.execute>[1]
 }
 
+function makeQueueCtx(progressService: unknown) {
+  return {
+    container: {
+      resolve: (name: string) => {
+        if (name === 'progressService') return progressService
+        throw new Error(`unknown dependency: ${name}`)
+      },
+    },
+    auth: { tenantId: TEN, orgId: ORG, sub: 'user', isSuperAdmin: false },
+    organizationScope: null,
+    selectedOrganizationId: ORG,
+    organizationIds: [ORG],
+    request: null,
+  } as unknown as Parameters<typeof queueBatchCommand.execute>[1]
+}
+
 beforeEach(() => {
   jest.clearAllMocks()
+  mockQueueEnqueue.mockReset()
   mockAuthenticate.mockResolvedValue({ ok: true, accessToken: 'ACCESS' })
   mockBuildFa3XmlFromInput.mockImplementation((invoice: { invoiceNumber?: string }) => `<FA>${invoice.invoiceNumber ?? 'INV'}</FA>`)
   mockResolveFa3FromSalesInvoice.mockImplementation(
@@ -158,6 +181,55 @@ beforeEach(() => {
     invoiceHashes: [],
   })
   mockPutToAbsoluteUrl.mockResolvedValue({ ok: true, status: 200 })
+})
+
+describe('financial_pl.ksef_submission.queue_batch', () => {
+  it('creates a progress job and enqueues worker payload without calling KSeF', async () => {
+    const progressService = {
+      createJob: jest.fn(async () => ({ id: '77777777-7777-4777-8777-777777777777' })),
+      failJob: jest.fn(async () => ({})),
+    }
+
+    const result = await queueBatchCommand.execute(
+      { invoiceIds: [INV_1, INV_1, INV_2] },
+      makeQueueCtx(progressService),
+    )
+
+    expect(result).toEqual({ progressJobId: '77777777-7777-4777-8777-777777777777', count: 2 })
+    expect(progressService.createJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobType: 'financial_pl.ksef_submission.send_batch',
+        totalCount: 2,
+        meta: expect.objectContaining({ invoiceCount: 2 }),
+      }),
+      expect.objectContaining({ tenantId: TEN, organizationId: ORG, userId: 'user' }),
+    )
+    expect(mockQueueEnqueue).toHaveBeenCalledWith({
+      progressJobId: '77777777-7777-4777-8777-777777777777',
+      invoiceIds: [INV_1, INV_2],
+      scope: { organizationId: ORG, tenantId: TEN, userId: 'user' },
+    })
+    expect(mockAuthenticate).not.toHaveBeenCalled()
+    expect(mockBuildBatchPackage).not.toHaveBeenCalled()
+  })
+
+  it('marks the progress job failed when enqueueing fails', async () => {
+    const progressService = {
+      createJob: jest.fn(async () => ({ id: '77777777-7777-4777-8777-777777777777' })),
+      failJob: jest.fn(async () => ({})),
+    }
+    mockQueueEnqueue.mockRejectedValueOnce(new Error('queue unavailable'))
+
+    await expect(queueBatchCommand.execute({ invoiceIds: [INV_1] }, makeQueueCtx(progressService))).rejects.toThrow(
+      'queue unavailable',
+    )
+
+    expect(progressService.failJob).toHaveBeenCalledWith(
+      '77777777-7777-4777-8777-777777777777',
+      { errorMessage: 'queue unavailable' },
+      expect.objectContaining({ tenantId: TEN, organizationId: ORG }),
+    )
+  })
 })
 
 describe('financial_pl.ksef_submission.send_batch', () => {

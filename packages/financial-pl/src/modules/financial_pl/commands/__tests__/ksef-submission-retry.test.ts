@@ -43,6 +43,31 @@ beforeEach(() => {
 })
 
 describe('retryCommand — recovery routing (H6: offline submissions retry through the deferred send path)', () => {
+  it('looks up the submission inside the caller organization and tenant scope', async () => {
+    const submission: Record<string, unknown> = {
+      id: SUB,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'rejected',
+      mode: 'online',
+      updatedAt: new Date(),
+    }
+    const em = makeEm(submission)
+
+    await retryCommand.execute({ id: SUB }, makeCtx(em))
+
+    expect((em as Record<string, jest.Mock>).findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        id: SUB,
+        organizationId: ORG,
+        tenantId: TEN,
+        deletedAt: null,
+      }),
+      undefined,
+    )
+  })
+
   it('an offline-issued offline24 submission re-emits send_offline and stays offline_issued (NOT queued)', async () => {
     const submission: Record<string, unknown> = {
       id: SUB,
