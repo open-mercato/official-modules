@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "node build.mjs",
+    "prepack": "node build.mjs",
     "watch": "node watch.mjs",
     "test": "jest --config jest.config.cjs",
     "typecheck": "tsc --noEmit"
@@ -66,10 +67,10 @@
     "@mikro-orm/decorators": "^7.0.14",
     "@mikro-orm/migrations": "^7.0.14",
     "@mikro-orm/postgresql": "^7.0.14",
-    "@open-mercato/core": "^0.6.0",
-    "@open-mercato/queue": "^0.6.0",
-    "@open-mercato/shared": "^0.6.0",
-    "@open-mercato/ui": "^0.6.0",
+    "@open-mercato/core": ">=0.6.6 <0.7.0",
+    "@open-mercato/queue": ">=0.6.6 <0.7.0",
+    "@open-mercato/shared": ">=0.6.6 <0.7.0",
+    "@open-mercato/ui": ">=0.6.6 <0.7.0",
     "lucide-react": "^1.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

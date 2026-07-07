@@ -1,12 +1,92 @@
 # @open-mercato/financial-pl
 
-Polish **KSeF 2.0** e-invoicing connector for Open Mercato — submit FA(3) invoices to the
-Krajowy System e-Faktur, poll their status, and retrieve the signed UPO receipt, with
-Polish VAT metadata layered onto the OSS `sales` invoices via the sanctioned extension seams.
+Complete Polish **KSeF 2.0** e-invoicing & VAT-compliance module for Open Mercato — issue and send
+**FA(3)** invoices to the Krajowy System e-Faktur, receive inbound invoices, generate and file
+**JPK_V7**, render compliant PDFs, and cover offline issuance, corrections, VAT margin and NBP FX —
+all layered onto the OSS `sales` invoices via the sanctioned extension seams.
 
-> License: **MIT**. Module id: `financial_pl`. Provider id: `ksef_pl`.
+> Developed & maintained by **[Omdyo](https://www.omdyo.com)** · License: **MIT** — fully open source · Module id: `financial_pl` · Provider id: `ksef_pl`.
 
-## What it does
+## Features
+
+A complete Polish e-invoicing stack that talks **directly to the Ministry of Finance KSeF 2.0 REST API** — no third-party middleware, no external e-invoicing SaaS in the path. Conformed to the live TEST OpenAPI **v2.6.1** and the official **FA(3) `1-0E`** schema, and verified end-to-end against the real KSeF test environment (auth → send → status → UPO).
+
+### 📤 KSeF connectivity
+
+| Capability | What you get |
+|------------|--------------|
+| **Submit invoices to KSeF** | Structured **FA(3)** documents over an interactive online session |
+| **Batch (*wsadowa*) submission** | Many invoices in one encrypted ZIP package, single batch session |
+| **Status polling + KSeF number** | Automatic poll to `accepted`, capturing the official KSeF reference number |
+| **UPO retrieval** | The full signed *Urzędowe Poświadczenie Odbioru* XML receipt — not just a link |
+| **Inbound receiving** | Query, download & sync invoices issued **to** you, and materialize them into a JPK purchase record |
+| **Environments** | **test / demo / prod** endpoints, with prod never selected implicitly |
+| **Payload encryption** | RSA-OAEP symmetric-key wrap + AES-256-CBC content, exactly as KSeF requires |
+| **Rate-limit aware** | Honors `Retry-After`; surfaces KSeF limits |
+
+### 🔐 Authentication
+
+| Capability | What you get |
+|------------|--------------|
+| **KSeF token auth** | RSA-encrypted challenge/response |
+| **Certificate (XAdES) auth** | Qualified-signature authentication — the successor credential after the token sunset |
+| **Automatic cutover** | `authMethod: auto` moves an org from token to certificate with no workflow change |
+| **Credential health monitoring** | Alerts for token sunset (2026-12-31) and certificate expiry |
+
+### 🧾 FA(3) invoice content
+
+| Capability | What you get |
+|------------|--------------|
+| **Multi-rate VAT** | 23 / 8 / 5 / 0 / ZW / NP, grouped into the FA(3) rate summaries |
+| **Payment block (*Płatność*)** | Payment method, due term, and bank account |
+| **Sale vs. issue date** | Separate `P_1` / `P_6` handling with smart defaults |
+| **Per-line discounts (*rabat*)** | FA(3) `P_10` |
+| **Gross-price entry** | Enter gross and derive net (`P_9B` / `P_11A`) |
+| **VAT margin (*marża*)** | Travel / used goods / art / collectibles via `PMarzy` + `P_13_11` |
+| **Foreign currency + NBP FX** | Table-A mid-rate for the correct tax-point business day (art. 31a) |
+| **Corrections & credit memos** | *Faktura korygująca* and credit-memo → KSeF |
+| **Statutory annotations** | MPP / split payment, self-billing, reverse charge, OSS, GTU & procedure markings, VAT-exemption basis |
+| **Counterparty autofill** | Buyer **NIP look-up** against the MF *Wykaz podatników VAT* (Biała lista) — name, address & VAT status, no API key |
+
+### 📴 Offline & QR codes
+
+| Capability | What you get |
+|------------|--------------|
+| **Offline issuance** | `offline24` / `awaryjny` / `niedostępność` modes with a statutory send-deadline calculator (PL public-holiday aware) |
+| **KOD I QR** | Online invoice-verification QR |
+| **KOD II QR** | Offline certificate-signed QR for invoices issued during KSeF unavailability |
+| **ZBP payment QR** | 2D bank-transfer QR on unpaid PLN invoice PDFs |
+
+### 📊 JPK (VAT ledgers & filing)
+
+| Capability | What you get |
+|------------|--------------|
+| **JPK_V7M / JPK_V7K** | Full generation against the official XSD — sales register, purchase register, and declaration part |
+| **e-submission to MF** | Upload to the Ministry gateway with status tracking and its own UPO |
+| **GTU / procedure markings** | Applied across the sales register |
+| **Bad-debt relief** | *Ulga na złe długi* support |
+
+### 🖨️ Documents & backoffice
+
+| Capability | What you get |
+|------------|--------------|
+| **Polish invoice PDF** | A4 *Faktura VAT* with full diacritics and embedded KOD I/II QR |
+| **Certificate management** | Enrollment (PKCS#10 CSR), inventory, revocation, and limit reporting |
+| **Tabbed invoice editor** | *Faktura / Podatki-KSeF / Dodatkowe*, with customer & product pickers and VAT-rate / unit quick-picks |
+| **KSeF panel per invoice** | Status badge, Send, Retry, Download UPO/PDF, Issue offline, Issue correction |
+| **Dedicated pages** | Invoices (month view + net/gross summary), JPK_V7, Received invoices, KSeF certificates |
+
+### 🛡️ Reliability
+
+| Capability | What you get |
+|------------|--------------|
+| **Per-invoice idempotency** | Resolve-first guard + partial-unique index + atomic `queued → processing` claim — no double sends |
+| **440-duplicate recovery** | Recovers the original KSeF number + UPO if the invoice was already registered |
+| **Reconciliation sweep** | A worker re-drives submissions stuck in `queued` / `processing` so nothing silently fails to reach KSeF |
+| **Fail-closed edit lock** | Server-side conditional-409 blocks editing a KSeF-`accepted` invoice |
+| **Encryption at rest** | Per-org encrypted credential store; invoice XML, UPO and JPK payloads encrypted in the database |
+
+## How it works
 
 - **KSeF 2.0 send flow** (`lib/`): public-key fetch → challenge → KSeF token or certificate
   (XAdES) auth → open online session → AES-256-CBC encrypted FA(3) submission → status poll →
@@ -89,11 +169,49 @@ yarn workspace @open-mercato/financial-pl test ksef-live
 
 `OM_KSEF_TEST_STRICT=1` requires an `accepted` status with a KSeF number and a non-empty UPO.
 
-## Activation
+## Installation
+
+Install into any standalone Open Mercato app (on `@open-mercato/core` **≥ 0.6.6**) with the `mercato` CLI:
 
 ```bash
-yarn official-modules add financial-pl --local
-yarn install
-yarn mercato configs cache structural --all-tenants
+# Fetch from npm, auto-register in src/modules.ts, and run the code generators
+yarn mercato module add @open-mercato/financial-pl
+
+# Apply the module's migrations and start
 yarn generate
+yarn mercato db:migrate
+yarn dev
 ```
+
+Prefer to own the source? `--eject` copies the module into your `src/modules/financial_pl/`:
+
+```bash
+yarn mercato module add @open-mercato/financial-pl --eject
+```
+
+If the package is already in `node_modules` and only needs activating:
+
+```bash
+yarn mercato module enable @open-mercato/financial-pl
+```
+
+Then configure it per organization under **Backend → Integrations → KSeF** — see [Configuration](#configuration).
+
+## Maintainers
+
+<p align="center">
+  <a href="https://www.omdyo.com">
+    <img src="https://www.omdyo.com/assets/omdyo-logo.svg" alt="Omdyo" width="240" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>Developed and maintained by <a href="https://www.omdyo.com">Omdyo</a></strong> — an Open&nbsp;Mercato agency building digital systems for real operations.<br/>
+  Commercial support, custom KSeF / JPK work, and issues for this module → <a href="https://www.omdyo.com"><strong>www.omdyo.com</strong></a>
+</p>
+
+<p align="center"><sub>A contribution to the Open Mercato ecosystem · MIT-licensed</sub></p>
+
+---
+
+<p align="center"><sub>Built on <a href="https://github.com/open-mercato/open-mercato">Open Mercato</a> · Polish e-invoicing for KSeF 2.0</sub></p>
