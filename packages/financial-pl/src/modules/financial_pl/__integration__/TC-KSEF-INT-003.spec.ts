@@ -1,13 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
-import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
 import {
   apiRequestWithSelectedOrg,
   createOrganizationFixture,
   deleteOrganizationIfExists,
-} from '@open-mercato/core/modules/core/__integration__/helpers/authFixtures';
-import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
-import { withClient } from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures';
+} from '@open-mercato/core/helpers/integration/authFixtures';
+import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
+import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 
 const suffix = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 

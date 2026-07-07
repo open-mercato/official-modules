@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
-import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
 import {
   apiRequestWithSelectedOrg,
   createOrganizationFixture,
   deleteOrganizationIfExists,
-} from '@open-mercato/core/modules/core/__integration__/helpers/authFixtures';
-import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
+} from '@open-mercato/core/helpers/integration/authFixtures';
+import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
 
 /**
  * TC-KSEF-UI-001: invoices-with-KSeF-status list endpoint (SPEC-013) — auth, the

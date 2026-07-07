@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
-import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
-import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
+import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
 import { buildCreditMemoPayload, type CorrectionLineInput } from '../lib/correction-payload';
 
 /**

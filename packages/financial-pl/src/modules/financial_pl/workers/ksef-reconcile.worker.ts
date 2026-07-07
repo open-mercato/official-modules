@@ -1,7 +1,7 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission } from '../data/entities'
-import { chooseRecovery } from '../lib/recovery'
+import { chooseRecovery, isOfflineSubmissionMode } from '../lib/recovery'
 import { emitFinancialPlEvent } from '../events'
 import { resolveKsefEnvironment } from '../config'
 import { KsefClient, type KsefPublicKeyCertificate, type KsefTransport } from '../lib/ksef-client'
@@ -22,7 +22,7 @@ import { evaluateInvoiceStatus, evaluateSessionStatus } from '../lib/status'
  *  - a stale `processing` row WITHOUT both references (a true orphan: the send
  *    never landed, or crashed before references were persisted) OR a stale
  *    `queued` row whose dispatch event was lost is recovered by RE-SENDING: reset
- *    to `queued` and re-emit `financial_pl.ksef_submission.queued`.
+ *    to `queued`/`offline_issued` and re-emit the matching recovery event.
  *
  * Re-sending is duplicate-safe: the subscriber's atomic claim guarantees single
  * execution, and KSeF's native 440-duplicate detection resolves any
@@ -588,10 +588,16 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
       continue
     }
 
-    // RE-SEND: reset to `queued` and re-emit. The `< cutoff` guard makes the
-    // nativeUpdate a claim (exactly one sweep re-drives a given row); the subscriber's
-    // queued->processing claim deduplicates, and KSeF's 440 content de-duplication
-    // resolves a content-identical re-send to the original number — never a double send.
+    // RE-SEND: reset to a claimable status and re-emit. Offline modes must route through
+    // `offline_issued` so offlineMode plus the statutory issue date/KOD I/II justification
+    // survive recovery. The `< cutoff` guard makes the nativeUpdate a claim; the
+    // subscriber claims deduplicate, and KSeF's 440 content de-duplication resolves a
+    // content-identical re-send to the original number — never a double send.
+    const isOfflineMode = isOfflineSubmissionMode(candidate.mode)
+    const recoveryStatus = isOfflineMode ? 'offline_issued' : 'queued'
+    const recoveryEvent = isOfflineMode
+      ? 'financial_pl.ksef_submission.offline_send_requested'
+      : 'financial_pl.ksef_submission.queued'
     const claimed = await em.nativeUpdate(
       KsefSubmission,
       {
@@ -603,12 +609,12 @@ export default async function handle(job: ReconcileJob, ctx: HandlerContext): Pr
         attemptCount: { $lt: maxAttempts },
         ...staleGuard,
       },
-      { status: 'queued', updatedAt: now, attemptCount: (candidate.attemptCount ?? 0) + 1 },
+      { status: recoveryStatus, updatedAt: now, attemptCount: (candidate.attemptCount ?? 0) + 1 },
     )
     if (claimed > 0) {
       requeued += 1
       await emitFinancialPlEvent(
-        'financial_pl.ksef_submission.queued',
+        recoveryEvent,
         { submissionId: candidate.id, organizationId, tenantId },
         { persistent: true },
       )

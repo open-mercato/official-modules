@@ -124,7 +124,10 @@ function formatDate(iso: string | null | undefined, fallback = '—'): string {
   if (!iso) return fallback
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+  // Explicit locale AND timezone: SSR renders with the server locale/TZ, so runtime defaults
+  // hydration-mismatch against a pl browser (and a west-of-UTC runtime shifts a date-only
+  // ISO string, parsed as UTC midnight, back a day). The module is PL-specific — pin both.
+  return d.toLocaleDateString('pl-PL', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'UTC' })
 }
 
 function formatCurrency(
@@ -135,9 +138,9 @@ function formatCurrency(
   if (amount == null || Number.isNaN(amount)) return fallback
   try {
     if (currency && currency.trim().length) {
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount)
+      return new Intl.NumberFormat('pl-PL', { style: 'currency', currency }).format(amount)
     }
-    return new Intl.NumberFormat(undefined, { style: 'decimal', maximumFractionDigits: 2 }).format(amount)
+    return new Intl.NumberFormat('pl-PL', { style: 'decimal', maximumFractionDigits: 2 }).format(amount)
   } catch {
     return String(amount)
   }
@@ -162,9 +165,10 @@ function lastDayOfMonth(period: MonthPeriod): string {
 }
 
 function formatMonthLabel(period: MonthPeriod): string {
-  return new Date(Date.UTC(period.year, period.month, 1)).toLocaleDateString(undefined, {
+  return new Date(Date.UTC(period.year, period.month, 1)).toLocaleDateString('pl-PL', {
     month: 'long',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 

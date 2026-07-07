@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
-import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
 
 /**
  * TC-KSEF-UI-006: commercial-grade editor — NIP company-lookup route + buyer (Nabywca) capture on

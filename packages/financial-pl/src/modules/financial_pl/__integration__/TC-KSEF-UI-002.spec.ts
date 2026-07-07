@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
-import { getTokenContext } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
-import { deleteSalesEntityIfExists } from '@open-mercato/core/modules/core/__integration__/helpers/salesFixtures';
-import { withClient } from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
+import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
+import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 
 /**
  * TC-KSEF-UI-002: invoice authoring + PL-VAT meta + edit-prefill + the KSeF-immutability

@@ -181,6 +181,150 @@ describe('JPK commands — create path persists under the resolved scope', () =>
   })
 })
 
+describe('JPK commands — filing update status guards', () => {
+  it('upsertFilingCommand refuses to edit a submitted filing → 409 and leaves fields untouched', async () => {
+    const declarationInputs = { P_39: '10.00' }
+    const updatedAt = new Date('2026-06-30T12:00:00Z')
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'submitted',
+      contextNip: '5260001246',
+      variant: 'V7M',
+      year: 2026,
+      month: 6,
+      quarter: null,
+      celZlozenia: 1,
+      correctionScope: 'both',
+      kodUrzedu: '0202',
+      declarationInputs,
+      generatedXml: '<JPK>old</JPK>',
+      upoXml: '<UPO>old</UPO>',
+      submissionReference: 'JPK-REF-FILED',
+      updatedAt,
+    }
+    const flush = jest.fn(async () => {})
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => filing), flush }
+
+    await expect(
+      upsertFilingCommand.execute(
+        filingInput({
+          id: FIL,
+          contextNip: '1111111111',
+          year: 2027,
+          month: 7,
+          celZlozenia: 2,
+          correctionScope: 'declaration',
+          kodUrzedu: '1471',
+          declarationInputs: { P_49: '99.00' },
+        }),
+        makeCtx({ em }),
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      body: { error: '[internal] a submitted JPK filing cannot be edited' },
+    })
+    expect(flush).not.toHaveBeenCalled()
+    expect(filing).toMatchObject({
+      contextNip: '5260001246',
+      variant: 'V7M',
+      year: 2026,
+      month: 6,
+      quarter: null,
+      celZlozenia: 1,
+      correctionScope: 'both',
+      kodUrzedu: '0202',
+      declarationInputs,
+      generatedXml: '<JPK>old</JPK>',
+      upoXml: '<UPO>old</UPO>',
+      submissionReference: 'JPK-REF-FILED',
+    })
+    expect(filing.updatedAt).toBe(updatedAt)
+  })
+
+  it("upsertFilingCommand also refuses to edit a filing mid-submission ('submitting' claim) → 409", async () => {
+    // The transient 'submitting' status marks the whole MF round-trip: the generated XML is
+    // already on its way to the Ministry, so a header edit in that window would drift the DB
+    // record from the XML being filed — same falsified-record hole as editing 'submitted'.
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'submitting',
+      contextNip: '5260001246',
+      variant: 'V7M',
+      year: 2026,
+      month: 6,
+      celZlozenia: 1,
+    }
+    const flush = jest.fn(async () => {})
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => filing), flush }
+
+    await expect(
+      upsertFilingCommand.execute(filingInput({ id: FIL, year: 2027, month: 7 }), makeCtx({ em })),
+    ).rejects.toMatchObject({
+      status: 409,
+      body: { error: '[internal] a submitted JPK filing cannot be edited' },
+    })
+    expect(flush).not.toHaveBeenCalled()
+    expect(filing).toMatchObject({ year: 2026, month: 6 })
+  })
+
+  it.each(['draft', 'generated'] as const)('upsertFilingCommand still updates a %s filing', async (status) => {
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status,
+      contextNip: null,
+      variant: 'V7M',
+      year: 2026,
+      month: 6,
+      quarter: null,
+      celZlozenia: 1,
+      correctionScope: 'both',
+      kodUrzedu: '0202',
+      declarationInputs: null,
+      updatedAt: new Date('2026-06-30T12:00:00Z'),
+    }
+    const flush = jest.fn(async () => {})
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => filing), flush }
+
+    const result = await upsertFilingCommand.execute(
+      filingInput({
+        id: FIL,
+        contextNip: '5260001246',
+        year: 2027,
+        month: 7,
+        celZlozenia: 2,
+        correctionScope: 'declaration',
+        kodUrzedu: '1471',
+        declarationInputs: { P_49: '99.00' },
+      }),
+      makeCtx({ em }),
+    )
+
+    expect(result.undo).toMatchObject({
+      kind: 'filing',
+      op: 'update',
+      id: FIL,
+      before: { contextNip: null, year: 2026, month: 6, celZlozenia: 1, correctionScope: 'both' },
+    })
+    expect(filing).toMatchObject({
+      contextNip: '5260001246',
+      year: 2027,
+      month: 7,
+      celZlozenia: 2,
+      correctionScope: 'declaration',
+      kodUrzedu: '1471',
+      declarationInputs: { P_49: '99.00' },
+    })
+    expect(filing.updatedAt).toBeInstanceOf(Date)
+    expect(flush).toHaveBeenCalled()
+  })
+})
+
 describe('JPK commands — undoable (M8)', () => {
   it('delete is undoable: execute soft-deletes + returns a snapshot, undo restores deleted_at', async () => {
     const record: Record<string, unknown> = { id: REC, organizationId: ORG, tenantId: TEN, deletedAt: null, updatedAt: null }
@@ -207,6 +351,78 @@ describe('JPK commands — undoable (M8)', () => {
     expect(result.undo).toMatchObject({ op: 'create', id: 'NEW' })
     await upsertPurchaseRecordCommand.undo!({ ctx: makeCtx({ em }), logEntry: { commandPayload: { undo: result.undo } } } as never)
     expect(created.deletedAt).toBeInstanceOf(Date)
+  })
+
+  it('upsert filing update undo does not restore fields over a submitted filing', async () => {
+    const updatedAt = new Date('2026-06-30T12:00:00Z')
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'submitted',
+      contextNip: '5260001246',
+      variant: 'V7M',
+      year: 2027,
+      month: 7,
+      quarter: null,
+      celZlozenia: 2,
+      correctionScope: 'declaration',
+      kodUrzedu: '1471',
+      declarationInputs: { P_49: '99.00' },
+      updatedAt,
+    }
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => filing), flush: jest.fn(async () => {}) }
+    const undo = {
+      kind: 'filing',
+      op: 'update',
+      id: FIL,
+      tenantId: TEN,
+      organizationId: ORG,
+      before: {
+        contextNip: null,
+        variant: 'V7M',
+        year: 2026,
+        month: 6,
+        quarter: null,
+        celZlozenia: 1,
+        correctionScope: 'both',
+        kodUrzedu: '0202',
+        declarationInputs: null,
+      },
+    }
+
+    await upsertFilingCommand.undo!({ ctx: makeCtx({ em }), logEntry: { commandPayload: { undo } } } as never)
+
+    expect(filing).toMatchObject({
+      contextNip: '5260001246',
+      year: 2027,
+      month: 7,
+      celZlozenia: 2,
+      correctionScope: 'declaration',
+      kodUrzedu: '1471',
+      declarationInputs: { P_49: '99.00' },
+    })
+    expect(filing.updatedAt).toBe(updatedAt)
+  })
+
+  it('upsert filing create undo does not soft-delete a filing that has since been submitted', async () => {
+    const updatedAt = new Date('2026-06-30T12:00:00Z')
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'submitted',
+      deletedAt: null,
+      updatedAt,
+    }
+    const em: Record<string, unknown> = { findOne: jest.fn(async () => filing), flush: jest.fn(async () => {}) }
+    const undo = { kind: 'filing', op: 'create', id: FIL, tenantId: TEN, organizationId: ORG }
+
+    await upsertFilingCommand.undo!({ ctx: makeCtx({ em }), logEntry: { commandPayload: { undo } } } as never)
+
+    // The filed record must stay visible: no soft-delete, no touch.
+    expect(filing.deletedAt).toBeNull()
+    expect(filing.updatedAt).toBe(updatedAt)
   })
 })
 

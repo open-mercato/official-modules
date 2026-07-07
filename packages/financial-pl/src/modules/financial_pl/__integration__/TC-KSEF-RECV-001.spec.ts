@@ -1,5 +1,5 @@
 import { expect, test, type APIResponse } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 
 /**
  * TC-KSEF-RECV-001: inbound KSeF receiving routes (SPEC-015).

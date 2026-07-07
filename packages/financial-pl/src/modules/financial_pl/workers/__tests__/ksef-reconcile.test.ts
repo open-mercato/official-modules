@@ -23,7 +23,7 @@ type Row = {
   id: string
   status: 'queued' | 'processing' | 'offline_issued' | 'accepted' | 'rejected'
   attemptCount: number
-  mode?: 'online' | 'batch'
+  mode?: 'online' | 'batch' | 'offline24' | 'awaryjny' | 'niedostepnosc'
   batchReference?: string | null
   sessionReference?: string | null
   invoiceReference?: string | null
@@ -148,7 +148,7 @@ describe('ksef-reconcile worker', () => {
 
   it('re-drives a stale processing row: resets to queued, increments attemptCount, re-emits', async () => {
     const { em, nativeUpdate } = makeEm({
-      processing: [{ id: 'S1', status: 'processing', attemptCount: 2, submittedAt: STALE }],
+      processing: [{ id: 'S1', status: 'processing', mode: 'online', attemptCount: 2, submittedAt: STALE }],
     })
     await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
 
@@ -167,6 +167,35 @@ describe('ksef-reconcile worker', () => {
       'financial_pl.ksef_submission.queued',
       { submissionId: 'S1', organizationId: 'O', tenantId: 'T' },
       { persistent: true },
+    )
+  })
+
+  it('re-drives an offline-mode processing orphan through offline_issued and emits offline send request', async () => {
+    const { em, nativeUpdate } = makeEm({
+      processing: [{ id: 'OFF-ORPHAN', status: 'processing', mode: 'awaryjny', attemptCount: 1, submittedAt: STALE }],
+    })
+    await handle({ payload: PAYLOAD } as never, makeCtx(em) as never)
+
+    expect(nativeUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        id: 'OFF-ORPHAN',
+        organizationId: 'O',
+        tenantId: 'T',
+        status: 'processing',
+        submittedAt: { $lt: expect.any(Date) },
+      }),
+      expect.objectContaining({ status: 'offline_issued', attemptCount: 2 }),
+    )
+    expect(emitFinancialPlEvent).toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.offline_send_requested',
+      { submissionId: 'OFF-ORPHAN', organizationId: 'O', tenantId: 'T' },
+      { persistent: true },
+    )
+    expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.queued',
+      expect.anything(),
+      expect.anything(),
     )
   })
 

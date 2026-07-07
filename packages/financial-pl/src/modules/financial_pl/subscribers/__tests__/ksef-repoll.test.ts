@@ -87,6 +87,7 @@ describe('ksef-repoll subscriber', () => {
     const flush = jest.fn(async () => {})
     const submission: Record<string, unknown> = {
       status: 'processing',
+      mode: 'online',
       sessionReference: 'sess',
       invoiceReference: 'inv',
       contextNip: '1234567890',
@@ -110,10 +111,44 @@ describe('ksef-repoll subscriber', () => {
     )
   })
 
+  it('missing credentials for offline mode: restores `offline_issued` and emits offline send request', async () => {
+    const flush = jest.fn(async () => {})
+    const submission: Record<string, unknown> = {
+      status: 'processing',
+      mode: 'offline24',
+      sessionReference: 'sess',
+      invoiceReference: 'inv',
+      contextNip: '1234567890',
+      environment: 'test',
+    }
+    const em: Record<string, unknown> = { flush }
+    em.fork = () => em
+    ;(findOneWithDecryption as jest.Mock).mockResolvedValue(submission)
+    ;(buildKsefAuthConfig as jest.Mock).mockReturnValue(null)
+
+    await handler(PAYLOAD, ctxWithEm(em))
+
+    expect(repollSubmission).not.toHaveBeenCalled()
+    expect(submission.status).toBe('offline_issued')
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(emitFinancialPlEvent).toHaveBeenCalledTimes(1)
+    expect(emitFinancialPlEvent).toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.offline_send_requested',
+      expect.objectContaining({ submissionId: 'S', organizationId: 'O', tenantId: 'T' }),
+      expect.objectContaining({ persistent: true }),
+    )
+    expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.queued',
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
   it('non-terminal / notFound poll result: resets to `queued` and emits exactly one `...queued`', async () => {
     const flush = jest.fn(async () => {})
     const submission: Record<string, unknown> = {
       status: 'processing',
+      mode: 'online',
       sessionReference: 'sess',
       invoiceReference: 'inv',
       contextNip: '1234567890',
@@ -134,6 +169,38 @@ describe('ksef-repoll subscriber', () => {
       'financial_pl.ksef_submission.queued',
       expect.objectContaining({ submissionId: 'S' }),
       expect.objectContaining({ persistent: true }),
+    )
+  })
+
+  it('non-terminal / notFound poll result for offline mode: restores `offline_issued` and emits offline send request', async () => {
+    const flush = jest.fn(async () => {})
+    const submission: Record<string, unknown> = {
+      status: 'processing',
+      mode: 'niedostepnosc',
+      sessionReference: 'sess',
+      invoiceReference: 'inv',
+      contextNip: '1234567890',
+      environment: 'test',
+    }
+    const em: Record<string, unknown> = { flush }
+    em.fork = () => em
+    ;(findOneWithDecryption as jest.Mock).mockResolvedValue(submission)
+    ;(repollSubmission as jest.Mock).mockResolvedValue({ status: 'processing', notFound: true })
+
+    await handler(PAYLOAD, ctxWithEm(em))
+
+    expect(submission.status).toBe('offline_issued')
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(emitFinancialPlEvent).toHaveBeenCalledTimes(1)
+    expect(emitFinancialPlEvent).toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.offline_send_requested',
+      expect.objectContaining({ submissionId: 'S', organizationId: 'O', tenantId: 'T' }),
+      expect.objectContaining({ persistent: true }),
+    )
+    expect(emitFinancialPlEvent).not.toHaveBeenCalledWith(
+      'financial_pl.ksef_submission.queued',
+      expect.anything(),
+      expect.anything(),
     )
   })
 

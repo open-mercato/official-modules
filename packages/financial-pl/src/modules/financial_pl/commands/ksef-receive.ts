@@ -324,6 +324,7 @@ export const receiveInvoicesCommand: CommandHandler<ReceiveInvoicesInput, { sync
     let permanentStorageHwmDate: string | null = null
     let pages = 0
     let consecutiveErrors = 0
+    let failedRows = 0
 
     while (pages < MAX_PAGES_PER_SYNC) {
       pages += 1
@@ -345,6 +346,7 @@ export const receiveInvoicesCommand: CommandHandler<ReceiveInvoicesInput, { sync
           try {
             if (await upsertReceivedInvoice(em, scope, contextNipScope, meta)) synced += 1
           } catch (err) {
+            failedRows += 1
             console.error('[internal] financial_pl.ksef_receive row sync failed', err)
           }
         }
@@ -366,9 +368,21 @@ export const receiveInvoicesCommand: CommandHandler<ReceiveInvoicesInput, { sync
       } catch (err) {
         consecutiveErrors += 1
         console.error('[internal] financial_pl.ksef_receive page sync failed', err)
-        if (consecutiveErrors >= MAX_CONSECUTIVE_PAGE_ERRORS) break
-        pageOffset += PAGE_SIZE
+        if (consecutiveErrors >= MAX_CONSECUTIVE_PAGE_ERRORS) {
+          throw new CrudHttpError(502, {
+            error: '[internal] KSeF received-invoice sync aborted after repeated page failures; cursor not advanced',
+          })
+        }
       }
+    }
+
+    // A failed row upsert is the same permanent-loss class as a dropped page: the cursor is
+    // the legal replay boundary, so it must not advance past an invoice that never reached
+    // the purchase register. Rows already upserted stay (idempotent); the next sync refetches.
+    if (failedRows > 0) {
+      throw new CrudHttpError(502, {
+        error: '[internal] KSeF received-invoice sync completed with failed rows; cursor not advanced',
+      })
     }
 
     await updateCursor(em, scope, contextNipScope, permanentStorageHwmDate)

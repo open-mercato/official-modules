@@ -11,6 +11,16 @@
  * it is recovered by the proven duplicate-safe RE-SEND path (KSeF's 440 content
  * de-duplication resolves a content-identical re-send to the original number).
  */
+export const OFFLINE_SUBMISSION_MODES = ['offline24', 'awaryjny', 'niedostepnosc'] as const
+
+/**
+ * KSeF offline issuance modes must recover through the offline send pipeline so
+ * the statutory offline issue date and KOD I/II justification survive re-drive.
+ */
+export function isOfflineSubmissionMode(mode: string | null | undefined): boolean {
+  return OFFLINE_SUBMISSION_MODES.includes(mode as (typeof OFFLINE_SUBMISSION_MODES)[number])
+}
+
 export function chooseRecovery(row: {
   sessionReference?: string | null
   invoiceReference?: string | null

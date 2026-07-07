@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 
 /**
  * TC-KSEF-005: KSeF certificate management — auth + validation HTTP contract (SPEC-007).

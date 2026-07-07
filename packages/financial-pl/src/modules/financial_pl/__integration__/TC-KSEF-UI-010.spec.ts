@@ -1,13 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 import {
   deleteGeneralEntityIfExists,
   expectId,
   getTokenContext,
   readJsonSafe,
-} from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
-import { login } from '@open-mercato/core/modules/core/__integration__/helpers/auth';
-import { withClient } from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures';
+} from '@open-mercato/core/helpers/integration/generalFixtures';
+import { login } from '@open-mercato/core/helpers/integration/auth';
+import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 
 const suffix = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 const CREATE_PAGE = '/backend/financial/invoices/create';

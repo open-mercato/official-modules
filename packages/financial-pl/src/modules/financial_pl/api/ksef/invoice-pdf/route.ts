@@ -25,7 +25,10 @@ import { loadInvoiceFontBytes } from '../../../lib/fonts/liberation-sans-regular
 import { resolveKsefEnvironment } from '../../../config'
 
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
+  // Both features, mirroring the ksef/invoices list/detail routes: the PDF renders the same
+  // invoice data those routes gate behind `sales.invoices.manage`, so `financial_pl.view`
+  // alone would be a permission bypass via the rendered document.
+  GET: { requireAuth: true, requireFeatures: ['financial_pl.view', 'sales.invoices.manage'] },
 }
 
 const querySchema = z.object({ salesInvoiceId: z.string().uuid() })

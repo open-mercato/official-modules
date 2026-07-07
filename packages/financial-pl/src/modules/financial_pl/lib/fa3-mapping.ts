@@ -58,6 +58,12 @@ export function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
+/** Like asString, but keeps finite numbers (the query engine may hydrate pg numeric as number). */
+export function asNumericString(value: unknown): string | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null
+  return asString(value)
+}
+
 export function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 }
@@ -342,12 +348,21 @@ export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps, opts: { up
 }
 
 export function toIsoDate(value: unknown): string | undefined {
-  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  const formatLocalIsoDate = (date: Date): string | undefined => {
+    if (Number.isNaN(date.getTime())) return undefined
+    const year = String(date.getFullYear()).padStart(4, '0')
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  // Use local components: pg date columns hydrate as local midnight, and UTC conversion shifts Warsaw dates back.
+  if (value instanceof Date) return formatLocalIsoDate(value)
   const text = asString(value)
   if (!text) return undefined
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10)
   const date = new Date(text)
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10)
+  return formatLocalIsoDate(date)
 }
 
 export function asFiniteNumber(value: unknown): number {
@@ -391,8 +406,8 @@ export function metadataLinesToRows(invoice: InvoiceRow): InvoiceLineRow[] {
     const quantityScaled = toScaledInt(quantity, 4)
     const unitNetCents = toCents(unitNetPrice)
     const unitGrossCents = toCents(unitGrossPrice)
-    const discountAmount = asString(line.discountAmount) ?? asString(line.discount_amount)
-    const discountPercent = asString(line.discountPercent) ?? asString(line.discount_percent)
+    const discountAmount = asNumericString(line.discountAmount) ?? asNumericString(line.discount_amount)
+    const discountPercent = asNumericString(line.discountPercent) ?? asNumericString(line.discount_percent)
     const baseCents =
       priceMode === 'gross'
         ? Math.round((quantityScaled * unitGrossCents) / 10000)
@@ -448,14 +463,14 @@ export function buildLines(lineRows: InvoiceLineRow[], opts: BuildLineOptions = 
     const ossRate = asString(row.oss_rate)
     const procedureText = asString(row.procedure)
     const procedure = procedureText === 'WSTO_EE' ? ('WSTO_EE' as const) : undefined
-    const fxRate = asString(row.fx_rate)
+    const fxRate = asNumericString(row.fx_rate)
     const amounts = computeLineAmounts(row, opts)
     const isGrossMethod = opts.priceMode === 'gross' || opts.marginScheme !== undefined
     return {
       lineNumber,
       name: asString(row.name) ?? asString(row.description) ?? `Pozycja ${lineNumber}`,
       unit: asString(row.quantity_unit) ?? undefined,
-      quantity: asString(row.quantity) ?? '1',
+      quantity: asNumericString(row.quantity) ?? '1',
       unitNetPrice: amounts.unitNetPrice,
       netValue: amounts.netValue,
       vatRate: normalizeVatRate(row.tax_rate),
@@ -649,7 +664,7 @@ export function buildZamowienie(orderSnapshot: unknown): Fa3OrderInput | undefin
     const row = asRecord(raw)
     const name = asString(row.name) ?? asString(row.description) ?? undefined
     const unit = asString(row.unit) ?? asString(row.quantity_unit) ?? undefined
-    const quantity = asString(row.quantity) ?? undefined
+    const quantity = asNumericString(row.quantity) ?? undefined
     const unitPrice = row.unitPrice ?? row.unit_price ?? row.unitNetPrice
     const netValue = row.netValue ?? row.total_net_amount
     const vatValue = row.vatValue ?? row.tax_amount
@@ -687,7 +702,7 @@ export function buildAdvancePayments(snapshot: unknown): Fa3AdvancePaymentInput[
     const amountSource = row.amount ?? row.value
     if (!receivedDate || amountSource === undefined || amountSource === null) continue
     const payment: Fa3AdvancePaymentInput = { receivedDate, amount: roundMoneyTo2dp(amountSource) }
-    const fxRate = asString(row.fxRate ?? row.fx_rate)
+    const fxRate = asNumericString(row.fxRate ?? row.fx_rate)
     if (fxRate) payment.fxRate = fxRate
     payments.push(payment)
   }

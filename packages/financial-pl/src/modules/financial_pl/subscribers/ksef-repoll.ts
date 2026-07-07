@@ -6,6 +6,7 @@ import { KsefClient } from '../lib/ksef-client'
 import { repollSubmission, type KsefSubmissionResult } from '../lib/submission-flow'
 import { buildKsefAuthConfig, readKsefCredentials, type ResolverContext } from '../lib/credentials'
 import { emitFinancialPlEvent } from '../events'
+import { isOfflineSubmissionMode } from '../lib/recovery'
 
 /**
  * Persistent (queue-backed, retried) subscriber that RE-POLLS a KSeF submission
@@ -16,11 +17,12 @@ import { emitFinancialPlEvent } from '../events'
  *
  * Fallback (no stranded rows): if KSeF has no record of the reference
  * (`result.notFound`) or the status stays non-terminal, the handler does NOT mark
- * the row terminal — it resets the row to `queued` and re-emits
- * `financial_pl.ksef_submission.queued` so the proven duplicate-safe re-send
- * (440-heal) recovers it. Resetting to `queued` is required so the submit
- * subscriber's `queued->processing` CAS claim can fire (matching how the reconcile
- * worker re-drives a row). A thrown transport error rethrows for the queue retry.
+ * the row terminal — it resets the row to `queued` (or `offline_issued` for
+ * offline modes) and re-emits the matching recovery event so the proven
+ * duplicate-safe re-send (440-heal) recovers it. Resetting to the claimable
+ * status is required so the relevant subscriber's CAS claim can fire (matching
+ * how the reconcile worker re-drives a row). A thrown transport error rethrows
+ * for the queue retry.
  *
  * Idempotent: the status poll is read-only KSeF-side; the finalize writes
  * (accepted/UPO) converge — two concurrent re-polls land on the same result.
@@ -64,14 +66,17 @@ export default async function handler(payload: Payload, ctx: ResolverContext): P
   if (!auth) {
     // Missing credentials: hand off to the submit path so it reports the
     // missing-creds rejection in one place (this handler never sends). Reset to
-    // `queued` FIRST — the submit subscriber's CAS claim fires only from `queued`,
-    // so without the reset the re-emitted event would claim 0 rows and the
-    // rejection would only surface after the breaker exhausts.
-    submission.status = 'queued'
+    // a claimable status FIRST — offline modes must go through the offline send
+    // path so offlineMode plus KOD I/II survive recovery.
+    const isOfflineMode = isOfflineSubmissionMode(submission.mode)
+    const recoveryEvent = isOfflineMode
+      ? 'financial_pl.ksef_submission.offline_send_requested'
+      : 'financial_pl.ksef_submission.queued'
+    submission.status = isOfflineMode ? 'offline_issued' : 'queued'
     submission.updatedAt = new Date()
     await em.flush()
     await emitFinancialPlEvent(
-      'financial_pl.ksef_submission.queued',
+      recoveryEvent,
       { submissionId, organizationId, tenantId },
       { persistent: true },
     )
@@ -131,17 +136,20 @@ export default async function handler(payload: Payload, ctx: ResolverContext): P
   }
 
   // Non-terminal (still processing) OR `notFound` (KSeF has no record of the
-  // reference). Do NOT strand the row: reset to `queued` (so the submit
-  // subscriber's CAS claim from `queued` can fire) and re-emit `queued` so the
-  // proven duplicate-safe re-send (440-heal) recovers it. The reconcile breaker
-  // (attemptCount/maxAttempts) bounds the total recovery attempts across paths.
-  submission.status = 'queued'
+  // reference). Do NOT strand the row: reset to a claimable status and re-emit
+  // the matching event. Offline modes must recover through offline send so the
+  // offline flag, statutory issue date, and KOD I/II justification stay intact.
+  const isOfflineMode = isOfflineSubmissionMode(submission.mode)
+  const recoveryEvent = isOfflineMode
+    ? 'financial_pl.ksef_submission.offline_send_requested'
+    : 'financial_pl.ksef_submission.queued'
+  submission.status = isOfflineMode ? 'offline_issued' : 'queued'
   submission.lastStatusCode = result.lastStatusCode ?? null
   submission.lastErrorMessage = result.errorMessage ?? '[internal] KSeF repoll non-terminal; will re-send'
   submission.updatedAt = new Date()
   await em.flush()
   await emitFinancialPlEvent(
-    'financial_pl.ksef_submission.queued',
+    recoveryEvent,
     { submissionId, organizationId, tenantId },
     { persistent: true },
   )

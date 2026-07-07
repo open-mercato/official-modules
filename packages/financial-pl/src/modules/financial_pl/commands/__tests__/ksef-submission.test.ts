@@ -32,6 +32,7 @@ describe('assertNotSelfBilled (shared self-billing guard — applied at every su
 const ORG = '11111111-1111-4111-8111-111111111111'
 const TEN = '22222222-2222-4222-8222-222222222222'
 const INV = '33333333-3333-4333-8333-333333333333'
+const ACTIVE_SUBMISSION_STATUSES = ['queued', 'processing', 'accepted', 'offline_issued']
 
 const validInvoice = {
   invoiceNumber: 'INV-1',
@@ -52,6 +53,11 @@ function makeCtx(em: unknown) {
     selectedOrganizationId: ORG,
     request: null,
   } as unknown as Parameters<typeof sendCommand.execute>[1]
+}
+
+function whereIncludesStatus(where: unknown, status: string) {
+  const statuses = (where as { status?: { $in?: string[] } }).status?.$in ?? []
+  return statuses.includes(status)
 }
 
 describe('financial_pl.ksef_submission.send idempotency', () => {
@@ -77,7 +83,78 @@ describe('financial_pl.ksef_submission.send idempotency', () => {
         salesInvoiceId: INV,
         organizationId: ORG,
         tenantId: TEN,
-        status: { $in: ['queued', 'processing', 'accepted'] },
+        status: { $in: ACTIVE_SUBMISSION_STATUSES },
+        deletedAt: null,
+      }),
+      undefined,
+    )
+  })
+
+  it('returns the existing offline-issued invoice submission instead of leaking a unique-violation insert', async () => {
+    const create = jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ id: 'NEW', ...data }))
+    const em: Record<string, unknown> = {
+      findOne: jest.fn(async (_entity: unknown, where: unknown) =>
+        whereIncludesStatus(where, 'offline_issued') ? { id: 'OFFLINE' } : null,
+      ),
+      create,
+      persist: () => ({
+        flush: async () => {
+          throw Object.assign(
+            new Error('duplicate key value violates unique constraint "financial_pl_ksef_submissions_active_unique"'),
+            { code: '23505', constraint: 'financial_pl_ksef_submissions_active_unique' },
+          )
+        },
+      }),
+    }
+    em.fork = () => em
+
+    const result = await sendCommand.execute(
+      { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, contextNip: '5260001246', invoice: validInvoice },
+      makeCtx(em),
+    )
+
+    expect(result).toEqual({ submissionId: 'OFFLINE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(em.findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        documentKind: 'invoice',
+        salesInvoiceId: INV,
+        organizationId: ORG,
+        tenantId: TEN,
+        status: { $in: ACTIVE_SUBMISSION_STATUSES },
+        deletedAt: null,
+      }),
+      undefined,
+    )
+  })
+
+  it('does not treat a rejected row as active, so a fresh submission can be queued', async () => {
+    const create = jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ id: 'FRESH', ...data }))
+    const em: Record<string, unknown> = {
+      findOne: jest.fn(async (_entity: unknown, where: unknown) =>
+        whereIncludesStatus(where, 'rejected') ? { id: 'REJECTED' } : null,
+      ),
+      create,
+      persist: () => ({ flush: async () => {} }),
+    }
+    em.fork = () => em
+
+    const result = await sendCommand.execute(
+      { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV, contextNip: '5260001246', invoice: validInvoice },
+      makeCtx(em),
+    )
+
+    expect(result).toEqual({ submissionId: 'FRESH' })
+    expect(create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'queued' }))
+    expect(em.findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        documentKind: 'invoice',
+        salesInvoiceId: INV,
+        organizationId: ORG,
+        tenantId: TEN,
+        status: { $in: ACTIVE_SUBMISSION_STATUSES },
         deletedAt: null,
       }),
       undefined,

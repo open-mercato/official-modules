@@ -46,22 +46,21 @@ function resolveInvoiceId(request: InterceptorRequest): string | undefined {
 }
 
 /**
- * True when the invoice has a KSeF submission in `accepted` OR `processing` state for the caller's
- * org/tenant. Reads via `context.em.fork()` (NEVER imports core entities). Only the invoice's OWN
- * submissions (document_kind='invoice'): a correction stores sales_invoice_id = the CORRECTED
- * original, so the discriminator prevents an accepted correction from locking the original.
+ * True when the invoice has a KSeF submission in `accepted` OR `processing` state within the
+ * caller's tenant, independent of the caller's selected organization. Reads via `context.em.fork()`
+ * (NEVER imports core entities). Only the invoice's OWN submissions (document_kind='invoice'): a
+ * correction stores sales_invoice_id = the CORRECTED original, so the discriminator prevents an
+ * accepted correction from locking the original.
  */
 async function isInvoiceKsefLocked(invoiceId: string, context: InterceptorContext): Promise<boolean> {
-  // Fail closed on missing caller scope: without a real org/tenant the submission lookup cannot be
-  // tenant-scoped (and an empty-string uuid would make the query itself throw a 500). An unscopable
-  // mutation must not slip past the immutability guard, so treat it as locked.
-  if (!asString(context.organizationId) || !asString(context.tenantId)) return true
+  // Fail closed on missing tenant scope: the org id is deliberately not required nor filtered,
+  // because the lock must follow the invoice's org, not the caller's currently selected org.
+  if (!asString(context.tenantId)) return true
   const em = context.em.fork()
   const count = await em.count(KsefSubmission, {
     salesInvoiceId: invoiceId,
     documentKind: 'invoice',
     status: { $in: [...LOCKED_STATUSES] },
-    organizationId: context.organizationId,
     tenantId: context.tenantId,
     deletedAt: null,
   })

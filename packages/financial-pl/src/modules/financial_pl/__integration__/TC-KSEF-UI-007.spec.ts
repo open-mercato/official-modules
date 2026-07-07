@@ -1,12 +1,12 @@
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
-import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api';
+import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 import {
   deleteGeneralEntityIfExists,
   expectId,
   getTokenContext,
   readJsonSafe,
-} from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures';
-import { login } from '@open-mercato/core/modules/core/__integration__/helpers/auth';
+} from '@open-mercato/core/helpers/integration/generalFixtures';
+import { login } from '@open-mercato/core/helpers/integration/auth';
 
 /**
  * TC-KSEF-UI-007: SPEC-016 invoice-editor IA + customer/product picker flows.

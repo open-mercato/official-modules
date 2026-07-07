@@ -42,7 +42,8 @@ export type CorrectionFormProps = {
   originalLines: InvoiceLineInput[]
   currencyCode: string
   /** Pricing mode of the corrected original — carried onto the KOR so a gross-priced invoice
-   *  corrects in gross mode (FA(3) P_9B/P_11A). Absent ⇒ net (the default). */
+   *  corrects in gross mode (FA(3) P_9B/P_11A). The operator may flip it while authoring the KOR.
+   *  Absent ⇒ net (the default). */
   priceMode?: 'net' | 'gross'
   features: string[]
   onSubmitted?: () => void
@@ -62,7 +63,7 @@ export function CorrectionForm({
   originalInvoiceNumber,
   originalLines,
   currencyCode,
-  priceMode,
+  priceMode: initialPriceMode,
   features,
   onSubmitted,
   disabled,
@@ -72,6 +73,7 @@ export function CorrectionForm({
 
   const [reason, setReason] = React.useState('')
   const [lines, setLines] = React.useState<InvoiceLineInput[]>(() => originalLines.map(toCorrectionLine))
+  const [priceMode, setPriceMode] = React.useState<'net' | 'gross'>(initialPriceMode ?? 'net')
   const [busy, setBusy] = React.useState(false)
 
   const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
@@ -171,7 +173,14 @@ export function CorrectionForm({
         <span className="text-sm font-medium text-foreground">
           {t('financial_pl.correction.lines', 'Correction lines')}
         </span>
-        <InvoiceLinesField value={lines} onChange={setLines} currencyCode={currencyCode} disabled={busyOrDisabled} />
+        <InvoiceLinesField
+          value={lines}
+          onChange={setLines}
+          currencyCode={currencyCode}
+          disabled={busyOrDisabled}
+          priceMode={priceMode}
+          onPriceModeChange={setPriceMode}
+        />
       </div>
 
       <div className="flex">

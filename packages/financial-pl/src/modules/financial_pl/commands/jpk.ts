@@ -322,6 +322,13 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
         scope,
       )
       if (!existing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
+      // A filing already submitted to the Ministry is a terminal compliance record — its header
+      // (period/NIP/variant/purpose) must never drift from the filed XML/UPO. Mirror generateCommand.
+      // The transient 'submitting' claim counts too: the generated XML is already on its way to the
+      // Ministry, so an edit during that window would drift the header from the XML being filed.
+      if (existing.status === 'submitted' || existing.status === JPK_SUBMITTING_STATUS) {
+        throw new CrudHttpError(409, { error: '[internal] a submitted JPK filing cannot be edited' })
+      }
       const before = snapshotFields(existing, Object.keys(fields))
       Object.assign(existing, fields, { updatedAt: now })
       await em.flush()
@@ -390,6 +397,10 @@ export const upsertFilingCommand: CommandHandler<JpkFilingUpsertInput, { id: str
       { tenantId: snap.tenantId, organizationId: snap.organizationId },
     )
     if (!filing) return
+    // A filing that has since been SUBMITTED (or is mid-submission) is a terminal compliance
+    // record: neither the create nor an older edit may be undone into it (soft-deleting or
+    // rewriting a filed record).
+    if (filing.status === 'submitted' || filing.status === JPK_SUBMITTING_STATUS) return
     if (snap.op === 'create') {
       filing.deletedAt = new Date()
       filing.updatedAt = filing.deletedAt

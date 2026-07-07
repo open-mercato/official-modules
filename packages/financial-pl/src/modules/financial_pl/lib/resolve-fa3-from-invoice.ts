@@ -18,6 +18,7 @@ import {
   scaled4ToMoney2dp,
   toIsoDate,
   toScaled4,
+  asNumericString,
   asRecord,
   asString,
   lineCarriesTaxRate,
@@ -122,7 +123,7 @@ function applyOssMarkers(
     // rate-reconciliation guard. When the line carries no positive rate we fall back to the EU
     // standard-rate table for the consumption country. Callers that persist the Polish rate on an
     // OSS line would file a wrong destination VAT rate.
-    const lineRate = Number(asString(row.tax_rate) ?? '')
+    const lineRate = Number(asNumericString(row.tax_rate) ?? '')
     const ossRate =
       Number.isFinite(lineRate) && lineRate > 0 ? String(lineRate) : tableRate !== undefined ? String(tableRate) : null
     if (ossRate === null) {

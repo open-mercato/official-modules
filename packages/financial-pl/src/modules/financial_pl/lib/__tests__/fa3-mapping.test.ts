@@ -1,4 +1,5 @@
 import {
+  asNumericString,
   buildAdvancePayments,
   buildAdvanceRefs,
   buildAnnotations,
@@ -6,10 +7,51 @@ import {
   buildLines,
   buildVatBreakdown,
   buildZamowienie,
+  toIsoDate,
   type Fa3MappingDeps,
 } from '../fa3-mapping'
 
 const deps: Fa3MappingDeps = { contextNip: '7980332920' }
+
+describe('asNumericString', () => {
+  it('keeps finite numbers and trims strings', () => {
+    expect(asNumericString(2.5)).toBe('2.5')
+    expect(asNumericString(' 3 ')).toBe('3')
+  })
+
+  it('returns null for non-finite and non-scalar values', () => {
+    expect(asNumericString(Number.NaN)).toBeNull()
+    expect(asNumericString(Number.POSITIVE_INFINITY)).toBeNull()
+    expect(asNumericString(null)).toBeNull()
+    expect(asNumericString({})).toBeNull()
+  })
+})
+
+describe('toIsoDate', () => {
+  // Pin a UTC+ timezone: on a UTC CI host the pre-fix toISOString() implementation would
+  // pass these cases too, so without the pin this regression guard enforces nothing.
+  const originalTz = process.env.TZ
+  beforeAll(() => {
+    process.env.TZ = 'Europe/Warsaw'
+  })
+  afterAll(() => {
+    if (originalTz === undefined) delete process.env.TZ
+    else process.env.TZ = originalTz
+  })
+
+  it('formats local Date instances without UTC day shift', () => {
+    expect(toIsoDate(new Date(2026, 6, 7))).toBe('2026-07-07')
+  })
+
+  it('keeps ISO date strings and formats parseable strings', () => {
+    expect(toIsoDate('2026-07-07')).toBe('2026-07-07')
+    expect(toIsoDate('2026-07-07T00:30:00')).toBe('2026-07-07')
+  })
+
+  it('returns undefined for invalid input', () => {
+    expect(toIsoDate('not-a-date')).toBeUndefined()
+  })
+})
 
 describe('buildBuyer — UPR (simplified invoice) NIP-only branch', () => {
   it('returns a NIP-only party (no name/address) for a UPR buyer carrying only a NIP', () => {
@@ -83,6 +125,23 @@ describe('buildLines — OSS / FX carry', () => {
     ])
     expect(lines[0].ossRate).toBeUndefined()
     expect(lines[0].procedure).toBeUndefined()
+  })
+
+  it('keeps numeric quantity and FX rate values', () => {
+    const lines = buildLines([
+      {
+        line_number: 1,
+        name: 'Distance sale',
+        quantity: 2,
+        unit_price_net: '10.00',
+        total_net_amount: '20.00',
+        tax_amount: '4.60',
+        tax_rate: '23',
+        fx_rate: 4.3210,
+      },
+    ])
+    expect(lines[0].quantity).toBe('2')
+    expect(lines[0].fxRate).toBe('4.321')
   })
 })
 
@@ -168,6 +227,14 @@ describe('buildZamowienie — order block mapping', () => {
   it('returns undefined for an empty/absent order snapshot', () => {
     expect(buildZamowienie(undefined)).toBeUndefined()
     expect(buildZamowienie({ lines: [] })).toBeUndefined()
+  })
+
+  it('keeps numeric order-snapshot quantities', () => {
+    const order = buildZamowienie({
+      totalValue: '20.00',
+      lines: [{ name: 'Zaliczka pos. 1', quantity: 2, unitPrice: '10', netValue: '20', vatRate: '23' }],
+    })
+    expect(order?.lines[0].quantity).toBe('2')
   })
 })
 

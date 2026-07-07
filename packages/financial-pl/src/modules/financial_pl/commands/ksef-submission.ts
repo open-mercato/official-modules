@@ -43,7 +43,7 @@ import { KsefClient, type KsefPublicKeyCertificate, type KsefTransport } from '.
 import { authenticate } from '../lib/ksef-auth'
 import { assertCertificateValidNow, CertificateValidityError } from '../lib/cert-enrollment'
 import { buildKodIUrl } from '../lib/ksef-qr'
-import { chooseRecovery } from '../lib/recovery'
+import { chooseRecovery, isOfflineSubmissionMode } from '../lib/recovery'
 import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
 import { isInvoiceIssued } from '../lib/invoice-status'
@@ -235,8 +235,11 @@ export const sendCommand: CommandHandler<KsefSubmissionSendInput, { submissionId
     // the invoice — and always scoped to document_kind so a correction never matches the
     // corrected invoice's own submission (or vice versa). If one is already in flight
     // (queued/processing) or accepted, return it instead of queuing a second live send.
+    // An offline-issued row is also active for the same source document: return it under
+    // this command's idempotent contract (the deferred offline path will send it), instead
+    // of leaking a unique-violation 500.
     // A prior `rejected` submission does NOT block a fresh attempt.
-    const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted']
+    const activeStatuses: KsefSubmissionStatusColumn[] = ['queued', 'processing', 'accepted', 'offline_issued']
     const dedupeWhere: FilterQuery<KsefSubmission> =
       documentKind === 'credit_memo'
         ? {
@@ -350,8 +353,7 @@ export const retryCommand: CommandHandler<KsefSubmissionRetryInput, { submission
     // Offline-issued (offline24 / awaryjny / niedostepnosc) submissions retry through the DEFERRED OFFLINE send
     // path — never the online queue — so offlineMode and the statutory send-by deadline are
     // preserved. (A 'processing' offline row that already reached KSeF is routed to repoll above.)
-    const isOfflineMode = submission.mode === 'offline24' || submission.mode === 'awaryjny' || submission.mode === 'niedostepnosc'
-    if (isOfflineMode) {
+    if (isOfflineSubmissionMode(submission.mode)) {
       submission.status = 'offline_issued'
       submission.lastErrorCode = null
       submission.lastErrorMessage = null
