@@ -92,10 +92,10 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@open-mercato/core": "0.6.3-develop.3778.1.25fdb35f2e",
-    "@open-mercato/queue": "0.6.3-develop.3778.1.25fdb35f2e",
-    "@open-mercato/shared": "0.6.3-develop.3778.1.25fdb35f2e",
-    "@open-mercato/ui": "0.6.3-develop.3778.1.25fdb35f2e",
+    "@open-mercato/core": "0.6.6-develop.6428.1.e839e44431",
+    "@open-mercato/queue": "0.6.6-develop.6428.1.e839e44431",
+    "@open-mercato/shared": "0.6.6-develop.6428.1.e839e44431",
+    "@open-mercato/ui": "0.6.6-develop.6428.1.e839e44431",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.28.0",
     "glob": "^13.0.6",

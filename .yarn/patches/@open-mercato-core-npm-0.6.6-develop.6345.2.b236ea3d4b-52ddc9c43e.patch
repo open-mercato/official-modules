@@ -1,0 +1,67 @@
+diff --git a/dist/modules/data_sync/backend/data-sync/runs/[id]/page.js b/dist/modules/data_sync/backend/data-sync/runs/[id]/page.js
+index 93acde67b42c41fd5af49229cefe61af19702d12..c54edff6f7ff0d5a1604465991126b0423aedd37 100644
+--- a/dist/modules/data_sync/backend/data-sync/runs/[id]/page.js
++++ b/dist/modules/data_sync/backend/data-sync/runs/[id]/page.js
+@@ -287,7 +287,7 @@ function SyncRunDetailPage({ params }) {
+             time: new Date(log.createdAt).toLocaleString(),
+             level: log.level,
+             message: log.message,
+-            body: log.payload ? /* @__PURE__ */ jsx("pre", { className: "overflow-x-auto whitespace-pre-wrap rounded-md border bg-card p-3 text-xs", children: JSON.stringify(log.payload, null, 2) }) : /* @__PURE__ */ jsx("p", { className: "text-sm text-muted-foreground", children: t("data_sync.runs.detail.logs.noPayload", "No payload recorded for this log entry.") })
++            body: log.payload?.summary ? /* @__PURE__ */ jsx("pre", { className: "overflow-x-auto whitespace-pre-wrap rounded-md border bg-card p-3 text-xs", children: log.payload.summary }) : null
+           })),
+           emptyMessage: t("data_sync.runs.detail.noLogs")
+         }
+diff --git a/dist/modules/data_sync/lib/adapter-registry.js b/dist/modules/data_sync/lib/adapter-registry.js
+index 3621df0abd295efe10075d9a76ae0a6a8684188c..6bca4b7901a5f3a17a461176022b6929f9f1f4bc 100644
+--- a/dist/modules/data_sync/lib/adapter-registry.js
++++ b/dist/modules/data_sync/lib/adapter-registry.js
+@@ -1,12 +1,18 @@
+-const adapters = /* @__PURE__ */ new Map();
++const REGISTRY_KEY = "__omDataSyncAdapters__";
++function getAdapters() {
++  if (!globalThis[REGISTRY_KEY]) {
++    globalThis[REGISTRY_KEY] = new Map();
++  }
++  return globalThis[REGISTRY_KEY];
++}
+ function registerDataSyncAdapter(adapter) {
+-  adapters.set(adapter.providerKey, adapter);
++  getAdapters().set(adapter.providerKey, adapter);
+ }
+ function getDataSyncAdapter(providerKey) {
+-  return adapters.get(providerKey);
++  return getAdapters().get(providerKey);
+ }
+ function getAllDataSyncAdapters() {
+-  return Array.from(adapters.values());
++  return Array.from(getAdapters().values());
+ }
+ export {
+   getAllDataSyncAdapters,
+diff --git a/dist/modules/data_sync/lib/sync-engine.js b/dist/modules/data_sync/lib/sync-engine.js
+index 155106c0c2bc0f73fab80ae7e68a20d5be648fe5..cc16b41751c2730a7b2c41692205eacdeb1108f5 100644
+--- a/dist/modules/data_sync/lib/sync-engine.js
++++ b/dist/modules/data_sync/lib/sync-engine.js
+@@ -475,6 +475,14 @@ function createSyncEngine(deps) {
+           }
+           const delta = applyExportCounters(batch);
+           processedCount += delta.processedCount;
++          const failedExportItems = batch.results.filter((r) => r.status === "error" && r.error);
++          for (const item of failedExportItems) {
++            const label = item.externalId ? `${item.externalId} (id: ${item.localId})` : item.localId;
++            const errorMsg = (item.error ?? "").split("\n")[0];
++            let payload = void 0;
++            try {
++              const bodyStart = errorMsg.indexOf(": {");
++              if (bodyStart !== -1) {
++                payload = { summary: JSON.stringify(JSON.parse(errorMsg.substring(bodyStart + 2)), null, 2) };
++              }
++            } catch {}
++            await integrationLogService.write(
++              { integrationId: run.integrationId, runId: run.id, level: "error", message: `Export failed for ${label}: ${errorMsg}`, payload },
++              scope
++            ).catch(() => {});
++          }
+           await syncRunService.commitBatchProgress(
+             run.id,
+             {
