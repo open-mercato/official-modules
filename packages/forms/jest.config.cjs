@@ -4,6 +4,8 @@ module.exports = {
   testEnvironment: 'node',
   watchman: false,
   rootDir: '.',
+  maxWorkers: 4,
+  workerIdleMemoryLimit: '512MB',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   moduleNameMapper: {
     '^@open-mercato/forms/(.*)$': '<rootDir>/src/$1',
