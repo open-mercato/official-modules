@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { createRequestContainer, type AppContainer } from '@open-mercato/shared/lib/di/container'
 import { createExternalIdMappingService, type ExternalIdMappingService } from '@open-mercato/core/modules/data_sync/lib/id-mapping'
 import type { TenantScope } from '@open-mercato/core/modules/data_sync/lib/adapter'
 import type { IntegrationLogService } from '@open-mercato/core/modules/integrations/lib/log-service'
@@ -8,6 +8,9 @@ import { loadMagentoSettings, type MagentoSettings } from '../settings'
 
 // Integration id used to scope ExternalIdMappingService lookups for the products adapter.
 export const MAGENTO_PRODUCTS_INTEGRATION_ID = 'sync_magento_products'
+// Integration id used to scope ExternalIdMappingService lookups for the orders adapter
+// (both imported orders and the customers it creates/links along the way).
+export const MAGENTO_ORDERS_INTEGRATION_ID = 'sync_magento_orders'
 
 // entityType conventions, per SPEC-005 Data Models table.
 export const CATALOG_PRODUCT_ENTITY_TYPE = 'catalog.product'
@@ -34,6 +37,10 @@ export type AdapterContext = {
   scope: TenantScope
   settings: MagentoSettings
   integrationLogService: IntegrationLogService
+  // The full DI container, needed by the orders adapter to resolve `commandBus`
+  // and build the `CommandRuntimeContext` for dispatching sales.orders.create /
+  // customers.people.create.
+  container: AppContainer
   // Id of the sync run driving this adapter call, when available, so per-item log
   // entries can be traced back to the run they happened in.
   runId?: string
@@ -62,6 +69,7 @@ export async function createAdapterContext(input: {
     scope: input.scope,
     settings,
     integrationLogService: container.resolve('integrationLogService') as IntegrationLogService,
+    container,
     runId: input.runId,
     selectOptionCache: new Map(),
     configurableAttributeCache: new Map(),
