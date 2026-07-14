@@ -36,6 +36,7 @@ import {
   createAdapterContext,
   decodeProductCursor,
   encodeProductCursor,
+  MAGENTO_PRODUCTS_INTEGRATION_ID,
   type ProductExportCursor,
 } from './shared'
 
@@ -242,6 +243,49 @@ function wrapExportError(error: unknown): string {
   return 'Unknown export error'
 }
 
+// Writes a per-product integration log entry (visible in the integration's "Logi" tab,
+// filterable by run and by product) for exports that fail or get skipped. Successful
+// exports are intentionally not logged here — they're already reflected in the run's
+// aggregate counters, and logging every SKU would flood the log table on large catalogs.
+async function logProductIssue(
+  ctx: AdapterContext,
+  product: CatalogProduct,
+  sku: string | undefined,
+  level: 'warn' | 'error',
+  message: string,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  await ctx.integrationLogService
+    .write(
+      {
+        integrationId: MAGENTO_PRODUCTS_INTEGRATION_ID,
+        runId: ctx.runId,
+        scopeEntityType: CATALOG_PRODUCT_ENTITY_TYPE,
+        scopeEntityId: product.id,
+        level,
+        message,
+        payload: { productId: product.id, sku: sku || null, productType: product.productType, ...detail },
+      },
+      ctx.scope,
+    )
+    .catch((logError) => {
+      console.error(`[sync_magento] failed to write integration log for product ${product.id}: ${logError instanceof Error ? logError.message : String(logError)}`)
+    })
+}
+
+// Captures the full error detail (untruncated message, plus Magento's raw HTTP status/body
+// when available) for the log payload — `wrapExportError` above stays truncated to a single
+// line since that string also feeds the run's short-form ExportItemResult.error.
+function buildErrorDetail(error: unknown): Record<string, unknown> {
+  if (error instanceof MagentoApiError) {
+    return { httpStatus: error.status, responseBody: error.body }
+  }
+  if (error instanceof Error) {
+    return { fullError: error.message }
+  }
+  return { fullError: String(error) }
+}
+
 // Retries a product PUT up to 5 times on url_key uniqueness conflicts, appending
 // a counter suffix (-1, -2, …) to the url_key on each retry.
 async function withUrlKeyRetry<T>(baseUrlKey: string, attempt: (urlKey: string) => Promise<T>): Promise<T> {
@@ -414,6 +458,7 @@ async function exportConfigurableProduct(
 ): Promise<ExportItemResult> {
   const sku = product.sku?.trim()
   if (!sku) {
+    await logProductIssue(ctx, product, sku, 'warn', `Skipped configurable product ${product.id}: missing SKU`, {})
     return { localId: product.id, status: 'skipped', error: 'Missing SKU' }
   }
 
@@ -557,6 +602,7 @@ async function exportConfigurableProduct(
   } catch (error) {
     const message = wrapExportError(error)
     console.error(`[sync_magento] configurable export failed for SKU ${sku} (id=${product.id}): ${message}`)
+    await logProductIssue(ctx, product, sku, 'error', `Export failed for SKU ${sku}: ${message}`, buildErrorDetail(error))
     return { localId: product.id, externalId: sku, status: 'error', error: message }
   }
 }
@@ -573,6 +619,7 @@ async function exportProduct(
 
   const sku = product.sku?.trim()
   if (!sku) {
+    await logProductIssue(ctx, product, sku, 'warn', `Skipped product ${product.id}: missing SKU`, {})
     return { localId: product.id, status: 'skipped', error: 'Missing SKU' }
   }
 
@@ -624,12 +671,13 @@ async function exportProduct(
   } catch (error) {
     const message = wrapExportError(error)
     console.error(`[sync_magento] export failed for SKU ${sku} (id=${product.id}): ${message}`)
+    await logProductIssue(ctx, product, sku, 'error', `Export failed for SKU ${sku}: ${message}`, buildErrorDetail(error))
     return { localId: product.id, externalId: sku, status: 'error', error: message }
   }
 }
 
 export async function* streamExport(input: StreamExportInput): AsyncIterable<ExportBatch> {
-  const ctx = await createAdapterContext({ credentials: input.credentials, scope: input.scope })
+  const ctx = await createAdapterContext({ credentials: input.credentials, scope: input.scope, runId: input.runId })
   const attributeSetId = await ensureAttributeSet(ctx)
   const customFieldDefs = await loadCustomFieldDefs(ctx)
 

@@ -142,7 +142,11 @@ export async function applyMagentoEnvPreset(params: {
   await applySettingsPreset(params.em, preset, params.scope)
 
   if (params.integrationLogService) {
-    await params.integrationLogService.scoped(MAGENTO_BUNDLE_ID, params.scope).info(
+    // IntegrationLog rows are queried per integration id (each of the 4 Magento
+    // integrations has its own detail-page log tab) — `MAGENTO_BUNDLE_ID` isn't a
+    // registered integration id, so logging under it would never surface on any
+    // page. Log under the bundle's primary/first-declared integration instead.
+    await params.integrationLogService.scoped(MAGENTO_INTEGRATION_IDS[0], params.scope).info(
       'Magento integration was preconfigured from environment variables.',
       { enabled: preset.enabled },
     )

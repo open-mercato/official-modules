@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { createExternalIdMappingService, type ExternalIdMappingService } from '@open-mercato/core/modules/data_sync/lib/id-mapping'
 import type { TenantScope } from '@open-mercato/core/modules/data_sync/lib/adapter'
+import type { IntegrationLogService } from '@open-mercato/core/modules/integrations/lib/log-service'
 import { createMagentoClient, type MagentoClient } from '../client'
 import { loadMagentoSettings, type MagentoSettings } from '../settings'
 
@@ -32,6 +33,10 @@ export type AdapterContext = {
   idMapping: ExternalIdMappingService
   scope: TenantScope
   settings: MagentoSettings
+  integrationLogService: IntegrationLogService
+  // Id of the sync run driving this adapter call, when available, so per-item log
+  // entries can be traced back to the run they happened in.
+  runId?: string
   // Per-run cache of Magento `select` attribute options (attribute_code -> option label -> option_id),
   // since `select`/`multiselect` attributes store an integer option id, not the option label.
   selectOptionCache: Map<string, Map<string, string>>
@@ -45,6 +50,7 @@ export type AdapterContext = {
 export async function createAdapterContext(input: {
   credentials: Record<string, unknown>
   scope: TenantScope
+  runId?: string
 }): Promise<AdapterContext> {
   const container = await createRequestContainer()
   const em = container.resolve('em') as EntityManager
@@ -55,6 +61,8 @@ export async function createAdapterContext(input: {
     idMapping: createExternalIdMappingService(em),
     scope: input.scope,
     settings,
+    integrationLogService: container.resolve('integrationLogService') as IntegrationLogService,
+    runId: input.runId,
     selectOptionCache: new Map(),
     configurableAttributeCache: new Map(),
     magentoAttributeIdCache: new Map(),

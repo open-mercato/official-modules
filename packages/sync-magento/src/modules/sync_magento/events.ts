@@ -4,6 +4,7 @@ const events = [
   { id: 'sync_magento.product.exported', label: 'Magento Product Exported', entity: 'product', category: 'crud' as const, clientBroadcast: true },
   { id: 'sync_magento.order.imported', label: 'Magento Order Imported', entity: 'order', category: 'crud' as const, clientBroadcast: true },
   { id: 'sync_magento.inventory.pushed', label: 'Magento Inventory Pushed', entity: 'inventory', category: 'lifecycle' as const, clientBroadcast: true },
+  { id: 'sync_magento.price.pushed', label: 'Magento Price Pushed', entity: 'price', category: 'lifecycle' as const, clientBroadcast: true },
   { id: 'sync_magento.attribute_set.provisioned', label: 'Magento Attribute Set Provisioned', entity: 'attribute_set', category: 'lifecycle' as const },
   { id: 'sync_magento.sync.started', label: 'Magento Sync Started', entity: 'sync', category: 'lifecycle' as const, clientBroadcast: true },
   { id: 'sync_magento.sync.completed', label: 'Magento Sync Completed', entity: 'sync', category: 'lifecycle' as const, clientBroadcast: true },

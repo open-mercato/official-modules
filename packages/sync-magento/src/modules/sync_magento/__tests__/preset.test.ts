@@ -201,7 +201,7 @@ describe('applyMagentoEnvPreset', () => {
     })
 
     const scoped = jest.mocked(services.integrationLogService!.scoped)
-    expect(scoped).toHaveBeenCalledWith('sync_magento', scope)
+    expect(scoped).toHaveBeenCalledWith('sync_magento_products', scope)
     expect(scoped.mock.results[0].value.info).toHaveBeenCalledWith(
       'Magento integration was preconfigured from environment variables.',
       { enabled: false },

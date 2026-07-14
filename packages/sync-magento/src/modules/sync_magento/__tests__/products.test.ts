@@ -74,6 +74,7 @@ jest.mock('../lib/adapters/categories', () => ({
 // `../data/entities` / DI container chain it pulls in) is never loaded.
 jest.mock('../lib/adapters/shared', () => ({
   CATALOG_PRODUCT_ENTITY_TYPE: 'catalog.product',
+  MAGENTO_PRODUCTS_INTEGRATION_ID: 'sync_magento_products',
   createAdapterContext: jest.fn(),
   encodeProductCursor: (cursor: { updatedAt: string; id: string }) => JSON.stringify(cursor),
   decodeProductCursor: (cursor?: string | null) => {
@@ -106,6 +107,9 @@ function buildCtx(settingsOverrides: Record<string, unknown> = {}): AdapterConte
       lookupExternalId: jest.fn(),
       storeExternalIdMapping: jest.fn(),
     } as unknown as AdapterContext['idMapping'],
+    integrationLogService: {
+      write: jest.fn().mockResolvedValue(undefined),
+    } as unknown as AdapterContext['integrationLogService'],
     scope: { organizationId: chance.guid(), tenantId: chance.guid() },
     selectOptionCache: new Map(),
     configurableAttributeCache: new Map(),
@@ -286,6 +290,16 @@ describe('streamExport', () => {
     expect(batches[0].results).toEqual([{ localId: product.id, status: 'skipped', error: 'Missing SKU' }])
     expect(ctx.client.put).not.toHaveBeenCalled()
     expect(emitSyncMagentoEvent).not.toHaveBeenCalled()
+    expect(ctx.integrationLogService.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        integrationId: 'sync_magento_products',
+        level: 'warn',
+        scopeEntityType: 'catalog.product',
+        scopeEntityId: product.id,
+        payload: expect.objectContaining({ productId: product.id, sku: null }),
+      }),
+      ctx.scope,
+    )
   })
 
   it('isolates per-item failures within a batch', async () => {
@@ -328,6 +342,18 @@ describe('streamExport', () => {
       { localId: productB.id, externalId: productB.sku, status: 'success' },
     ])
     expect(emitSyncMagentoEvent).toHaveBeenCalledTimes(1)
+    expect(ctx.integrationLogService.write).toHaveBeenCalledTimes(1)
+    expect(ctx.integrationLogService.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        integrationId: 'sync_magento_products',
+        level: 'error',
+        scopeEntityType: 'catalog.product',
+        scopeEntityId: productA.id,
+        message: `Export failed for SKU ${productA.sku}: Magento rejected the request`,
+        payload: expect.objectContaining({ productId: productA.id, sku: productA.sku, fullError: 'Magento rejected the request' }),
+      }),
+      ctx.scope,
+    )
   })
 
   it('resolves category links and custom attributes for the export payload', async () => {
@@ -855,6 +881,17 @@ describe('streamExport', () => {
         { localId: badConfigurable.id, externalId: 'CONF-BAD', status: 'error', error: 'Magento rejected configurable' },
         { localId: goodSimple.id, externalId: goodSimple.sku, status: 'success' },
       ])
+      expect(ctx.integrationLogService.write).toHaveBeenCalledWith(
+        expect.objectContaining({
+          integrationId: 'sync_magento_products',
+          level: 'error',
+          scopeEntityType: 'catalog.product',
+          scopeEntityId: badConfigurable.id,
+          message: 'Export failed for SKU CONF-BAD: Magento rejected configurable',
+          payload: expect.objectContaining({ productId: badConfigurable.id, sku: 'CONF-BAD', fullError: 'Magento rejected configurable' }),
+        }),
+        ctx.scope,
+      )
     })
   })
 

@@ -15,6 +15,7 @@ TODO: Fix that latter to have reference by the package names
 @source "../../../../node_modules/@open-mercato/onboarding/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/content/src/**/*.{ts,tsx}";
 @source "../../../../node_modules/@open-mercato/ai-assistant/src/**/*.{ts,tsx}";
+@source not "../../../../node_modules/@open-mercato/*/src/**/__tests__/**";
 
 @custom-variant dark (&:is(.dark *));
 
