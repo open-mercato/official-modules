@@ -12,8 +12,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      PLATFORM_CHANNEL: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -32,17 +30,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Check platform sync
-        if: github.base_ref == 'main'
-        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
-
+      # TODO(subrepo): module codegen (`mercato generate`) is no longer hosted here
+      # since the sandbox app was removed. The parent open-mercato repo now runs
+      # codegen against these packages. If package builds need generated module
+      # files in CI, invoke the parent's generate command here once it's exposed.
       - name: Build packages
-        run: yarn build:packages
-
-      - name: Prepare generated modules
-        run: yarn generate
-
-      - name: Rebuild packages with generated files
         run: yarn build:packages
 
       - name: Check dependency version conflicts
@@ -154,7 +146,6 @@ jobs:
     if: needs.detect-changes.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     env:
-      PLATFORM_CHANNEL: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
       CREATE_APP_TAG: ${{ github.base_ref == 'main' && 'latest' || 'develop' }}
     strategy:
       matrix:
@@ -190,16 +181,9 @@ jobs:
       - name: Install monorepo dependencies
         run: yarn install --immutable
 
-      - name: Check platform sync
-        if: github.base_ref == 'main'
-        run: yarn platform:sync --check --channel "$PLATFORM_CHANNEL"
-
       - name: Build monorepo packages
-        run: |
-          yarn build:packages
-          yarn generate
-          yarn build:packages
-  
+        run: yarn build:packages
+
       - name: Resolve canary version
         id: version
         run: |

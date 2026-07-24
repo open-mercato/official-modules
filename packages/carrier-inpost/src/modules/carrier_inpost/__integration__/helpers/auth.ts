@@ -3,7 +3,6 @@ import { resolve } from 'path'
 
 function loadEnvFileContent(): string | null {
   const candidatePaths = [
-    resolve(process.cwd(), 'apps/sandbox/.env'),
     resolve(process.cwd(), '.env'),
   ]
 
