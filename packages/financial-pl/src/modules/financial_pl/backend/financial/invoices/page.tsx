@@ -3,19 +3,40 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, Send } from 'lucide-react'
-import type { ColumnDef } from '@tanstack/react-table'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Send,
+  Eye,
+  Pencil,
+  Printer,
+  Mail,
+  Plus,
+  CalendarDays,
+  FileText,
+  Coins,
+  Wallet,
+  AlertTriangle,
+  RefreshCw,
+  Loader2,
+} from 'lucide-react'
+import { cn } from '@open-mercato/shared/lib/utils'
+import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
-import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import type { FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { InvoiceRowActions } from '../../../components/InvoiceRowActions'
+import { InvoiceScopeTabs } from '../../../components/InvoiceScopeTabs'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { KsefStatusBadge } from '../../../components/KsefStatusBadge'
+import { InvoiceStatCard } from '../../../components/InvoiceStatCard'
+import { InvoiceEmailDialog, type InvoiceEmailTarget } from '../../../components/InvoiceEmailDialog'
 import { isInvoiceIssued } from '../../../lib/invoice-status'
 
 type InvoiceListItem = {
@@ -27,6 +48,8 @@ type InvoiceListItem = {
   grandTotalNetAmount?: string | number | null
   grandTotalGrossAmount?: string | number | null
   status?: string | null
+  buyerName?: string | null
+  buyerNip?: string | null
   ksefStatus?: string | null
   ksefNumber?: string | null
   upoAvailable?: boolean | null
@@ -38,6 +61,8 @@ type InvoiceListSummary = {
   count: number
   totalNet: string
   totalGross: string
+  dueTotal: string
+  rejectedCount: number
   capped: boolean
 }
 
@@ -65,6 +90,8 @@ type InvoiceRow = {
   currencyCode: string | null
   grandTotalNetAmount: number | null
   grandTotalGrossAmount: number | null
+  buyerName: string | null
+  buyerNip: string | null
   ksefStatus: string | null
   ksefNumber: string | null
   offlineSendDeadlineAt: string | null
@@ -78,6 +105,20 @@ type MonthPeriod = {
 }
 
 const PAGE_SIZE = 50
+
+const DEFAULT_CURRENCY = 'PLN'
+
+// Maps a sortable list column id to the sales-invoice field the API sorts by. KSeF status is
+// derived from KsefSubmission (not a sales_invoice column), so it is intentionally absent here.
+const SORT_FIELD_BY_COLUMN: Record<string, string> = {
+  invoiceNumber: 'invoice_number',
+  issueDate: 'issue_date',
+  dueDate: 'due_date',
+  grandTotalNetAmount: 'grand_total_net_amount',
+  grandTotalGrossAmount: 'grand_total_gross_amount',
+}
+
+const DEFAULT_SORTING: SortingState = [{ id: 'issueDate', desc: true }]
 
 const KSEF_STATUS_FILTER_KEYS = [
   'accepted',
@@ -110,6 +151,12 @@ const ksefStatusFilterLabelFallback: Record<(typeof KSEF_STATUS_FILTER_KEYS)[num
 }
 
 const BATCH_INELIGIBLE_KSEF_STATUSES = new Set(['accepted', 'processing', 'queued', 'offline_issued'])
+
+// FA(3) invoice kinds (rodzaj faktury), mirroring InvoiceKindColumn; labels via `financial_pl.invoiceKind.*`.
+const INVOICE_KIND_FILTER_KEYS = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'] as const
+
+// Document lifecycle states offered as a filter (matched against the sales_invoice `status` column).
+const DOCUMENT_STATUS_FILTER_KEYS = ['draft', 'issued'] as const
 
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number') return Number.isNaN(value) ? null : value
@@ -187,6 +234,8 @@ export default function FinancialPlInvoicesPage() {
   const [total, setTotal] = React.useState(0)
   const [search, setSearch] = React.useState('')
   const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const [sorting, setSorting] = React.useState<SortingState>(DEFAULT_SORTING)
+  const [emailTarget, setEmailTarget] = React.useState<InvoiceEmailTarget | null>(null)
   const [selectedPeriod, setSelectedPeriod] = React.useState<MonthPeriod>(() => currentMonthPeriod())
   const [periodMode, setPeriodMode] = React.useState<PeriodMode>('month')
   const [summary, setSummary] = React.useState<InvoiceListSummary | null>(null)
@@ -195,12 +244,9 @@ export default function FinancialPlInvoicesPage() {
   const { runMutation, retryLastMutation } = useGuardedMutation<{ retryLastMutation: () => Promise<boolean> }>({
     contextId: 'financial_pl.invoices',
   })
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const title = t('financial_pl.nav.invoices', 'Invoices')
-  const subtitle = t(
-    'financial_pl.invoices.list.subtitle',
-    'Review invoices with totals and their KSeF submission status.',
-  )
 
   const statusFilterOptions = React.useMemo(
     () =>
@@ -210,17 +256,66 @@ export default function FinancialPlInvoicesPage() {
       })),
     [t],
   )
+  const kindFilterOptions = React.useMemo(
+    () =>
+      INVOICE_KIND_FILTER_KEYS.map((key) => ({
+        value: key,
+        label: t(`financial_pl.invoiceKind.${key}`, key.toUpperCase()),
+      })),
+    [t],
+  )
+  const documentStatusFilterOptions = React.useMemo(
+    () =>
+      DOCUMENT_STATUS_FILTER_KEYS.map((key) => ({
+        value: key,
+        label: t(`financial_pl.invoices.list.filters.docStatus.${key}`, key),
+      })),
+    [t],
+  )
 
-  const filters = React.useMemo<FilterDef[]>(
-    () => [
-      {
-        id: 'status',
-        label: t('financial_pl.invoices.list.filters.ksefStatus', 'KSeF status'),
-        type: 'select',
-        options: statusFilterOptions,
-      },
-    ],
-    [statusFilterOptions, t],
+  const readFilterValue = (field: string): string => {
+    const value = filterValues[field]
+    return typeof value === 'string' && value ? value : 'all'
+  }
+
+  const handleFilterChange = React.useCallback((field: string, value: string) => {
+    setFilterValues((prev) => ({ ...prev, [field]: value === 'all' ? undefined : value }))
+    setPage(1)
+  }, [])
+
+  // Shared with the invoice-filters injection widget mounted into the DataTable's `:search-trailing`
+  // spot — the widget renders the inline <Select>s (at search-field height) and drives this page's
+  // filter state through these callbacks, so the DS DataTable keeps its native search + bulk-action bar.
+  const invoiceFiltersInjectionContext = React.useMemo(
+    () => ({
+      invoiceFilters: [
+        {
+          id: 'status',
+          label: t('financial_pl.invoices.list.filters.ksefStatus', 'KSeF status'),
+          allLabel: t('financial_pl.invoices.list.filters.allStatuses', 'All statuses'),
+          value: readFilterValue('status'),
+          options: statusFilterOptions,
+          onChange: (value: string) => handleFilterChange('status', value),
+        },
+        {
+          id: 'kind',
+          label: t('financial_pl.fields.invoiceKind', 'Invoice kind'),
+          allLabel: t('financial_pl.invoices.list.filters.allKinds', 'All kinds'),
+          value: readFilterValue('kind'),
+          options: kindFilterOptions,
+          onChange: (value: string) => handleFilterChange('kind', value),
+        },
+        {
+          id: 'documentStatus',
+          label: t('financial_pl.invoices.list.filters.documentStatus', 'Document status'),
+          allLabel: t('financial_pl.invoices.list.filters.allDocStatuses', 'All'),
+          value: readFilterValue('documentStatus'),
+          options: documentStatusFilterOptions,
+          onChange: (value: string) => handleFilterChange('documentStatus', value),
+        },
+      ],
+    }),
+    [statusFilterOptions, kindFilterOptions, documentStatusFilterOptions, handleFilterChange, filterValues, t],
   )
 
   const queryParams = React.useMemo(() => {
@@ -230,12 +325,23 @@ export default function FinancialPlInvoicesPage() {
     if (search.trim()) params.set('search', search.trim())
     const status = typeof filterValues.status === 'string' ? filterValues.status.trim() : ''
     if (status) params.set('status', status)
+    const kind = typeof filterValues.kind === 'string' ? filterValues.kind.trim() : ''
+    if (kind) params.set('kind', kind)
+    const documentStatus =
+      typeof filterValues.documentStatus === 'string' ? filterValues.documentStatus.trim() : ''
+    if (documentStatus) params.set('documentStatus', documentStatus)
     if (periodMode === 'month') {
       params.set('issueDateFrom', firstDayOfMonth(selectedPeriod))
       params.set('issueDateTo', lastDayOfMonth(selectedPeriod))
     }
+    const activeSort = sorting[0]
+    const sortField = activeSort ? SORT_FIELD_BY_COLUMN[activeSort.id] : undefined
+    if (sortField) {
+      params.set('sortField', sortField)
+      params.set('sortDir', activeSort.desc ? 'desc' : 'asc')
+    }
     return params.toString()
-  }, [filterValues, page, periodMode, search, selectedPeriod])
+  }, [filterValues, page, periodMode, search, selectedPeriod, sorting])
 
   const mapInvoice = React.useCallback((item: InvoiceListItem): InvoiceRow => {
     const id = typeof item.id === 'string' ? item.id : ''
@@ -248,6 +354,8 @@ export default function FinancialPlInvoicesPage() {
       currencyCode: item.currencyCode ?? null,
       grandTotalNetAmount: toNumber(item.grandTotalNetAmount),
       grandTotalGrossAmount: toNumber(item.grandTotalGrossAmount),
+      buyerName: item.buyerName ?? null,
+      buyerNip: item.buyerNip ?? null,
       ksefStatus: item.ksefStatus ?? null,
       ksefNumber: item.ksefNumber ?? null,
       offlineSendDeadlineAt: item.offlineSendDeadlineAt ?? null,
@@ -290,13 +398,8 @@ export default function FinancialPlInvoicesPage() {
     setPage(1)
   }, [])
 
-  const handleFiltersApply = React.useCallback((values: FilterValues) => {
-    setFilterValues(values)
-    setPage(1)
-  }, [])
-
-  const handleFiltersClear = React.useCallback(() => {
-    setFilterValues({})
+  const handleSortingChange = React.useCallback((next: SortingState) => {
+    setSorting(next.length ? next : DEFAULT_SORTING)
     setPage(1)
   }, [])
 
@@ -318,14 +421,55 @@ export default function FinancialPlInvoicesPage() {
     setPage(1)
   }, [])
 
-  const handleAllInvoices = React.useCallback(() => {
-    setPeriodMode('all')
-    setPage(1)
-  }, [])
 
   const handleRefresh = React.useCallback(() => {
     setReloadToken((token) => token + 1)
   }, [])
+
+  // Single-invoice "Send to KSeF" from the row menu — arm-then-confirm (irreversible legal filing),
+  // then POST the same from-invoice submission the detail page uses, guarded via runMutation.
+  const handleSendToKsef = React.useCallback(
+    async (row: InvoiceRow) => {
+      const ok = await confirm({
+        title: t('financial_pl.actions.sendToKsef', 'Send to KSeF'),
+        text: t(
+          'financial_pl.actions.sendToKsefConfirmDialog',
+          'Sending to KSeF is an irreversible legal filing. Send this invoice now?',
+        ),
+        confirmText: t('financial_pl.actions.sendToKsef', 'Send to KSeF'),
+        variant: 'destructive',
+      })
+      if (!ok) return
+      try {
+        await runMutation({
+          operation: async () => {
+            const response = await apiCall<{ ok?: boolean; error?: string; message?: string }>(
+              '/api/financial_pl/ksef/submissions/from-invoice',
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ salesInvoiceId: row.id }),
+              },
+            )
+            if (!response.ok || response.result?.ok !== true) {
+              throw new Error(response.result?.error || 'send-to-ksef failed')
+            }
+            return response
+          },
+          context: { retryLastMutation },
+          mutationPayload: { salesInvoiceId: row.id },
+        })
+        flash(t('financial_pl.actions.sendToKsefQueued', 'Invoice queued for KSeF submission.'), 'success')
+        handleRefresh()
+      } catch (err) {
+        // The from-invoice route returns a human-readable `error` (e.g. missing buyer); surface it so
+        // the operator knows what to fix, falling back to a generic message otherwise.
+        const message = err instanceof Error && err.message && err.message !== 'send-to-ksef failed' ? err.message : null
+        flash(message ?? t('financial_pl.errors.actionFailed', 'The action failed.'), 'error')
+      }
+    },
+    [confirm, runMutation, retryLastMutation, handleRefresh, t],
+  )
 
   const handleRowClick = React.useCallback(
     (row: InvoiceRow) => {
@@ -409,11 +553,29 @@ export default function FinancialPlInvoicesPage() {
         cell: ({ row }) => <span className="font-semibold">{row.original.invoiceNumber}</span>,
       },
       {
+        id: 'buyerName',
+        accessorKey: 'buyerName',
+        header: t('financial_pl.invoices.list.table.buyer', 'Counterparty'),
+        enableSorting: false,
+        meta: { maxWidth: '120px' },
+        cell: ({ row }) =>
+          row.original.buyerName || row.original.buyerNip ? (
+            <div className="flex flex-col">
+              <span className="truncate">{row.original.buyerName ?? '—'}</span>
+              {row.original.buyerNip ? (
+                <span className="font-mono text-xs text-muted-foreground">{row.original.buyerNip}</span>
+              ) : null}
+            </div>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
         id: 'issueDate',
         accessorKey: 'issueDate',
         header: t('financial_pl.invoices.list.table.issueDate', 'Issue date'),
         cell: ({ row }) => (
-          <span className="text-sm text-muted-foreground">{formatDate(row.original.issueDate)}</span>
+          <span className="text-sm tabular-nums text-muted-foreground">{formatDate(row.original.issueDate)}</span>
         ),
       },
       {
@@ -421,7 +583,7 @@ export default function FinancialPlInvoicesPage() {
         accessorKey: 'dueDate',
         header: t('financial_pl.invoices.list.table.dueDate', 'Due date'),
         cell: ({ row }) => (
-          <span className="text-sm text-muted-foreground">{formatDate(row.original.dueDate)}</span>
+          <span className="text-sm tabular-nums text-muted-foreground">{formatDate(row.original.dueDate)}</span>
         ),
       },
       {
@@ -429,7 +591,7 @@ export default function FinancialPlInvoicesPage() {
         accessorKey: 'grandTotalNetAmount',
         header: t('financial_pl.invoices.list.table.net', 'Net'),
         cell: ({ row }) => (
-          <span className="text-sm">
+          <span className="text-sm tabular-nums">
             {formatCurrency(row.original.grandTotalNetAmount, row.original.currencyCode)}
           </span>
         ),
@@ -439,7 +601,7 @@ export default function FinancialPlInvoicesPage() {
         accessorKey: 'grandTotalGrossAmount',
         header: t('financial_pl.invoices.list.table.gross', 'Gross'),
         cell: ({ row }) => (
-          <span className="text-sm">
+          <span className="text-sm font-medium tabular-nums text-foreground">
             {formatCurrency(row.original.grandTotalGrossAmount, row.original.currencyCode)}
           </span>
         ),
@@ -449,11 +611,13 @@ export default function FinancialPlInvoicesPage() {
         accessorKey: 'ksefStatus',
         header: t('financial_pl.invoices.list.table.ksefStatus', 'KSeF status'),
         enableSorting: false,
+        meta: { truncate: false },
         cell: ({ row }) => (
           <KsefStatusBadge
             status={row.original.ksefStatus}
             ksefNumber={row.original.ksefNumber}
             offlineSendDeadlineAt={row.original.offlineSendDeadlineAt}
+            showKsefNumber={false}
           />
         ),
       },
@@ -465,99 +629,147 @@ export default function FinancialPlInvoicesPage() {
     () => formatMonthLabel(selectedPeriod),
     [selectedPeriod],
   )
-  const summaryText = React.useMemo(() => {
-    if (!summary) return null
-    const parts = [
-      t('financial_pl.invoices.list.summary.count', '{count} invoices', { count: summary.count }),
-      `${t('financial_pl.invoices.list.summary.net', 'Net')} ${formatCurrency(Number(summary.totalNet), null)}`,
-      `${t('financial_pl.invoices.list.summary.gross', 'Gross')} ${formatCurrency(Number(summary.totalGross), null)}`,
-    ]
-    if (summary.capped) {
-      parts.push(t('financial_pl.invoices.list.summaryCapped', 'Totals cover the first 1000 invoices'))
-    }
-    return parts.join(' · ')
-  }, [summary, t])
+  const formatSummaryAmount = React.useCallback(
+    (value: number) => formatCurrency(value, DEFAULT_CURRENCY, '—'),
+    [],
+  )
+  const formatSummaryCount = React.useCallback(
+    (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 0 }),
+    [],
+  )
 
   return (
     <Page>
       <PageBody>
-        <div className="mb-4 flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={periodMode === 'all'}
-              aria-label={t('financial_pl.invoices.list.period.prev', 'Previous month')}
-              onClick={handlePreviousMonth}
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-            </Button>
-            <span
-              className={
-                periodMode === 'all'
-                  ? 'min-w-40 text-center text-sm font-semibold text-muted-foreground'
-                  : 'min-w-40 text-center text-sm font-semibold'
-              }
-              aria-disabled={periodMode === 'all'}
-            >
-              {monthLabel}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={periodMode === 'all'}
-              aria-label={t('financial_pl.invoices.list.period.next', 'Next month')}
-              onClick={handleNextMonth}
-            >
-              <ChevronRight className="h-4 w-4" aria-hidden="true" />
-            </Button>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant={periodMode === 'month' ? 'default' : 'outline'}
-                onClick={handleThisMonth}
-              >
-                {t('financial_pl.invoices.list.period.thisMonth', 'This month')}
-              </Button>
-              <Button
-                type="button"
-                variant={periodMode === 'all' ? 'default' : 'outline'}
-                onClick={handleAllInvoices}
-              >
-                {t('financial_pl.invoices.list.period.allInvoices', 'All invoices')}
-              </Button>
-            </div>
+        {/*
+          The DataTable's title/actions/refresh all moved to the page header above, leaving an empty
+          header band (title placeholder + the redundant "Customize columns" … icon) with a divider.
+          The DS still renders that band (it's gated off the toolbar injection spot, no prop to drop
+          it), so hide the empty content row + its divider — the search/filter toolbar (a sibling) and
+          the row-action kebabs (inside the table) are untouched. Scoped to this table's handle.
+        */}
+        <style>{`[data-component-handle="data-table:financial_pl.invoices"] > div:first-child > div:first-child{display:none!important}[data-component-handle="data-table:financial_pl.invoices"] > div:first-child > div:nth-child(2){margin-top:0!important;padding-top:0!important;border-top:0!important}`}</style>
+        {/* Page header — title, subtitle, primary CTA */}
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
           </div>
-          {summaryText ? (
-            <div className="text-sm text-muted-foreground lg:text-right">{summaryText}</div>
-          ) : null}
-        </div>
-        <DataTable<InvoiceRow>
-          stickyActionsColumn
-          title={(
-            <div className="flex flex-col">
-              <span>{title}</span>
-              <span className="text-sm font-normal text-muted-foreground">{subtitle}</span>
-            </div>
-          )}
-          actions={(
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={handleRefresh} disabled={isLoading}>
+              {isLoading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-4" aria-hidden="true" />
+              )}
+              {t('financial_pl.invoices.list.syncKsef', 'Sync KSeF')}
+            </Button>
             <Button asChild>
               <Link href="/backend/financial/invoices/create">
+                <Plus className="size-4" aria-hidden="true" />
                 {t('financial_pl.invoices.list.create', 'Create invoice')}
               </Link>
             </Button>
-          )}
+          </div>
+        </div>
+
+        {/* Scope toggle (Sales / Purchases) + period controls */}
+        {/* `min-h-9`: the Purchases tab has no month stepper, so its controls row was 3px shorter and
+            everything below it sat higher. Both rows now reserve the same height. */}
+        <div className="mb-4 flex min-h-9 flex-wrap items-center justify-between gap-3">
+          <InvoiceScopeTabs scope="sent" />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-stretch rounded-md border border-border bg-card">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-none rounded-l-md"
+                disabled={periodMode === 'all'}
+                aria-label={t('financial_pl.invoices.list.period.prev', 'Previous month')}
+                onClick={handlePreviousMonth}
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <span
+                className={cn(
+                  'flex min-w-36 items-center justify-center border-x border-border px-3 text-center text-sm font-semibold',
+                  periodMode === 'all' && 'text-muted-foreground',
+                )}
+                aria-disabled={periodMode === 'all'}
+              >
+                {monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-none rounded-r-md"
+                disabled={periodMode === 'all'}
+                aria-label={t('financial_pl.invoices.list.period.next', 'Next month')}
+                onClick={handleNextMonth}
+              >
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </div>
+            <Button type="button" variant="outline" onClick={handleThisMonth}>
+              <CalendarDays className="size-4" aria-hidden="true" />
+              {t('financial_pl.invoices.list.period.thisMonth', 'Current month')}
+            </Button>
+          </div>
+        </div>
+
+        {/* Summary stat cards */}
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <InvoiceStatCard
+            icon={FileText}
+            label={t('financial_pl.invoices.list.summary.invoices', 'Invoices')}
+            value={summary ? formatSummaryCount(summary.count) : '—'}
+          />
+          <InvoiceStatCard
+            icon={Coins}
+            label={t('financial_pl.invoices.list.summary.grossValue', 'Gross value')}
+            value={summary ? formatSummaryAmount(Number(summary.totalGross)) : '—'}
+          />
+          <InvoiceStatCard
+            icon={Wallet}
+            label={t('financial_pl.invoices.list.summary.due', 'Due')}
+            value={summary ? formatSummaryAmount(Number(summary.dueTotal)) : '—'}
+          />
+          <InvoiceStatCard
+            icon={AlertTriangle}
+            label={t('financial_pl.invoices.list.summary.ksefProblems', 'KSeF problems')}
+            value={
+              summary && summary.rejectedCount > 0
+                ? t('financial_pl.invoices.list.summary.rejected', '{count} rejected', {
+                    count: summary.rejectedCount,
+                  })
+                : t('financial_pl.invoices.list.summary.noProblems', 'None')
+            }
+            tone={summary && summary.rejectedCount > 0 ? 'danger' : 'default'}
+          />
+        </div>
+        {summary?.capped ? (
+          <p className="mb-4 -mt-1 text-xs text-muted-foreground">
+            {t('financial_pl.invoices.list.summaryCapped', 'Totals cover the first 1000 invoices')}
+          </p>
+        ) : null}
+        <DataTable<InvoiceRow>
+          stickyActionsColumn
           columns={columns}
           data={rows}
           bulkActions={bulkActions}
+          sortable
+          manualSorting
+          sorting={sorting}
+          onSortingChange={handleSortingChange}
           isLoading={isLoading}
           searchValue={search}
           onSearchChange={handleSearchChange}
           searchPlaceholder={t('financial_pl.invoices.list.search', 'Search invoices…')}
-          filters={filters}
-          filterValues={filterValues}
-          onFiltersApply={handleFiltersApply}
-          onFiltersClear={handleFiltersClear}
+          extensionTableId="financial_pl.invoices"
+          injectionContext={invoiceFiltersInjectionContext}
+          columnChooser={{ auto: true }}
+          perspective={{ tableId: 'financial_pl.invoices' }}
           pagination={{
             page,
             pageSize: PAGE_SIZE,
@@ -565,23 +777,50 @@ export default function FinancialPlInvoicesPage() {
             totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
             onPageChange: setPage,
           }}
-          refreshButton={{
-            label: t('financial_pl.invoices.list.refresh', 'Refresh'),
-            onRefresh: handleRefresh,
-            isRefreshing: isLoading,
-          }}
           rowActions={(row) => (
-            <RowActions
+            <InvoiceRowActions
               items={[
                 {
                   id: 'open',
                   label: t('financial_pl.invoices.list.table.open', 'Open'),
+                  icon: Eye,
                   href: `/backend/financial/invoices/${row.id}`,
                 },
                 {
                   id: 'edit',
                   label: t('financial_pl.invoices.list.table.edit', 'Edit'),
+                  icon: Pencil,
                   href: `/backend/financial/invoices/${row.id}/edit`,
+                },
+                ...(isInvoiceEligibleForKsefBatch(row)
+                  ? [
+                      {
+                        id: 'send-ksef',
+                        label: t('financial_pl.actions.sendToKsef', 'Send to KSeF'),
+                        icon: Send,
+                        onSelect: () => {
+                          void handleSendToKsef(row)
+                        },
+                      },
+                    ]
+                  : []),
+                {
+                  id: 'print',
+                  label: t('financial_pl.invoices.list.table.print', 'Print / PDF'),
+                  icon: Printer,
+                  onSelect: () => {
+                    window.open(
+                      `/api/financial_pl/ksef/invoice-pdf?salesInvoiceId=${encodeURIComponent(row.id)}&disposition=inline`,
+                      '_blank',
+                      'noopener,noreferrer',
+                    )
+                  },
+                },
+                {
+                  id: 'send-email',
+                  label: t('financial_pl.invoices.list.table.sendEmail', 'Send by email'),
+                  icon: Mail,
+                  onSelect: () => setEmailTarget({ id: row.id, invoiceNumber: row.invoiceNumber }),
                 },
               ]}
             />
@@ -593,6 +832,8 @@ export default function FinancialPlInvoicesPage() {
             </div>
           }
         />
+        <InvoiceEmailDialog target={emailTarget} onClose={() => setEmailTarget(null)} />
+        {ConfirmDialogElement}
       </PageBody>
     </Page>
   )

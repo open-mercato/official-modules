@@ -11,6 +11,10 @@ export const metadata = {
   pageGroup: 'Financials (PL)',
   pageGroupKey: 'financial_pl.nav.group',
   pageOrder: 30,
+  // Reached from the Sprzedaż/Zakupy toggle on the invoices list, so a second sidebar entry only
+  // duplicated the route. The page keeps its title, icon and breadcrumb — it is hidden from the
+  // navigation, not removed.
+  navHidden: true,
   icon: receivedInvoicesIcon,
   breadcrumb: [{ label: 'Received invoices', labelKey: 'financial_pl.nav.received' }],
 } as const

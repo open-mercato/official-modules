@@ -688,3 +688,69 @@ export class ReceiveCursor {
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
 }
+
+/**
+ * Per-organization invoice issuing settings — the presentation choices (logo, footer note) and the
+ * defaults a new invoice starts from. One row per organization + tenant.
+ *
+ * Deliberately NOT stored here: the seller's name/address/NIP, which belong to the `ksef_pl`
+ * integration credential and are already edited there, and the invoice numbering scheme, which is a
+ * core `sales` document-numbers setting. Duplicating either would create two sources of truth for
+ * something that must match what is filed with KSeF.
+ */
+@Entity({ tableName: 'financial_pl_invoice_settings' })
+@Index({
+  name: 'financial_pl_invoice_settings_active_unique',
+  expression:
+    `create unique index "financial_pl_invoice_settings_active_unique" on "financial_pl_invoice_settings" ("organization_id", "tenant_id") where "deleted_at" is null`,
+})
+export class InvoiceSettings {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  /** Logo as a `data:` URL. Kept inline rather than in object storage: a logo is a few KB, it is
+   *  needed wherever the document renders, and this avoids a storage dependency for one image. */
+  @Property({ name: 'logo_data_url', type: 'text', nullable: true })
+  logoDataUrl?: string | null
+
+  /** Default note printed at the foot of the document (payment terms, late-interest clause…). */
+  @Property({ name: 'footer_note', type: 'text', nullable: true })
+  footerNote?: string | null
+
+  @Property({ name: 'default_payment_method', type: 'text', nullable: true })
+  defaultPaymentMethod?: string | null
+
+  @Property({ name: 'default_term_days', type: 'integer', nullable: true })
+  defaultTermDays?: number | null
+
+  @Property({ name: 'default_tax_rate', type: 'text', nullable: true })
+  defaultTaxRate?: string | null
+
+  @Property({ name: 'default_currency_code', type: 'text', nullable: true })
+  defaultCurrencyCode?: string | null
+
+  /** `net` or `gross` — which price the operator types on a new invoice. */
+  @Property({ name: 'default_price_mode', type: 'text', nullable: true })
+  defaultPriceMode?: string | null
+
+  @Property({ name: 'default_bank_account', type: 'text', nullable: true })
+  defaultBankAccount?: string | null
+
+  @Property({ name: 'default_bank_name', type: 'text', nullable: true })
+  defaultBankName?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}

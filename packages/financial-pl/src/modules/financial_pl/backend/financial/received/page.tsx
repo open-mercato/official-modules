@@ -2,11 +2,12 @@
 
 import * as React from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, FileText, Coins, Wallet } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { InvoiceStatCard } from '../../../components/InvoiceStatCard'
 import {
   Dialog,
   DialogContent,
@@ -20,6 +21,8 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { IsoDatePicker } from '../../../components/IsoDatePicker'
+import { InvoiceScopeTabs } from '../../../components/InvoiceScopeTabs'
 
 type ReceivedInvoiceListItem = {
   id?: string | null
@@ -34,11 +37,20 @@ type ReceivedInvoiceListItem = {
   linkedPurchaseRecordId?: string | null
 }
 
+type ReceivedInvoiceSummary = {
+  count: number
+  totalGross: string
+  vatTotal: string
+  correctionCount: number
+  capped: boolean
+}
+
 type ReceivedInvoiceListResponse = {
   items?: ReceivedInvoiceListItem[]
   total?: number
   page?: number
   pageSize?: number
+  summary?: ReceivedInvoiceSummary
 }
 
 type ReceivedInvoiceRow = {
@@ -58,6 +70,8 @@ type SyncResponse = { ok?: boolean; synced?: number; error?: string }
 type MaterializeResponse = { purchaseRecordId?: string; error?: string }
 
 const PAGE_SIZE = 25
+
+const DEFAULT_CURRENCY = 'PLN'
 
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number') return Number.isNaN(value) ? null : value
@@ -112,6 +126,8 @@ export default function FinancialPlReceivedInvoicesPage() {
   const [rows, setRows] = React.useState<ReceivedInvoiceRow[]>([])
   const [page, setPage] = React.useState(1)
   const [total, setTotal] = React.useState(0)
+  const [search, setSearch] = React.useState('')
+  const [summary, setSummary] = React.useState<ReceivedInvoiceSummary | null>(null)
   const [isLoading, setLoading] = React.useState(false)
   const [reloadToken, setReloadToken] = React.useState(0)
   const [syncOpen, setSyncOpen] = React.useState(false)
@@ -120,18 +136,17 @@ export default function FinancialPlReceivedInvoicesPage() {
   const [isSyncing, setSyncing] = React.useState(false)
   const [ledgerBusyKsefNumber, setLedgerBusyKsefNumber] = React.useState<string | null>(null)
 
-  const title = t('financial_pl.received.title', 'Received invoices')
-  const subtitle = t(
-    'financial_pl.received.subtitle',
-    'Review invoices received through KSeF and add them to the purchase ledger.',
-  )
+  // Same heading as the Sales tab: the Sprzedaż/Zakupy control already states which side is open,
+  // and a title that changes with the tab is itself part of the jump.
+  const title = t('financial_pl.nav.invoices', 'Invoices')
 
   const queryParams = React.useMemo(() => {
     const params = new URLSearchParams()
     params.set('page', String(page))
     params.set('pageSize', String(PAGE_SIZE))
+    if (search.trim()) params.set('search', search.trim())
     return params.toString()
-  }, [page])
+  }, [page, search])
 
   const mapInvoice = React.useCallback((item: ReceivedInvoiceListItem): ReceivedInvoiceRow => {
     const ksefNumber = typeof item.ksefNumber === 'string' ? item.ksefNumber : ''
@@ -160,17 +175,20 @@ export default function FinancialPlReceivedInvoicesPage() {
         flash(t('financial_pl.received.errors.load', 'Failed to load received invoices.'), 'error')
         setRows([])
         setTotal(0)
+        setSummary(null)
         return
       }
       const payload = call.result ?? {}
       const items = Array.isArray(payload.items) ? payload.items : []
       setRows(items.map((item) => mapInvoice(item)))
       setTotal(typeof payload.total === 'number' ? payload.total : items.length)
+      setSummary(payload.summary ?? null)
     } catch (err) {
       console.error('financial_pl.received.list', err)
       flash(t('financial_pl.received.errors.load', 'Failed to load received invoices.'), 'error')
       setRows([])
       setTotal(0)
+      setSummary(null)
     } finally {
       setLoading(false)
     }
@@ -182,6 +200,11 @@ export default function FinancialPlReceivedInvoicesPage() {
 
   const refresh = React.useCallback(() => {
     setReloadToken((token) => token + 1)
+  }, [])
+
+  const handleSearchChange = React.useCallback((value: string) => {
+    setSearch(value)
+    setPage(1)
   }, [])
 
   const openSyncDialog = React.useCallback(() => {
@@ -356,37 +379,87 @@ export default function FinancialPlReceivedInvoicesPage() {
     [t],
   )
 
+  const formatSummaryAmount = React.useCallback(
+    (value: string) => formatCurrency(Number(value), DEFAULT_CURRENCY, '—'),
+    [],
+  )
+  const formatSummaryCount = React.useCallback(
+    (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 0 }),
+    [],
+  )
+
   return (
     <Page>
       <PageBody>
+        {/*
+          Empty DataTable header band removed + page-level header, mirroring the sales-invoices list
+          (title + Sync moved to the page header; the DS still renders the now-empty header-content row
+          off its toolbar injection spot, so hide that row + its divider). Scoped to this table's handle.
+        */}
+        <style>{`[data-component-handle="data-table:financial_pl.received_invoices"] > div:first-child > div:first-child{display:none!important}[data-component-handle="data-table:financial_pl.received_invoices"] > div:first-child > div:nth-child(2){margin-top:0!important;padding-top:0!important;border-top:0!important}`}</style>
+        {/* Page header — title + Sync CTA (consistent with the sales-invoices list) */}
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+          </div>
+          <Button onClick={openSyncDialog} disabled={isSyncing}>
+            <RefreshCw className="size-4" aria-hidden="true" />
+            {t('financial_pl.received.sync', 'Sync')}
+          </Button>
+        </div>
+        {/* Mirrors the Sales controls row height so the KPI cards and table below start at the
+            same y on both tabs. */}
+        <div className="mb-4 flex min-h-9 flex-wrap items-center justify-between gap-3">
+          <InvoiceScopeTabs scope="received" />
+        </div>
+        {/* Summary stat cards — mirror the sales tab's KPI row so the table sits at the same height
+            when switching scopes (no content jump). */}
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <InvoiceStatCard
+            icon={FileText}
+            label={t('financial_pl.received.summary.invoices', 'Received invoices')}
+            value={summary ? formatSummaryCount(summary.count) : '—'}
+            sub={
+              summary && summary.correctionCount > 0
+                ? t('financial_pl.received.summary.corrections', '{count} corrections', {
+                    count: summary.correctionCount,
+                  })
+                : undefined
+            }
+          />
+          <InvoiceStatCard
+            icon={Coins}
+            label={t('financial_pl.received.summary.grossValue', 'Gross value')}
+            value={summary ? formatSummaryAmount(summary.totalGross) : '—'}
+          />
+          <InvoiceStatCard
+            icon={Wallet}
+            label={t('financial_pl.received.summary.vatDeductible', 'Deductible VAT')}
+            value={summary ? formatSummaryAmount(summary.vatTotal) : '—'}
+          />
+        </div>
+        {summary?.capped ? (
+          <p className="mb-4 -mt-1 text-xs text-muted-foreground">
+            {t('financial_pl.received.summaryCapped', 'Totals cover the first 1000 invoices')}
+          </p>
+        ) : null}
         <DataTable<ReceivedInvoiceRow>
           stickyActionsColumn
-          title={(
-            <div className="flex flex-col">
-              <span>{title}</span>
-              <span className="text-sm font-normal text-muted-foreground">{subtitle}</span>
-            </div>
-          )}
-          actions={(
-            <Button onClick={openSyncDialog} disabled={isSyncing}>
-              <RefreshCw className="h-4 w-4" aria-hidden />
-              {t('financial_pl.received.sync', 'Sync')}
-            </Button>
-          )}
+          extensionTableId="financial_pl.received_invoices"
+          columnChooser={{ auto: true }}
+          perspective={{ tableId: 'financial_pl.received_invoices' }}
           columns={columns}
           data={rows}
           isLoading={isLoading}
+          searchValue={search}
+          onSearchChange={handleSearchChange}
+          searchPlaceholder={t('financial_pl.received.search', 'Search received invoices…')}
           pagination={{
             page,
             pageSize: PAGE_SIZE,
             total,
             totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
             onPageChange: setPage,
-          }}
-          refreshButton={{
-            label: t('financial_pl.received.refresh', 'Refresh'),
-            onRefresh: refresh,
-            isRefreshing: isLoading,
           }}
           rowActions={(row) => (
             <RowActions
@@ -431,20 +504,18 @@ export default function FinancialPlReceivedInvoicesPage() {
           <div className="grid gap-4 py-2 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="received-sync-date-from">{t('financial_pl.received.dateFrom', 'Date from')}</Label>
-              <Input
+              <IsoDatePicker
                 id="received-sync-date-from"
-                type="date"
                 value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
+                onChange={setDateFrom}
               />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="received-sync-date-to">{t('financial_pl.received.dateTo', 'Date to')}</Label>
-              <Input
+              <IsoDatePicker
                 id="received-sync-date-to"
-                type="date"
                 value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
+                onChange={setDateTo}
               />
             </div>
           </div>

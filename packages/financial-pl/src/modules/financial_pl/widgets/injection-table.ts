@@ -12,6 +12,16 @@ import type { ModuleInjectionTable } from '@open-mercato/shared/modules/widgets/
  * `api/interceptors.ts`; the per-invoice KSeF status is exposed via the response
  * enricher in `data/enrichers.ts`.
  */
-export const injectionTable: ModuleInjectionTable = {}
+export const injectionTable: ModuleInjectionTable = {
+  // financial_pl's OWN invoices-list DataTable: render the KSeF status filter inline next to the
+  // search input (replaces the FilterBar "Filters" popover) while keeping native search + bulk actions.
+  // Host page passes the filter state via `injectionContext`.
+  'data-table:financial_pl.invoices:search-trailing': [
+    {
+      widgetId: 'financial_pl.injection.ksef-status-filter',
+      priority: 100,
+    },
+  ],
+}
 
 export default injectionTable

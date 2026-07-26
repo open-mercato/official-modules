@@ -1,9 +1,10 @@
 'use client'
 
 import * as React from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { SegmentedControl, SegmentedControlItem } from '@open-mercato/ui/primitives/segmented-control'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import {
   Select,
@@ -15,7 +16,10 @@ import {
 import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { Popover, PopoverContent, PopoverTrigger } from '@open-mercato/ui/primitives/popover'
+import { CheckboxField } from '@open-mercato/ui/primitives/checkbox-field'
 import { normalizeDecimalInput } from '../lib/pl-format'
+import { GTU_CODES, type GtuCode } from '../lib/jpk-markings-codes'
 
 // Standard Polish VAT rates offered as quick-picks; any other numeric rate goes through "Other".
 // `zw`/`np`/`oo` (exempt / not-taxed / reverse-charge) are intentionally NOT line options: core's
@@ -75,6 +79,21 @@ type CatalogProduct = {
 
 type CatalogProductsResponse = {
   items?: CatalogProduct[]
+}
+
+
+/** GTU codes recorded on a line (stored in its metadata). */
+export function lineGtuCodes(line: InvoiceLineInput): GtuCode[] {
+  const raw = (line.metadata as Record<string, unknown> | null | undefined)?.gtuCodes
+  if (!Array.isArray(raw)) return []
+  return raw.filter((code): code is GtuCode => (GTU_CODES as readonly string[]).includes(String(code)))
+}
+
+/** Union of every line's GTU codes — what actually gets filed on the invoice. */
+export function collectLineGtuCodes(lines: InvoiceLineInput[]): GtuCode[] {
+  const seen = new Set<GtuCode>()
+  for (const line of lines) for (const code of lineGtuCodes(line)) seen.add(code)
+  return GTU_CODES.filter((code) => seen.has(code))
 }
 
 /** Round a number to 2 decimals and render as a fixed-point string, or '' for non-finite. */
@@ -291,16 +310,30 @@ export function withComputedTotals(
 }
 
 export type InvoiceLinesFieldProps = {
+  /** Submit-time errors keyed as `line.<index>.<field>`, so the offending cell is marked. */
+  errors?: Record<string, string>
   value: InvoiceLineInput[]
   onChange: (next: InvoiceLineInput[]) => void
   currencyCode: string
   disabled?: boolean
   priceMode?: PriceMode
   onPriceModeChange?: (next: PriceMode) => void
+  /**
+   * Values this row started from, matched by index. When supplied, a line whose gross has moved
+   * shows the previous figure beside the new one — on a correction the reader needs the change,
+   * not just the result. Omitted on a plain invoice, where there is nothing to compare against.
+   */
+  originalLines?: InvoiceLineInput[]
   marginScheme?: MarginScheme | null
 }
 
-const labelClass = 'text-xs text-muted-foreground'
+// Matches the field-label style used across the invoice form (PlVatMetaForm, CrudForm builtins).
+// These were 12px muted while the section above them used 14px foreground, so the same form showed
+// two different label treatments depending on which component rendered the field.
+const labelClass = 'text-sm font-medium text-foreground'
+/** Per-line labels are redundant once the shared column header is visible, but must stay for
+ *  screen readers and for the stacked (narrow) layout where there is no header row. */
+const lineLabelClass = 'text-sm font-medium text-foreground @xl:sr-only'
 
 /**
  * Repeatable invoice-lines editor. Each row edits name, quantity, unit, unit price net
@@ -315,7 +348,9 @@ export function InvoiceLinesField({
   disabled,
   priceMode = 'net',
   onPriceModeChange,
+  originalLines,
   marginScheme,
+  errors,
 }: InvoiceLinesFieldProps) {
   const t = useT()
   const busy = Boolean(disabled)
@@ -423,6 +458,19 @@ export function InvoiceLinesField({
     ])
   }
 
+  const toggleLineGtu = (index: number, code: GtuCode, checked: boolean) => {
+    const line = value[index]
+    if (!line) return
+    const current = new Set(lineGtuCodes(line))
+    if (checked) current.add(code)
+    else current.delete(code)
+    const next = GTU_CODES.filter((c) => current.has(c))
+    const metadata = { ...(line.metadata ?? {}) }
+    if (next.length > 0) metadata.gtuCodes = next
+    else delete metadata.gtuCodes
+    updateLine(index, { metadata: Object.keys(metadata).length > 0 ? metadata : null })
+  }
+
   const removeLine = (index: number) => {
     emit(value.filter((_, i) => i !== index))
   }
@@ -442,31 +490,70 @@ export function InvoiceLinesField({
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    // `@container` establishes the query context every `@xl:` class below depends on. Without it
+    // the whole table layout was dead code: the row stacked at every width, including full screen.
+    <div className="@container flex flex-col gap-3">
+      {/* Label beside the control, not pushed to opposite ends of the row — at full width the
+          two drifted so far apart they stopped reading as one field. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <span className={labelClass}>{t('financial_pl.lines.priceMode', 'Prices')}</span>
-        <div
-          className="inline-flex w-fit rounded-md border border-border bg-background p-0.5"
-          role="group"
+        {/*
+          DS SegmentedControl — this is mutually-exclusive view state, which is exactly what the
+          primitive is for; the previous hand-rolled pair of Buttons in a bordered box reimplemented
+          it and drifted from the DS. Squared per the house no-full-pill rule.
+        */}
+        <SegmentedControl
+          value={effectivePriceMode}
+          onValueChange={(next) => setPriceMode(next as PriceMode)}
+          disabled={busy || marginMode}
           aria-label={t('financial_pl.lines.priceMode', 'Prices')}
+          className="rounded-md"
         >
-          {(['net', 'gross'] as const).map((mode) => (
-            <Button
-              key={mode}
-              type="button"
-              size="2xs"
-              variant={effectivePriceMode === mode ? 'secondary' : 'ghost'}
-              disabled={busy || marginMode}
-              aria-pressed={effectivePriceMode === mode}
-              onClick={() => setPriceMode(mode)}
-            >
-              {mode === 'net'
-                ? t('financial_pl.lines.priceModeNet', 'net')
-                : t('financial_pl.lines.priceModeGross', 'gross')}
-            </Button>
-          ))}
-        </div>
+          <SegmentedControlItem value="net" className="rounded">
+            {t('financial_pl.lines.priceModeNet', 'net')}
+          </SegmentedControlItem>
+          <SegmentedControlItem value="gross" className="rounded">
+            {t('financial_pl.lines.priceModeGross', 'gross')}
+          </SegmentedControlItem>
+        </SegmentedControl>
       </div>
+      {/* One bordered container with a header band and row separators — the fields were readable
+          individually but did not read as a TABLE, which is what a line editor is. */}
+      <div className="overflow-hidden rounded-md border border-border/60">
+      {/* Shared column header — replaces the label repeated on every line, which is what made the
+          editor so tall. Hidden when the row stacks, where each field keeps its own label. */}
+      {value.length > 0 ? (
+        <div className="hidden grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_auto] @xl:items-start border-b border-border/60 bg-muted/50 px-3 py-2 @xl:grid">
+          <span className="w-6" />
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.name', 'Name')}
+            <span aria-hidden="true" className="text-status-error-text"> *</span>
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.quantity', 'Quantity')}
+            <span aria-hidden="true" className="text-status-error-text"> *</span>
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.quantityUnit', 'Unit')}
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {/* Follows the net/gross switch. The per-line label already did, but it is `sr-only`
+                in the table layout, so this shared header was the only visible one — hardcoded to
+                "net", which made the switch look like it did nothing. */}
+            {effectivePriceMode === 'gross'
+              ? t('financial_pl.lines.unitPriceGross', 'Unit price (gross)')
+              : t('financial_pl.lines.unitPriceNet', 'Unit price (net)')}
+            <span aria-hidden="true" className="text-status-error-text"> *</span>
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.discountPercent', 'Discount %')}
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.taxRate', 'VAT rate (%)')}
+          </span>
+          <span className="w-9" />
+        </div>
+      ) : null}
       {value.map((line, index) => {
         const totals = computeLineTotals(line, effectivePriceMode, marginScheme)
         const normalizedLine = normalizeLineForPriceMode(line, effectivePriceMode, marginScheme)
@@ -484,37 +571,25 @@ export function InvoiceLinesField({
         // (taxRate '') so the custom numeric input renders (code-jury r2, Codex). A scaled prefill like
         // '23.0000' matches numerically → shows the clean "23%" pick (code-jury r1, Kimi).
         const isOtherVat = !matchedVat
+        const lineError = (field: string) => errors?.[`line.${index}.${field}`]
+        const selectedGtu = lineGtuCodes(line)
         return (
-          <div key={index} className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <div className="flex items-end gap-2">
-              <div className="flex flex-[2] flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-product-${index}`}>
-                  {t('financial_pl.invoices.line.product', 'Product (from catalog)')}
-                </label>
-                <ComboboxInput
-                  value={line.name}
-                  onChange={(next) => updateLineProduct(index, next)}
-                  loadSuggestions={loadProductSuggestions}
-                  seedOptions={
-                    line.name ? [{ value: line.name, label: line.name, description: line.sku ?? null }] : []
-                  }
-                  allowCustomValues
-                  disabled={busy}
-                  placeholder={t('financial_pl.invoices.line.productPlaceholder', 'Search products or type a name')}
-                />
-                <label className={labelClass} htmlFor={`financial_pl-line-name-${index}`}>
-                  {t('financial_pl.lines.name', 'Name')}
-                </label>
-                <Input
-                  id={`financial_pl-line-name-${index}`}
-                  value={line.name}
-                  disabled={busy}
-                  onChange={(event) => updateLine(index, { name: event.target.value })}
-                />
-              </div>
+          <div key={index} className="flex flex-col gap-2 border-b border-border/60 p-3 last:border-b-0">
+            {/* Numbered so the rows can be referred to — and so a correction's line order matches
+                the numbering on the document it corrects. The number and the delete control share
+                one band: they are both "this line" affordances, and giving each its own row cost
+                two lines of height per position while leaving the delete button floating. */}
+            <div className="-mx-3 -mt-3 flex items-center justify-between gap-2 border-b border-border/60 bg-muted/40 px-3 py-1.5 @xl:hidden">
+              <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <span className="inline-flex size-5 items-center justify-center rounded bg-background text-[11px] font-semibold tabular-nums text-foreground">
+                  {index + 1}
+                </span>
+                {t('financial_pl.lines.lineNumberShort', 'Item')}
+              </span>
               <IconButton
                 type="button"
                 variant="ghost"
+                size="sm"
                 disabled={busy}
                 aria-label={t('financial_pl.lines.remove', 'Remove line')}
                 title={t('financial_pl.lines.remove', 'Remove line')}
@@ -523,21 +598,68 @@ export function InvoiceLinesField({
                 <Trash2 className="size-4" />
               </IconButton>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-qty-${index}`}>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_auto] @xl:items-start">
+              <span className="hidden w-6 shrink-0 text-xs tabular-nums text-muted-foreground @xl:block @xl:pt-2.5">
+                {index + 1}.
+              </span>
+              <div className="col-span-2 flex flex-col gap-2 @xl:col-span-1">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-product-${index}`}>
+                  {t('financial_pl.lines.name', 'Name')}
+                  <span aria-hidden="true" className="text-status-error-text"> *</span>
+                </label>
+                {lineError('name') ? (
+                  <span className="order-last text-xs text-status-error-text">{lineError('name')}</span>
+                ) : null}
+                {/*
+                  The DS ComboboxInput renders a bare <input> with no dropdown indicator, so nothing
+                  told the user this field opens a product list. The chevron is an overlay (the
+                  component takes no icon prop) and `[&_input]:pr-9` reserves room so a long product
+                  name never runs underneath it.
+                */}
+                <div
+                  data-invalid={lineError('name') ? 'true' : undefined}
+                  className={`relative [&_input]:pr-9${
+                    // ComboboxInput takes no `aria-invalid`, so the invalid border is applied to the
+                    // input it renders — same look the DS Input gives its own invalid state.
+                    lineError('name') ? ' [&_input]:border-destructive' : ''
+                  }`}
+                >
+                  <ComboboxInput
+                    value={line.name}
+                    onChange={(next) => updateLineProduct(index, next)}
+                    loadSuggestions={loadProductSuggestions}
+                    seedOptions={
+                      line.name ? [{ value: line.name, label: line.name, description: line.sku ?? null }] : []
+                    }
+                    allowCustomValues
+                    disabled={busy}
+                    placeholder={t('financial_pl.invoices.line.productPlaceholder', 'Search products or type a name')}
+                  />
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-3 top-[1.125rem] size-4 -translate-y-1/2 text-muted-foreground"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-qty-${index}`}>
                   {t('financial_pl.lines.quantity', 'Quantity')}
+                  <span aria-hidden="true" className="text-status-error-text"> *</span>
                 </label>
                 <Input
                   id={`financial_pl-line-qty-${index}`}
                   inputMode="decimal"
                   value={line.quantity}
                   disabled={busy}
+                  aria-invalid={lineError('quantity') ? true : undefined}
                   onChange={(event) => updateLine(index, { quantity: normalizeDecimalInput(event.target.value) })}
                 />
+                {lineError('quantity') ? (
+                  <span className="text-xs text-status-error-text">{lineError('quantity')}</span>
+                ) : null}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-unit-${index}`}>
+              <div className="flex flex-col gap-2">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-unit-${index}`}>
                   {t('financial_pl.lines.quantityUnit', 'Unit')}
                 </label>
                 <Select
@@ -550,7 +672,9 @@ export function InvoiceLinesField({
                   <SelectTrigger id={`financial_pl-line-unit-${index}`} className="w-full">
                     <SelectValue placeholder={t('financial_pl.lines.quantityUnitPlaceholder', 'szt.')} />
                   </SelectTrigger>
-                  <SelectContent>
+                  {/* Capped: the DS default is the full available viewport height, which inside a
+                      tall modal let this 14-item list cover the entire dialog. */}
+                  <SelectContent className="max-h-60">
                     {COMMON_UNITS.map((unit) => (
                       <SelectItem key={unit} value={unit}>
                         {unit}
@@ -569,8 +693,8 @@ export function InvoiceLinesField({
                   />
                 ) : null}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-price-${index}`}>
+              <div className="flex flex-col gap-2">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-price-${index}`}>
                   {effectivePriceMode === 'gross'
                     ? t('financial_pl.lines.unitPriceGross', 'Unit price (gross)')
                     : t('financial_pl.lines.unitPriceNet', 'Unit price (net)')}
@@ -585,6 +709,7 @@ export function InvoiceLinesField({
                     inputMode="decimal"
                     value={effectivePriceMode === 'gross' ? (line.unitPriceGross ?? '') : line.unitPriceNet}
                     disabled={busy}
+                    aria-invalid={lineError('unitPrice') ? true : undefined}
                     onChange={(event) => {
                       const nextValue = normalizeDecimalInput(event.target.value)
                       const taxRate = normalizeTaxRate(line, marginScheme)
@@ -602,9 +727,12 @@ export function InvoiceLinesField({
                     }}
                   />
                 )}
+                {lineError('unitPrice') ? (
+                  <span className="text-xs text-status-error-text">{lineError('unitPrice')}</span>
+                ) : null}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-discount-${index}`}>
+              <div className="flex flex-col gap-2">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-discount-${index}`}>
                   {t('financial_pl.lines.discountPercent', 'Discount %')}
                 </label>
                 {busy ? (
@@ -624,8 +752,8 @@ export function InvoiceLinesField({
                   />
                 )}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass} htmlFor={`financial_pl-line-tax-${index}`}>
+              <div className="flex flex-col gap-2">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-tax-${index}`}>
                   {t('financial_pl.lines.taxRate', 'VAT rate (%)')}
                 </label>
                 {marginMode ? (
@@ -684,24 +812,105 @@ export function InvoiceLinesField({
                   </>
                 ) : null}
               </div>
+              {/* Last column of the wide row — deleting is a row-level action, so it sits at the
+                  end of the row it deletes. When the row stacks it moves into the header band. */}
+              <div className="hidden @xl:flex @xl:justify-center @xl:pt-1">
+                <IconButton
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  aria-label={t('financial_pl.lines.remove', 'Remove line')}
+                  title={t('financial_pl.lines.remove', 'Remove line')}
+                  onClick={() => removeLine(index)}
+                >
+                  <Trash2 className="size-4" />
+                </IconButton>
+              </div>
+            {/*
+              Line totals as a distinct strip rather than four grey captions: these are the numbers
+              the operator checks before filing, so they get their own surface, right-aligned figures
+              and a bold gross — the same weighting the printed document uses.
+            */}
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
-              <span>
-                {t('financial_pl.lines.totalNet', 'Net')}: {totals.totalNetAmount || '—'} {currencyCode}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">
+                {t('financial_pl.lines.gtu', 'GTU')}
               </span>
-              <span>
-                {t('financial_pl.lines.unitPriceNet', 'Unit price (net)')}: {normalizedLine.unitPriceNet || '—'} {currencyCode}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" disabled={busy}>
+                    {selectedGtu.length > 0
+                      ? selectedGtu.join(', ')
+                      : t('financial_pl.lines.gtuNone', 'None')}
+                    <ChevronDown className="ml-1 size-3.5" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="max-h-72 w-80 overflow-y-auto p-2">
+                  <div className="flex flex-col gap-1">
+                    {GTU_CODES.map((code) => (
+                      <CheckboxField
+                        key={code}
+                        label={t(`financial_pl.fields.gtu.${code}`, code)}
+                        checked={selectedGtu.includes(code)}
+                        onCheckedChange={(next) => toggleLineGtu(index, code, Boolean(next))}
+                      />
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="grid grid-cols-2 gap-3 rounded-md bg-muted/50 p-3 sm:grid-cols-4">
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs text-muted-foreground">
+                  {t('financial_pl.lines.totalNet', 'Net')}
+                </span>
+                <span className="text-sm tabular-nums text-foreground">
+                  {totals.totalNetAmount || '—'} {currencyCode}
+                </span>
               </span>
-              <span>
-                {t('financial_pl.lines.taxAmount', 'VAT')}: {marginMode ? t('financial_pl.lines.marginVatLabel', 'margin') : (totals.taxAmount || '—')} {marginMode ? '' : currencyCode}
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs text-muted-foreground">
+                  {t('financial_pl.lines.discountAmount', 'Discount')}
+                </span>
+                <span className="text-sm tabular-nums text-foreground">
+                  {totals.discountAmount || '—'} {currencyCode}
+                </span>
               </span>
-              <span>
-                {t('financial_pl.lines.totalGross', 'Gross')}: {totals.totalGrossAmount || '—'} {currencyCode}
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs text-muted-foreground">
+                  {t('financial_pl.lines.taxAmount', 'VAT')}
+                </span>
+                <span className="text-sm tabular-nums text-foreground">
+                  {marginMode ? t('financial_pl.lines.marginVatLabel', 'margin') : (totals.taxAmount || '—')}{' '}
+                  {marginMode ? '' : currencyCode}
+                </span>
+              </span>
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs text-muted-foreground">
+                  {t('financial_pl.lines.totalGross', 'Gross')}
+                </span>
+                <span className="text-sm font-semibold tabular-nums text-foreground">
+                  {totals.totalGrossAmount || '—'} {currencyCode}
+                </span>
+                {(() => {
+                  const previous = originalLines?.[index]?.totalGrossAmount
+                  if (!previous || !totals.totalGrossAmount) return null
+                  if (Number(previous) === Number(totals.totalGrossAmount)) return null
+                  return (
+                    <span className="text-xs tabular-nums text-muted-foreground line-through">
+                      {/* toMoney: the stored value carries the DB's 4 decimals ("615.0000"), which
+                          would sit next to the 2-decimal figure above it. */}
+                      {toMoney(Number(previous))} {currencyCode}
+                    </span>
+                  )
+                })()}
               </span>
             </div>
           </div>
         )
       })}
+      </div>
       {discountTotal > 0 ? (
         <div className="flex justify-end text-sm text-muted-foreground">
           <span>
@@ -709,8 +918,8 @@ export function InvoiceLinesField({
           </span>
         </div>
       ) : null}
-      <div className="flex">
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={addLine}>
+      <div className="flex justify-end">
+        <Button type="button" size="sm" disabled={busy} onClick={addLine}>
           <Plus className="mr-1 size-4" />
           {t('financial_pl.lines.add', 'Add line')}
         </Button>

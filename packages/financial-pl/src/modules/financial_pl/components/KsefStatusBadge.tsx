@@ -1,10 +1,30 @@
 'use client'
 
 import * as React from 'react'
-import { AlertTriangle, Clock, Copy, Check } from 'lucide-react'
-import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-badge'
+import { AlertTriangle, Clock, Copy, Check, CircleCheck, CircleX, Circle, type LucideIcon } from 'lucide-react'
+import { type StatusMap, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+
+// Status icon + trailing-dot color per semantic variant — the "icon tile + label + dot" status style.
+const statusVariantIcon: Record<StatusBadgeVariant, LucideIcon> = {
+  success: CircleCheck,
+  error: CircleX,
+  info: Clock,
+  warning: Clock,
+  neutral: Circle,
+}
+// The icon carries BOTH the state and its color. An earlier revision paired a neutral icon with a
+// colored dot, which said the same thing twice; dropping the icon instead would have left color as
+// the only signal (WCAG 1.4.1), so the shape stays and the dot goes.
+const statusVariantIconColor: Record<StatusBadgeVariant, string> = {
+  success: 'text-status-success-icon',
+  error: 'text-status-error-icon',
+  info: 'text-status-info-icon',
+  warning: 'text-status-warning-icon',
+  neutral: 'text-status-neutral-icon',
+}
 
 /**
  * KSeF submission statuses surfaced to the operator. Mirrors the enriched
@@ -88,6 +108,8 @@ export type KsefStatusBadgeProps = {
   ksefNumber?: string | null
   /** For an offline-issued row: the statutory send-to-KSeF deadline (ISO string). */
   offlineSendDeadlineAt?: string | null
+  /** Show the copyable KSeF number line under the status. Off in dense list cells. */
+  showKsefNumber?: boolean
 }
 
 function isKnownStatus(value: string): value is KsefStatusKey {
@@ -100,7 +122,12 @@ function isKnownStatus(value: string): value is KsefStatusKey {
  * as selectable, copyable text. An overdue offline row escalates to the error role
  * with an inline overdue line. DS tokens only; no hardcoded status colors.
  */
-export function KsefStatusBadge({ status, ksefNumber, offlineSendDeadlineAt }: KsefStatusBadgeProps) {
+export function KsefStatusBadge({
+  status,
+  ksefNumber,
+  offlineSendDeadlineAt,
+  showKsefNumber = true,
+}: KsefStatusBadgeProps) {
   const t = useT()
   const [copied, setCopied] = React.useState(false)
 
@@ -114,6 +141,7 @@ export function KsefStatusBadge({ status, ksefNumber, offlineSendDeadlineAt }: K
       ? status
       : 'not_applicable'
   const variant = ksefStatusMap[roleKey] ?? 'neutral'
+  const StatusIcon = statusVariantIcon[variant]
   const label = isKnownStatus(status)
     ? t(ksefStatusLabelKey[status], ksefStatusLabelFallback[status])
     : t(`financial_pl.status.${status}`, status)
@@ -131,9 +159,12 @@ export function KsefStatusBadge({ status, ksefNumber, offlineSendDeadlineAt }: K
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <StatusBadge variant={variant} dot>
-        {label}
-      </StatusBadge>
+      <div className="inline-flex items-center gap-2">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+          <StatusIcon className={cn('size-4', statusVariantIconColor[variant])} aria-hidden="true" />
+        </span>
+        <span className="text-sm font-medium text-foreground">{label}</span>
+      </div>
       {showOfflineDeadline && offlineSendDeadlineAt ? (
         overdue ? (
           <span
@@ -157,14 +188,20 @@ export function KsefStatusBadge({ status, ksefNumber, offlineSendDeadlineAt }: K
           </span>
         )
       ) : null}
-      {ksefNumber ? (
-        <div className="flex items-start gap-1">
-          <span className="select-all break-all font-mono text-xs text-muted-foreground" title={ksefNumber}>
+      {showKsefNumber && ksefNumber ? (
+        // Labelled and shown in full: unlabelled and clipped ("6720098125–2026…") it read as a
+        // stray number. It wraps rather than truncates — a KSeF number is only useful complete.
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground">
+            {t('financial_pl.fields.ksefNumber', 'KSeF number')}:
+          </span>
+          <span className="min-w-0 select-all break-all font-mono text-xs text-muted-foreground">
             {ksefNumber}
           </span>
           <IconButton
             type="button"
             variant="ghost"
+            className="size-6 shrink-0"
             aria-label={t('financial_pl.actions.copyKsefNumber', 'Copy KSeF number')}
             title={t('financial_pl.actions.copyKsefNumber', 'Copy KSeF number')}
             onClick={copyNumber}

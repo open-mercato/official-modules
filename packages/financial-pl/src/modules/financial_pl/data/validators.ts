@@ -582,11 +582,26 @@ export const ksefSubmissionListQuerySchema = z.object({
  * entity column type). `page`/`pageSize` are coerced from the query string with safe defaults
  * (1 / 25) and a 100-row ceiling (the DataTable `pageSize ≤ 100` rule).
  */
+/** Sales-invoice columns the list may be sorted by (KSeF status is derived, not sortable). */
+export const ksefInvoiceListSortFields = [
+  'invoice_number',
+  'issue_date',
+  'due_date',
+  'grand_total_net_amount',
+  'grand_total_gross_amount',
+] as const
+
 export const ksefInvoiceListQuerySchema = z.object({
   search: z.string().trim().min(1).max(256).optional(),
   status: z.string().trim().min(1).max(64).optional(),
   issueDateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   issueDateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  sortField: z.enum(ksefInvoiceListSortFields).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  // Invoice-kind (FA(3) rodzaj) filter — resolved against SalesInvoicePlMeta.invoiceKind.
+  kind: z.enum(['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz']).optional(),
+  // Document lifecycle status filter — applied directly to the sales_invoice `status` column.
+  documentStatus: z.string().trim().min(1).max(64).optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(25),
 })
@@ -815,6 +830,15 @@ export type SendFromInvoiceInput = z.infer<typeof sendFromInvoiceSchema>
 export type SendFromCreditMemoInput = z.infer<typeof sendFromCreditMemoSchema>
 export type KsefSubmissionListQuery = z.infer<typeof ksefSubmissionListQuerySchema>
 export type KsefInvoiceListQuery = z.infer<typeof ksefInvoiceListQuerySchema>
+
+/** Body for emailing an invoice PDF to a recipient (SPEC — invoice e-mail delivery). */
+export const ksefInvoiceEmailSchema = z.object({
+  salesInvoiceId: z.string().uuid(),
+  to: z.string().trim().email().max(320),
+  subject: z.string().trim().min(1).max(256),
+  message: z.string().trim().max(5000).optional(),
+})
+export type KsefInvoiceEmailInput = z.infer<typeof ksefInvoiceEmailSchema>
 export type JpkPurchaseRecordUpsertInput = z.infer<typeof jpkPurchaseRecordUpsertSchema>
 export type JpkPurchaseRecordDeleteInput = z.infer<typeof jpkPurchaseRecordDeleteSchema>
 export type JpkFilingUpsertInput = z.infer<typeof jpkFilingUpsertSchema>
@@ -827,6 +851,7 @@ export type InvoiceMetaPutInput = z.infer<typeof invoiceMetaPutSchema>
 export const receivedInvoicesListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  search: z.string().trim().max(200).optional(),
 })
 export type ReceivedInvoicesListQuery = z.infer<typeof receivedInvoicesListQuerySchema>
 
@@ -851,3 +876,25 @@ export type NbpRateQuery = z.infer<typeof nbpRateQuerySchema>
 // SPEC-015 F6 — batch send
 export const batchSendSchema = z.object({ invoiceIds: z.array(z.string().uuid()).min(1).max(10000) })
 export type BatchSendInput = z.infer<typeof batchSendSchema>
+
+/**
+ * Invoice issuing settings (PUT). Every field is optional so a partial save leaves the rest alone;
+ * `null` explicitly clears a value. The logo is a `data:` URL with a size ceiling — it is stored
+ * inline in the row, so an unbounded upload would bloat every read of the settings.
+ */
+export const invoiceSettingsPutSchema = z.object({
+  logoDataUrl: z
+    .string()
+    .max(700_000, 'The logo is too large — use an image under ~500 kB.')
+    .regex(/^data:image\/(png|jpeg|svg\+xml|webp);base64,/, 'The logo must be a PNG, JPEG, SVG or WebP image.')
+    .nullish(),
+  footerNote: z.string().max(2000).nullish(),
+  defaultPaymentMethod: z.string().max(40).nullish(),
+  defaultTermDays: z.coerce.number().int().min(0).max(365).nullish(),
+  defaultTaxRate: z.string().max(10).nullish(),
+  defaultCurrencyCode: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).nullish(),
+  defaultPriceMode: z.enum(['net', 'gross']).nullish(),
+  defaultBankAccount: z.string().max(64).nullish(),
+  defaultBankName: z.string().max(200).nullish(),
+})
+export type InvoiceSettingsPutInput = z.infer<typeof invoiceSettingsPutSchema>

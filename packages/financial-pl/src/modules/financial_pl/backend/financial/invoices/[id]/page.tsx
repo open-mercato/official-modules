@@ -2,10 +2,16 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { Pencil } from 'lucide-react'
+import { Pencil, FileMinus2 } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { Button } from '@open-mercato/ui/primitives/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@open-mercato/ui/primitives/dialog'
 import {
   Table,
   TableBody,
@@ -22,6 +28,7 @@ import { hasAllFeatures } from '@open-mercato/shared/security/features'
 import { KsefStatusBadge } from '../../../../components/KsefStatusBadge'
 import { KsefActions } from '../../../../components/KsefActions'
 import { CorrectionForm } from '../../../../components/CorrectionForm'
+import { InvoiceDocumentPreview } from '../../../../components/InvoiceDocumentPreview'
 import { PlVatMetaForm, type InvoiceMeta, type ProcedureMarkings } from '../../../../components/PlVatMetaForm'
 import type { InvoiceLineInput } from '../../../../components/InvoiceLinesField'
 import { buyerFromMetadata } from '../../../../components/BuyerFields'
@@ -107,11 +114,18 @@ type SubmissionDetail = {
   offlineSendDeadlineAt: string | null
 }
 
+type SellerIdentity = {
+  name: string | null
+  addressLine1: string | null
+  addressLine2: string | null
+}
+
 type InvoiceDetailResponse = {
   invoice: InvoiceDetail
   lines: InvoiceLineDetail[]
   meta: InvoiceMetaDetail | null
   submission: SubmissionDetail | null
+  seller?: SellerIdentity | null
 }
 
 type FeatureCheckResponse = { ok: boolean; granted?: string[]; userId?: string }
@@ -257,6 +271,67 @@ function formatDate(iso: string | null | undefined, fallback = '—'): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
+/**
+ * Trim a stored decimal down to what a reader needs. Quantities and VAT rates come off the wire at
+ * full scale (`1.0000`, `23.0000`); the trailing zeros carry no information and only make the
+ * column harder to scan, so significant decimals are kept and the rest dropped.
+ */
+function formatDecimal(value: string | number | null | undefined, fallback = '—'): string {
+  if (value == null || value === '') return fallback
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value)
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(n)
+}
+
+/** VAT rate as a percentage — `23.0000` reads as `23%`. Non-numeric rates (e.g. `zw`) pass through. */
+/**
+ * A line's discount as text, or null when there is none. Both a percentage and an amount can be
+ * present; zero-valued fields are treated as absent so an unused discount never prints "0".
+ */
+function lineDiscountText(line: InvoiceLineDetail): string | null {
+  const percent = Number(line.discountPercent)
+  const amount = Number(line.discountAmount)
+  const parts: string[] = []
+  if (Number.isFinite(percent) && percent > 0) {
+    parts.push(`${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(percent)}%`)
+  }
+  if (Number.isFinite(amount) && amount > 0) {
+    parts.push(formatAmount(line.discountAmount, line.currencyCode))
+  }
+  return parts.length ? parts.join(' / ') : null
+}
+
+type VatRateBucket = { rate: string; net: number; vat: number; gross: number }
+
+/**
+ * Group the lines by VAT rate and sum each bucket. Art. 106e ust. 1 pkt 12-14 requires an invoice
+ * to state the net sale value and the tax amount PER RATE, not just one grand total — a single
+ * "VAT 115,00 zł" line is not a lawful summary once more than one rate is in play.
+ */
+function summarizeVatByRate(lines: InvoiceLineDetail[]): VatRateBucket[] {
+  const buckets = new Map<string, VatRateBucket>()
+  for (const line of lines) {
+    // Group on the raw rate so `zw`/`np` keep their own bucket instead of collapsing into 0%.
+    const rate = (line.taxRate ?? '').trim() || '—'
+    const bucket = buckets.get(rate) ?? { rate, net: 0, vat: 0, gross: 0 }
+    const net = Number(line.totalNetAmount)
+    const vat = Number(line.taxAmount)
+    const gross = Number(line.totalGrossAmount)
+    if (Number.isFinite(net)) bucket.net += net
+    if (Number.isFinite(vat)) bucket.vat += vat
+    if (Number.isFinite(gross)) bucket.gross += gross
+    buckets.set(rate, bucket)
+  }
+  return [...buckets.values()].sort((a, b) => Number(b.rate) - Number(a.rate))
+}
+
+function formatTaxRate(value: string | number | null | undefined, fallback = '—'): string {
+  if (value == null || value === '') return fallback
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value)
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}%`
+}
+
 function formatAmount(value: string | null | undefined, currency: string | null | undefined, fallback = '—'): string {
   if (value == null || value === '') return fallback
   const n = Number(value)
@@ -282,18 +357,15 @@ function SummaryField({ label, children }: { label: string; children: React.Reac
 
 function SectionCard({
   title,
-  description,
   children,
 }: {
   title: string
-  description?: string
   children: React.ReactNode
 }) {
   return (
     <section className="rounded-lg border bg-card p-4">
       <div className="mb-3 flex flex-col gap-1">
         <h2 className="text-base font-semibold text-foreground">{title}</h2>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {children}
     </section>
@@ -312,6 +384,8 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
   const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'not_found' | 'error'>('loading')
   const [grantedFeatures, setGrantedFeatures] = React.useState<string[]>([])
   const [reloadToken, setReloadToken] = React.useState(0)
+  // Issuing a correction is the exception, not the routine — the form opens on demand (see below).
+  const [correctionOpen, setCorrectionOpen] = React.useState(false)
 
   const refetch = React.useCallback(() => setReloadToken((token) => token + 1), [])
 
@@ -421,12 +495,40 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
     )
   }
 
-  const { invoice, lines, meta, submission } = data
+  const { invoice, lines, meta, submission, seller } = data
   const currency = invoice.currencyCode ?? ''
   const buyer = buyerFromMetadata(invoice.metadata)
   const hasBuyer = Boolean(buyer.companyName || buyer.nip || buyer.addressLine1)
   const invoiceNote = typeof invoice.metadata?.notes === 'string' ? invoice.metadata.notes : null
   const saleDate = typeof invoice.metadata?.saleDate === 'string' ? invoice.metadata.saleDate : null
+  // Plain consts, not `useMemo`: this code runs after the loading/error early-returns, so a hook
+  // here would be conditional and break the Rules of Hooks. The work is a single pass over lines.
+  const vatByRate = summarizeVatByRate(lines)
+  const isForeignCurrency = currency.trim().toUpperCase() !== '' && currency.trim().toUpperCase() !== 'PLN'
+  // VAT restated in PLN at the invoice's own rate; null when either half is missing, so the
+  // document shows "—" rather than a number computed from a guessed rate.
+  const taxTotalPln = (() => {
+    if (!isForeignCurrency) return null
+    const tax = Number(invoice.taxTotalAmount)
+    const rate = Number(meta?.exchangeRate)
+    if (!Number.isFinite(tax) || !Number.isFinite(rate) || rate <= 0) return null
+    return tax * rate
+  })()
+  // Statutory phrases that belong on the printed invoice whenever their flag is set.
+  const legalAnnotations = (() => {
+    const out: string[] = []
+    if (meta?.mppRequired) out.push(t('financial_pl.invoices.detail.annotation.mpp', 'Split payment mechanism'))
+    if (meta?.selfBilling) out.push(t('financial_pl.invoices.detail.annotation.selfBilling', 'Self-billing'))
+    if (meta?.reverseCharge) {
+      out.push(t('financial_pl.invoices.detail.annotation.reverseCharge', 'Reverse charge'))
+    }
+    if (meta?.vatExemptionBasis?.trim()) {
+      out.push(
+        `${t('financial_pl.fields.vatExemptionBasis', 'VAT exemption basis')}: ${meta.vatExemptionBasis.trim()}`,
+      )
+    }
+    return out
+  })()
   const payment = paymentFromMetadata(invoice.metadata)
   const hasInvoiceNote = Boolean(invoiceNote && invoiceNote.trim().length > 0)
   const submissionStatus = submission?.status ?? null
@@ -449,17 +551,6 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
       ? `${t(`financial_pl.invoices.form.payment.methods.${payment.method}`, payment.method)} (${payment.methodOther})`
       : t(`financial_pl.invoices.form.payment.methods.${payment.method}`, payment.method)
     : '—'
-  const paymentTermText = payment
-    ? [
-        payment.termDays !== undefined
-          ? `${payment.termDays} ${t('financial_pl.invoices.detail.payment.days', 'days')}`
-          : null,
-        invoice.dueDate ? formatDate(invoice.dueDate) : null,
-      ]
-        .filter((part): part is string => Boolean(part))
-        .join(' / ') || '—'
-    : '—'
-
   return (
     <Page>
       <PageBody>
@@ -467,17 +558,23 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
           {/* Header summary */}
           <section className="rounded-lg border bg-card p-4">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-3">
-                  <h1 className="text-xl font-semibold text-foreground">{number}</h1>
-                  <KsefStatusBadge
-                    status={submission?.status ?? meta?.ksefStatus ?? null}
-                    ksefNumber={submission?.ksefNumber ?? meta?.ksefNumber ?? null}
-                    offlineSendDeadlineAt={submission?.offlineSendDeadlineAt ?? null}
-                  />
-                </div>
+              {/* Status sits under the number: the KSeF number it carries is long, and beside the
+                  title it pushed the heading around as the status changed. */}
+              <div className="flex flex-col items-start gap-2">
+                <h1 className="text-xl font-semibold text-foreground">{number}</h1>
+                <KsefStatusBadge
+                  status={submission?.status ?? meta?.ksefStatus ?? null}
+                  ksefNumber={submission?.ksefNumber ?? meta?.ksefNumber ?? null}
+                  offlineSendDeadlineAt={submission?.offlineSendDeadlineAt ?? null}
+                />
               </div>
-              <div className="flex items-center gap-2">
+              {/*
+                Every action for this invoice lives here, at the top. Once KSeF has locked the
+                document it is read-only by law — the only way to change it is a correction — so the
+                Edit button is not rendered at all rather than shown disabled: a dead control invites
+                the click it will refuse. The lock is stated in words under the title instead.
+              */}
+              <div className="flex flex-wrap items-center gap-2">
                 {canManageInvoices && !editLocked ? (
                   <Button asChild variant="outline">
                     <Link href={`/backend/financial/invoices/${invoice.id}/edit`}>
@@ -485,227 +582,123 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
                       {t('financial_pl.invoices.detail.edit', 'Edit')}
                     </Link>
                   </Button>
-                ) : editLocked ? (
-                  <Button type="button" variant="outline" disabled title={t(
-                    'financial_pl.invoices.detail.editLockedHint',
-                    'This invoice is accepted by KSeF and can no longer be edited — issue a correction instead.',
-                  )}>
-                    <Pencil className="mr-1 size-4" />
-                    {t('financial_pl.invoices.detail.edit', 'Edit')}
+                ) : null}
+                {isAccepted && canIssueCorrection ? (
+                  <Button type="button" variant="outline" onClick={() => setCorrectionOpen(true)}>
+                    <FileMinus2 className="mr-1 size-4" aria-hidden="true" />
+                    {t('financial_pl.invoices.detail.correctionOpen', 'Issue correction')}
                   </Button>
                 ) : null}
+                <KsefActions
+                  invoiceId={invoice.id}
+                  submission={submissionSummary}
+                  features={grantedFeatures}
+                  onChanged={refetch}
+                />
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-              <SummaryField label={t('financial_pl.invoices.detail.issueDate', 'Issue date')}>
-                {formatDate(invoice.issueDate)}
-              </SummaryField>
-              <SummaryField label={t('financial_pl.invoices.detail.saleDate', 'Sale date')}>
-                {formatDate(saleDate)}
-              </SummaryField>
-              <SummaryField label={t('financial_pl.invoices.detail.dueDate', 'Due date')}>
-                {formatDate(invoice.dueDate)}
-              </SummaryField>
-              <SummaryField label={t('financial_pl.invoices.detail.currency', 'Currency')}>
-                {currency || '—'}
-              </SummaryField>
-              <SummaryField label={t('financial_pl.invoices.detail.net', 'Net total')}>
-                {formatAmount(invoice.grandTotalNetAmount, currency)}
-              </SummaryField>
-              <SummaryField label={t('financial_pl.invoices.detail.gross', 'Gross total')}>
-                {formatAmount(invoice.grandTotalGrossAmount, currency)}
-              </SummaryField>
-            </div>
-
-            {hasBuyer ? (
-              <div className="mt-4 border-t border-border pt-4">
-                <div className="text-xs text-muted-foreground">
-                  {t('financial_pl.invoices.detail.buyer', 'Buyer (Nabywca)')}
-                </div>
-                <div className="mt-1 text-sm text-foreground">
-                  {buyer.companyName ? <div className="font-medium">{buyer.companyName}</div> : null}
-                  {buyer.nip ? (
-                    <div className="text-muted-foreground">
-                      {t('financial_pl.buyer.nip', 'Buyer NIP')}: {buyer.nip}
-                    </div>
-                  ) : null}
-                  {buyer.addressLine1 || buyer.postalCode || buyer.city ? (
-                    <div className="text-muted-foreground">
-                      {[
-                        buyer.addressLine1,
-                        buyer.addressLine2,
-                        [buyer.postalCode, buyer.city].filter(Boolean).join(' '),
-                        buyer.countryCode,
-                      ]
-                        .filter((part) => part && part.trim())
-                        .join(', ')}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
           </section>
 
-          {/* KSeF panel */}
-          <SectionCard
-            title={t('financial_pl.invoices.detail.ksefPanel', 'KSeF')}
-            description={t(
-              'financial_pl.invoices.detail.ksefPanelHint',
-              'Send the invoice to KSeF, retry a failed submission, or download the UPO / PDF.',
-            )}
-          >
-            <KsefActions
-              invoiceId={invoice.id}
-              submission={submissionSummary}
-              features={grantedFeatures}
-              onChanged={refetch}
+          {/*
+            Two-up below the header: the invoice itself on the left (what the document says), the
+            Polish VAT metadata accordion on the right (how it is classified for KSeF/JPK). Stacks
+            back to one column under `lg`, where side-by-side would squeeze both.
+          */}
+          <div className="grid items-start gap-4 lg:grid-cols-5">
+            {/*
+              Left: the invoice as a document — the layout the buyer receives (header, parties,
+              items, totals, note, payment), so the operator checks the same artefact that leaves
+              the system rather than a set of admin cards.
+            */}
+            <InvoiceDocumentPreview
+              className="lg:col-span-3"
+              seller={{ name: seller?.name ?? null, nip: meta?.contextNip ?? null, addressLine1: seller?.addressLine1 ?? null, addressLine2: seller?.addressLine2 ?? null }}
+              buyer={{
+                name: buyer.companyName ?? null,
+                nip: buyer.nip ?? null,
+                addressLine1: buyer.addressLine1 ?? null,
+                addressLine2: buyer.addressLine2 ?? null,
+                postalCode: buyer.postalCode ?? null,
+                city: buyer.city ?? null,
+                countryCode: buyer.countryCode ?? null,
+              }}
+              issueDate={invoice.issueDate}
+              saleDate={saleDate}
+              dueDate={invoice.dueDate}
+              currency={currency}
+              lines={lines}
+              totalNet={invoice.grandTotalNetAmount}
+              taxTotal={invoice.taxTotalAmount}
+              totalGross={invoice.grandTotalGrossAmount}
+              exchangeRate={meta?.exchangeRate ?? null}
+              exchangeRateDate={meta?.exchangeRateDate ?? null}
+              annotations={legalAnnotations}
+              note={invoiceNote}
+              payment={payment ? { methodLabel: paymentMethodLabel, bankAccount: payment.bankAccount ?? null, bankName: payment.bankName ?? null, swift: payment.swift ?? null, paid: payment.paid, paidDate: payment.paidDate ?? null } : null}
             />
-          </SectionCard>
 
-          {/* Line items (read-only) */}
-          <SectionCard title={t('financial_pl.invoices.detail.lines', 'Line items')}>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('financial_pl.invoices.detail.line.name', 'Name')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.quantity', 'Qty')}
-                    </TableHead>
-                    <TableHead>{t('financial_pl.invoices.detail.line.unit', 'Unit')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.unitPriceNet', 'Unit price (net)')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.taxRate', 'VAT %')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.net', 'Net')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.tax', 'VAT')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('financial_pl.invoices.detail.line.gross', 'Gross')}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {lines.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center text-sm text-muted-foreground">
-                        {t('financial_pl.invoices.detail.noLines', 'No line items.')}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    lines.map((line, index) => (
-                      <TableRow key={line.lineNumber ?? index}>
-                        <TableCell>{line.name ?? '—'}</TableCell>
-                        <TableCell className="text-right">{line.quantity ?? '—'}</TableCell>
-                        <TableCell>{line.quantityUnit ?? '—'}</TableCell>
-                        <TableCell className="text-right">
-                          {formatAmount(line.unitPriceNet, line.currencyCode ?? currency)}
-                        </TableCell>
-                        <TableCell className="text-right">{line.taxRate ?? '—'}</TableCell>
-                        <TableCell className="text-right">
-                          {formatAmount(line.totalNetAmount, line.currencyCode ?? currency)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatAmount(line.taxAmount, line.currencyCode ?? currency)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatAmount(line.totalGrossAmount, line.currencyCode ?? currency)}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+
+            {/* PL-VAT meta summary (read-only) — the accordion column */}
+            <div className="flex flex-col gap-4 lg:col-span-2">
+              <SectionCard title={t('financial_pl.invoices.detail.plVatMeta', 'Polish VAT metadata')}>
+                {/* `currencyCode` gates the FX section — without it the form assumed a foreign
+                    currency and showed an exchange-rate block on every PLN invoice. */}
+                {meta ? (
+                  <PlVatMetaForm
+                    value={toFormMeta(meta)}
+                    onChange={() => {}}
+                    disabled
+                    hideContextNip
+                    currencyCode={currency}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {t('financial_pl.invoices.detail.noPlVatMeta', 'No Polish VAT metadata recorded yet.')}
+                  </p>
+                )}
+              </SectionCard>
             </div>
-          </SectionCard>
-
-          {/* PL-VAT meta summary (read-only) */}
-          <SectionCard
-            title={t('financial_pl.invoices.detail.plVatMeta', 'Polish VAT metadata')}
-            description={t(
-              'financial_pl.invoices.detail.plVatMetaHint',
-              'Read-only summary of the Polish VAT layer attached to this invoice.',
-            )}
-          >
-            {meta ? (
-              <PlVatMetaForm value={toFormMeta(meta)} onChange={() => {}} disabled />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t('financial_pl.invoices.detail.noPlVatMeta', 'No Polish VAT metadata recorded yet.')}
-              </p>
-            )}
-          </SectionCard>
-
-          {payment ? (
-            <SectionCard title={t('financial_pl.invoices.detail.payment.title', 'Payment')}>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <SummaryField label={t('financial_pl.invoices.detail.payment.method', 'Payment method')}>
-                  {paymentMethodLabel}
-                </SummaryField>
-                <SummaryField label={t('financial_pl.invoices.detail.payment.term', 'Payment term / due date')}>
-                  {paymentTermText}
-                </SummaryField>
-                <SummaryField label={t('financial_pl.invoices.detail.payment.bankAccount', 'Bank account')}>
-                  <span className="flex flex-col gap-1">
-                    <span>{payment.bankAccount ?? '—'}</span>
-                    {payment.bankName ? <span className="text-muted-foreground">{payment.bankName}</span> : null}
-                    {payment.swift ? (
-                      <span className="text-muted-foreground">
-                        {t('financial_pl.invoices.detail.payment.swift', 'SWIFT')}: {payment.swift}
-                      </span>
-                    ) : null}
-                  </span>
-                </SummaryField>
-                {payment.paid ? (
-                  <SummaryField label={t('financial_pl.invoices.detail.payment.paid', 'Paid')}>
-                    <span className="flex flex-col items-start gap-1">
-                      <StatusBadge variant={PAYMENT_PAID_STATUS_MAP.paid} dot>
-                        {t('financial_pl.invoices.detail.payment.paidBadge', 'Paid')}
-                      </StatusBadge>
-                      {payment.paidDate ? (
-                        <span className="text-muted-foreground">{formatDate(payment.paidDate)}</span>
-                      ) : null}
-                    </span>
-                  </SummaryField>
-                ) : null}
-              </div>
-            </SectionCard>
-          ) : null}
-
-          {hasInvoiceNote ? (
-            <SectionCard title={t('financial_pl.invoices.detail.notes', 'Notes (Uwagi)')}>
-              <p className="whitespace-pre-wrap text-sm text-foreground">{invoiceNote}</p>
-            </SectionCard>
-          ) : null}
-
-          {/* Correction (KOR) — shown once accepted, gated client-side on sales.credit_memos.manage */}
-          {isAccepted && canIssueCorrection ? (
-            <SectionCard
-              title={t('financial_pl.invoices.detail.correction', 'Issue correction (KOR)')}
-              description={t(
-                'financial_pl.invoices.detail.correctionHint',
-                'Correct an accepted invoice by issuing a correction (KOR) credit memo to KSeF.',
-              )}
-            >
-              <CorrectionForm
-                invoiceId={invoice.id}
-                originalInvoiceNumber={number}
-                originalLines={correctionLines}
-                currencyCode={currency}
-                priceMode={invoice.metadata?.priceMode === 'gross' ? 'gross' : undefined}
-                features={grantedFeatures}
-                onSubmitted={refetch}
-              />
-            </SectionCard>
-          ) : null}
+          </div>
         </div>
       </PageBody>
+
+      {/* Correction form — on demand, so the detail page stays a read surface by default. */}
+      <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
+        {/*
+            `p-0` + `overflow-hidden` + `gap-0`: the DS DialogContent is itself the scroller, which
+            made the body scroll UNDERNEATH the header and footer. Here the dialog no longer
+            scrolls — the form's body owns the scrollbar between a fixed header and footer, so each
+            band keeps its own padding and the rule sits at the true edge of the scroll area.
+          */}
+          <DialogContent size="xl" className="gap-0 overflow-hidden p-0 [&>button]:z-20">
+          {/*
+            `DialogContent` is itself the scroll container (max-h-90vh + overflow-y-auto), so the
+            title and the action bar scrolled away on this tall form. Pinning them inside that
+            container keeps "which invoice" and the Issue/Cancel buttons on screen while the lines
+            scroll. `-m*`/`p*` re-create the content padding so the sticky bands cover it.
+          */}
+          <DialogHeader className="shrink-0 border-b border-border px-6 py-4 pr-14">
+            {/* The number is in the title: the modal covers the page, so without it nothing on
+                screen says WHICH invoice is being corrected. */}
+            <DialogTitle>
+              {t('financial_pl.invoices.detail.correction', 'Issue correction (KOR)')} — {number}
+            </DialogTitle>
+          </DialogHeader>
+          <CorrectionForm
+            invoiceId={invoice.id}
+            originalLines={correctionLines}
+            currencyCode={currency}
+            priceMode={invoice.metadata?.priceMode === 'gross' ? 'gross' : undefined}
+            features={grantedFeatures}
+            onSubmitted={() => {
+              setCorrectionOpen(false)
+              refetch()
+            }}
+            onCancel={() => setCorrectionOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </Page>
   )
 }

@@ -8,6 +8,8 @@
 export type BuyerValue = {
   companyName?: string
   nip?: string
+  /** EU VAT identifier for a non-Polish buyer, used instead of the Polish NIP. */
+  euVatId?: string
   addressLine1?: string
   addressLine2?: string
   postalCode?: string
@@ -15,7 +17,7 @@ export type BuyerValue = {
   countryCode?: string
 }
 
-const BUYER_KEYS = ['companyName', 'nip', 'addressLine1', 'addressLine2', 'postalCode', 'city', 'countryCode'] as const
+const BUYER_KEYS = ['companyName', 'nip', 'euVatId', 'addressLine1', 'addressLine2', 'postalCode', 'city', 'countryCode'] as const
 
 /** Build the `buyerSnapshot` object (omitting empty fields), or undefined when the buyer is empty.
  *  The NIP is normalised to bare digits and the country to upper-case so what is persisted is exactly

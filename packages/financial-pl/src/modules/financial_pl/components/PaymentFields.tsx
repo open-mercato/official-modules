@@ -14,6 +14,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidBankAccount, normalizeAccountNumber } from '../lib/bank-account'
 import { lookupPolishBank } from '../lib/pl-bank-registry'
 import { isValidSwift } from '../lib/pl-format'
+import { IsoDatePicker } from './IsoDatePicker'
 
 export const PAYMENT_METHODS = [
   'cash',
@@ -45,7 +46,10 @@ export type PaymentFieldsProps = {
   disabled?: boolean
 }
 
-const labelClass = 'text-xs text-muted-foreground'
+// Matches the field-label style used across the invoice form (PlVatMetaForm, CrudForm builtins).
+// These were 12px muted while the section above them used 14px foreground, so the same form showed
+// two different label treatments depending on which component rendered the field.
+const labelClass = 'text-sm font-medium text-foreground'
 
 function optionalNumber(raw: string): number | undefined {
   if (!raw.trim()) return undefined
@@ -82,9 +86,9 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
   )
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
+    <div className="@container flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 @xs:grid-cols-2">
+        <div className="flex flex-col gap-2">
           <label className={labelClass} htmlFor="financial_pl-payment-method">
             {t('financial_pl.invoices.form.payment.method', 'Payment method')}
           </label>
@@ -106,31 +110,38 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
           </Select>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label className={labelClass} htmlFor="financial_pl-payment-term-days">
-            {t('financial_pl.invoices.form.payment.termDays', 'Payment term (days)')}
-          </label>
-          <Input
-            id="financial_pl-payment-term-days"
-            // Plain text (not type="number") so NO native constraint validation applies at all:
-            // SPEC-018 keeps tab panels mounted, so this control is hidden (display:none) on an
-            // inactive tab, and a native-invalid hidden control ("not focusable") silently blocks
-            // form submission before handleSubmit can run. type="number" still carries an IMPLICIT
-            // step=1, so a fractional value (e.g. 14.5) is a stepMismatch → the class was not fully
-            // closed by dropping the explicit min/step (code-jury: Codex + Kimi, 2 voters). type="text"
-            // removes stepMismatch/badInput entirely; the term is validated in JS by handleSubmit
-            // (termDaysRange: whole number 0..3650, routes to the Faktura tab). inputMode="numeric"
-            // keeps the numeric on-screen keyboard.
-            inputMode="numeric"
-            value={value.termDays == null ? '' : String(value.termDays)}
-            disabled={busy}
-            onChange={(event) => patch({ termDays: optionalNumber(event.target.value) })}
-          />
-        </div>
+        {/*
+          The payment term used to be a separate "days" input here while the Invoice details block
+          above owns the due date with 7/14/30 quick-picks — two controls for one fact, and the date
+          is the one that actually prints on the invoice. `termDays` stays in the model (it seeds the
+          due-date derivation) but is no longer asked for twice.
+        */}
+        {value.method === 'transfer' ? (
+    <div className="flex flex-col gap-2">
+      <label className={labelClass} htmlFor="financial_pl-payment-swift">
+        {t('financial_pl.invoices.form.payment.swift', 'SWIFT/BIC')}
+      </label>
+      <Input
+        id="financial_pl-payment-swift"
+        value={value.swift ?? ''}
+        disabled={busy}
+        aria-invalid={swiftInvalid || undefined}
+        onChange={(event) => {
+          manualBankFieldsRef.current.add('swift')
+          patch({ swift: event.target.value.toUpperCase() })
+        }}
+      />
+      {swiftInvalid ? (
+        <span className="text-xs text-status-error-text">
+          {t('financial_pl.validation.swift', 'Enter a valid SWIFT/BIC (8 or 11 characters).')}
+        </span>
+      ) : null}
+    </div>
+        ) : null}
       </div>
 
       {value.method === 'other' ? (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2">
           <label className={labelClass} htmlFor="financial_pl-payment-method-other">
             {t('financial_pl.invoices.form.payment.methodOther', 'Other payment method')}
             <span aria-hidden="true"> *</span>
@@ -155,8 +166,10 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
       ) : null}
 
       {value.method === 'transfer' ? (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <div className="flex flex-col gap-1.5">
+        // The account number spans the row: an IBAN is 28+ characters and was being truncated into
+        // a third of the width, while the bank name and SWIFT beside it are short.
+        <div className="grid grid-cols-1 gap-4">
+          <div className="flex flex-col gap-2">
             <label className={labelClass} htmlFor="financial_pl-payment-bank-account">
               {t('financial_pl.invoices.form.payment.bankAccount', 'Bank account')}
             </label>
@@ -191,7 +204,7 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               </span>
             ) : null}
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <label className={labelClass} htmlFor="financial_pl-payment-bank-name">
               {t('financial_pl.invoices.form.payment.bankName', 'Bank name')}
             </label>
@@ -205,30 +218,14 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
               }}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className={labelClass} htmlFor="financial_pl-payment-swift">
-              {t('financial_pl.invoices.form.payment.swift', 'SWIFT/BIC')}
-            </label>
-            <Input
-              id="financial_pl-payment-swift"
-              value={value.swift ?? ''}
-              disabled={busy}
-              aria-invalid={swiftInvalid || undefined}
-              onChange={(event) => {
-                manualBankFieldsRef.current.add('swift')
-                patch({ swift: event.target.value.toUpperCase() })
-              }}
-            />
-            {swiftInvalid ? (
-              <span className="text-xs text-status-error-text">
-                {t('financial_pl.validation.swift', 'Enter a valid SWIFT/BIC (8 or 11 characters).')}
-              </span>
-            ) : null}
-          </div>
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {/*
+        The paid switch sat in a two-column grid cell, so the toggle floated in the middle of a wide
+        empty row. It now owns a normal full-width row and the date appears beneath it when relevant.
+      */}
+      <div className="flex flex-col gap-2">
         <SwitchField
           label={t('financial_pl.invoices.form.payment.paid', 'Paid')}
           checked={Boolean(value.paid)}
@@ -240,21 +237,19 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
         />
 
         {value.paid ? (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <label className={labelClass} htmlFor="financial_pl-payment-paid-date">
               {t('financial_pl.invoices.form.payment.paidDate', 'Payment date')}
               <span aria-hidden="true"> *</span>
             </label>
-            <Input
+            {/* DS picker, not `<input type="date">` — the native control draws the browser's own
+                calendar inside a form built entirely from the design system. Required-ness is
+                gated in handleSubmit (paid⇒paidDate), never natively: this panel can be hidden. */}
+            <IsoDatePicker
               id="financial_pl-payment-paid-date"
-              type="date"
-              value={value.paidDate ?? ''}
+              value={value.paidDate}
               disabled={busy}
-              // No native `required` — see the methodOther note above: gated in handleSubmit
-              // (paid⇒paidDate) + Faktura-tab routing; native required under a hidden panel
-              // would silently block submission.
-              aria-required="true"
-              onChange={(event) => patch({ paidDate: event.target.value })}
+              onChange={(next) => patch({ paidDate: next })}
             />
           </div>
         ) : null}

@@ -31,7 +31,12 @@ export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view', 'sales.invoices.manage'] },
 }
 
-const querySchema = z.object({ salesInvoiceId: z.string().uuid() })
+const querySchema = z.object({
+  salesInvoiceId: z.string().uuid(),
+  // `inline` lets the browser render the PDF in-tab (print/preview); default stays `attachment`
+  // (download) so existing callers are unchanged.
+  disposition: z.enum(['inline', 'attachment']).default('attachment'),
+})
 
 const VISUALIZATION_NOTICE_DEFAULT =
   'This is a visualization of a structured invoice; the source document is the invoice in KSeF.'
@@ -143,7 +148,10 @@ export async function GET(req: Request) {
     const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
 
     const url = new URL(req.url)
-    const parsed = querySchema.parse({ salesInvoiceId: url.searchParams.get('salesInvoiceId') ?? '' })
+    const parsed = querySchema.parse({
+      salesInvoiceId: url.searchParams.get('salesInvoiceId') ?? '',
+      disposition: url.searchParams.get('disposition') ?? undefined,
+    })
     const salesInvoiceId = parsed.salesInvoiceId
 
     // A per-invoice PDF needs ONE organization context (its credentials + scoped lookup). Use the
@@ -331,7 +339,7 @@ export async function GET(req: Request) {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${safeName}.pdf"`,
+        'Content-Disposition': `${parsed.disposition}; filename="${safeName}.pdf"`,
       },
     })
   } catch (err) {

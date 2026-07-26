@@ -34,6 +34,7 @@ import { LoadingMessage } from '@open-mercato/ui/backend/detail/LoadingMessage'
 import { ErrorMessage } from '@open-mercato/ui/backend/detail/ErrorMessage'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { IsoDatePicker } from '../../../components/IsoDatePicker'
 
 type JpkVariant = 'V7M' | 'V7K'
 
@@ -847,11 +848,10 @@ export default function FinancialPlJpkPage() {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="rec-date">{t('financial_pl.jpk.purchaseRecords.form.purchaseDate', 'Purchase date')}</Label>
-              <Input
+              <IsoDatePicker
                 id="rec-date"
-                type="date"
                 value={recordForm.purchaseDate}
-                onChange={(e) => updateRecordForm('purchaseDate', e.target.value)}
+                onChange={(next) => updateRecordForm('purchaseDate', next)}
               />
             </div>
             <div className="flex flex-col gap-1.5">

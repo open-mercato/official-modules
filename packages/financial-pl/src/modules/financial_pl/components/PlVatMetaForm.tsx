@@ -22,6 +22,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { isValidPolishNip } from '../lib/nip'
 import { normalizeNipDigits } from '../lib/company-lookup'
 import { normalizeDecimalInput } from '../lib/pl-format'
+import { IsoDatePicker } from './IsoDatePicker'
 import {
   GTU_CODES,
   JPK_PROCEDURE_MARKINGS,
@@ -100,6 +101,17 @@ export type PlVatMetaFormProps = {
   disabled?: boolean
   currencyCode?: string
   taxPointDate?: string
+  /**
+   * Hide the taxpayer-NIP field. Set on the invoice detail view, where the invoice document beside
+   * this panel already states the seller's NIP — repeating it here just makes the reader check
+   * whether the two values differ.
+   */
+  hideContextNip?: boolean
+  /**
+   * Hide the invoice-kind select. The kind decides what the rest of the invoice even means, so the
+   * form promotes it to the top of the first tab and renders it there instead of here.
+   */
+  hideInvoiceKind?: boolean
 }
 
 type NbpLookupState = 'idle' | 'loading' | 'unavailable'
@@ -157,7 +169,15 @@ export function applyMarginSchemeToMeta(value: InvoiceMeta, marginScheme: Margin
  * set. Pure controlled component: the parent owns persistence (M8 — no internal
  * no-op retry / save mutation). DS tokens + `@open-mercato/ui` primitives only.
  */
-export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPointDate }: PlVatMetaFormProps) {
+export function PlVatMetaForm({
+  value,
+  onChange,
+  disabled,
+  currencyCode,
+  taxPointDate,
+  hideContextNip,
+  hideInvoiceKind,
+}: PlVatMetaFormProps) {
   const t = useT()
   const busy = Boolean(disabled)
   const normalizedCurrencyCode = (currencyCode ?? '').trim().toUpperCase()
@@ -212,6 +232,9 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
   const invoiceKind = value.invoiceKind ?? 'vat'
   const gtuCodes = value.gtuCodes ?? []
   const procedureMarkings = value.procedureMarkings ?? {}
+  // Kept in the canonical JPK order rather than object-key order, so a read-only list always reads
+  // the same way regardless of the order the flags happened to be written in.
+  const selectedProcedures = JPK_PROCEDURE_MARKINGS.filter((code) => Boolean(procedureMarkings[code]))
   const marginScheme = value.marginScheme ?? null
   const advancePayments = value.advancePayments ?? []
   const advanceRefs = value.advanceRefs ?? []
@@ -342,88 +365,108 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
   const exchangeRateInvalid = exchangeRateRaw.length > 0 && !(Number.isFinite(exchangeRateNum) && exchangeRateNum > 0)
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <label className={labelClass} htmlFor="financial_pl-context-nip">
-          {t('financial_pl.fields.contextNip', 'Taxpayer NIP')}
-        </label>
-        <Input
-          id="financial_pl-context-nip"
-          inputMode="numeric"
-          value={value.contextNip ?? ''}
+    // `@container`: this panel renders both full-width (edit form) and in a ~40% column
+    // (invoice detail). Viewport `sm:` split fields into two columns even when the column was far
+    // too narrow, colliding the NBP button with the date field. Container queries size to the
+    // space actually available.
+    // `@container` and `@3xl:` must not sit on the same element: a container sizes its DESCENDANTS,
+    // so the grid classes here would have resolved against some ancestor container instead (there is
+    // none), leaving the layout stuck at one column. The grid lives one level in.
+    <div className="@container">
+      <div className="grid grid-cols-1 gap-6 @3xl:grid-cols-2 @3xl:items-start">
+      <div className="flex flex-col gap-2">
+      {hideContextNip ? null : (
+        <div className="flex flex-col gap-2">
+          <label className={labelClass} htmlFor="financial_pl-context-nip">
+            {t('financial_pl.fields.contextNip', 'Taxpayer NIP')}
+          </label>
+          <Input
+            id="financial_pl-context-nip"
+            inputMode="numeric"
+            value={value.contextNip ?? ''}
+            disabled={busy}
+            onChange={(event) => patch({ contextNip: event.target.value.length ? event.target.value : null })}
+            placeholder="1234567890"
+            aria-invalid={contextNipInvalid || undefined}
+          />
+          {contextNipInvalid ? (
+            <span className="text-xs text-status-error-text">
+              {t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).')}
+            </span>
+          ) : null}
+        </div>
+      )}
+
+      {hideInvoiceKind ? null : (
+        <div className="flex flex-col gap-2">
+          <label className={labelClass} htmlFor="financial_pl-invoice-kind">
+            {t('financial_pl.fields.invoiceKind', 'Invoice kind')}
+          </label>
+          <Select
+            value={invoiceKind}
+            onValueChange={(next) => patch({ invoiceKind: (next as InvoiceKindColumn) || 'vat' })}
+            disabled={busy}
+          >
+            <SelectTrigger id="financial_pl-invoice-kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {INVOICE_KINDS.map((kind) => (
+                <SelectItem key={kind} value={kind}>
+                  {t(`financial_pl.invoiceKind.${kind}`, kind.toUpperCase())}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/*
+        These five flags were a flat stack on the section's own `gap-2`, so the rows touched and
+        read as one block of text with switches attached. A divided list gives each flag its own
+        row with real vertical padding — the same treatment the rest of the form gives a field.
+      */}
+      <div className="flex flex-col gap-3">
+        <SwitchField
+          label={t('financial_pl.fields.mppRequired', 'Split payment (MPP) required')}
+          checked={Boolean(value.mppRequired)}
           disabled={busy}
-          onChange={(event) => patch({ contextNip: event.target.value.length ? event.target.value : null })}
-          placeholder="1234567890"
-          aria-invalid={contextNipInvalid || undefined}
+          onCheckedChange={(next) => patch({ mppRequired: Boolean(next) })}
         />
-        {contextNipInvalid ? (
-          <span className="text-xs text-status-error-text">
-            {t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).')}
-          </span>
-        ) : null}
-      </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label className={labelClass} htmlFor="financial_pl-invoice-kind">
-          {t('financial_pl.fields.invoiceKind', 'Invoice kind')}
-        </label>
-        <Select
-          value={invoiceKind}
-          onValueChange={(next) => patch({ invoiceKind: (next as InvoiceKindColumn) || 'vat' })}
+        <SwitchField
+          label={t('financial_pl.fields.issuedOutsideKsef', 'Issued outside KSeF')}
+          checked={Boolean(value.issuedOutsideKsef)}
           disabled={busy}
-        >
-          <SelectTrigger id="financial_pl-invoice-kind" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {INVOICE_KINDS.map((kind) => (
-              <SelectItem key={kind} value={kind}>
-                {t(`financial_pl.invoiceKind.${kind}`, kind.toUpperCase())}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onCheckedChange={(next) => patch({ issuedOutsideKsef: Boolean(next) })}
+        />
+
+        <SwitchField
+          label={t('financial_pl.fields.selfBilling', 'Self-billing (samofakturowanie)')}
+          checked={Boolean(value.selfBilling)}
+          disabled={busy}
+          onCheckedChange={(next) => patch({ selfBilling: Boolean(next) })}
+        />
+
+        <SwitchField
+          label={t('financial_pl.fields.reverseCharge', 'Reverse charge')}
+          checked={Boolean(value.reverseCharge)}
+          disabled={busy}
+          onCheckedChange={(next) => patch({ reverseCharge: Boolean(next) })}
+        />
+
+        <SwitchField
+          label={t('financial_pl.fields.ossProcedure', 'OSS / WSTO_EE distance sale')}
+          checked={Boolean(value.ossProcedure)}
+          disabled={busy}
+          onCheckedChange={(next) =>
+            patch({ ossProcedure: Boolean(next), consumptionCountryCode: next ? value.consumptionCountryCode ?? null : null })
+          }
+        />
       </div>
-
-      <SwitchField
-        label={t('financial_pl.fields.mppRequired', 'Split payment (MPP) required')}
-        checked={Boolean(value.mppRequired)}
-        disabled={busy}
-        onCheckedChange={(next) => patch({ mppRequired: Boolean(next) })}
-      />
-
-      <SwitchField
-        label={t('financial_pl.fields.issuedOutsideKsef', 'Issued outside KSeF')}
-        checked={Boolean(value.issuedOutsideKsef)}
-        disabled={busy}
-        onCheckedChange={(next) => patch({ issuedOutsideKsef: Boolean(next) })}
-      />
-
-      <SwitchField
-        label={t('financial_pl.fields.selfBilling', 'Self-billing (samofakturowanie)')}
-        checked={Boolean(value.selfBilling)}
-        disabled={busy}
-        onCheckedChange={(next) => patch({ selfBilling: Boolean(next) })}
-      />
-
-      <SwitchField
-        label={t('financial_pl.fields.reverseCharge', 'Reverse charge')}
-        checked={Boolean(value.reverseCharge)}
-        disabled={busy}
-        onCheckedChange={(next) => patch({ reverseCharge: Boolean(next) })}
-      />
-
-      <SwitchField
-        label={t('financial_pl.fields.ossProcedure', 'OSS / WSTO_EE distance sale')}
-        checked={Boolean(value.ossProcedure)}
-        disabled={busy}
-        onCheckedChange={(next) =>
-          patch({ ossProcedure: Boolean(next), consumptionCountryCode: next ? value.consumptionCountryCode ?? null : null })
-        }
-      />
 
       {value.ossProcedure ? (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2">
           <label className={labelClass} htmlFor="financial_pl-consumption-country">
             {t('financial_pl.fields.consumptionCountry', 'Consumption country (OSS)')}
           </label>
@@ -436,6 +479,8 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
           />
         </div>
       ) : null}
+
+      </div>
 
       <Accordion
         type="multiple"
@@ -450,12 +495,12 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
               {t('financial_pl.invoices.plvat.section.fx', 'Foreign currency (FX)')}
             </AccordionTrigger>
             <AccordionContent>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
+              <div className="grid grid-cols-1 gap-4 @sm:grid-cols-2">
+                <div className="flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-exchange-rate">
                     {t('financial_pl.fields.exchangeRate', 'Exchange rate (to PLN)')}
                   </label>
-                  <div className="flex flex-col gap-1 sm:flex-row">
+                  <div className="flex flex-col gap-1 @md:flex-row">
                     <Input
                       id="financial_pl-exchange-rate"
                       inputMode="decimal"
@@ -497,16 +542,15 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                     </span>
                   ) : null}
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-exchange-rate-date">
                     {t('financial_pl.fields.exchangeRateDate', 'Exchange rate date')}
                   </label>
-                  <Input
+                  <IsoDatePicker
                     id="financial_pl-exchange-rate-date"
-                    type="date"
-                    value={value.exchangeRateDate ?? ''}
+                    value={value.exchangeRateDate}
                     disabled={busy}
-                    onChange={(event) => patch({ exchangeRateDate: event.target.value.length ? event.target.value : null })}
+                    onChange={(next) => patch({ exchangeRateDate: next.length ? next : null })}
                   />
                 </div>
               </div>
@@ -519,26 +563,25 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
             {t('financial_pl.invoices.plvat.section.advance', 'Advance & settlement (ZAL/ROZ)')}
           </AccordionTrigger>
           <AccordionContent>
-            <div className="flex flex-col gap-4">
-              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+            <div className="flex flex-col gap-2">
+              <fieldset className="flex flex-col gap-4 rounded-md border border-border p-4">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.advancePaymentsGroup', 'Advance payments (ZAL)')}
                 </legend>
                 {advancePayments.map((row, index) => (
-                  <div key={index} className="flex items-end gap-2">
-                    <div className="flex flex-1 flex-col gap-1.5">
+                  <div key={index} className="flex items-end gap-4">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-date-${index}`}>
                         {t('financial_pl.fields.advanceReceivedDate', 'Received date')}
                       </label>
-                      <Input
+                      <IsoDatePicker
                         id={`financial_pl-advance-date-${index}`}
-                        type="date"
                         value={row.receivedDate}
                         disabled={busy}
-                        onChange={(event) => updateAdvancePayment(index, { receivedDate: event.target.value })}
+                        onChange={(next) => updateAdvancePayment(index, { receivedDate: next })}
                       />
                     </div>
-                    <div className="flex flex-1 flex-col gap-1.5">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-amount-${index}`}>
                         {t('financial_pl.fields.advanceAmount', 'Amount')}
                       </label>
@@ -550,7 +593,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                         onChange={(event) => updateAdvancePayment(index, { amount: event.target.value })}
                       />
                     </div>
-                    <div className="flex flex-1 flex-col gap-1.5">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-fx-${index}`}>
                         {t('financial_pl.fields.advanceFxRate', 'FX rate')}
                       </label>
@@ -584,13 +627,13 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                 </div>
               </fieldset>
 
-              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+              <fieldset className="flex flex-col gap-4 rounded-md border border-border p-4">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.advanceRefsGroup', 'Advance invoice references (ROZ)')}
                 </legend>
                 {advanceRefs.map((row, index) => (
-                  <div key={index} className="flex items-end gap-2">
-                    <div className="flex flex-1 flex-col gap-1.5">
+                  <div key={index} className="flex items-end gap-4">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ksef-${index}`}>
                         {t('financial_pl.fields.advanceRefKsefNumber', 'KSeF number')}
                       </label>
@@ -603,7 +646,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                         }
                       />
                     </div>
-                    <div className="flex flex-1 flex-col gap-1.5">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-invoice-${index}`}>
                         {t('financial_pl.fields.advanceRefInvoiceNumber', 'Invoice number')}
                       </label>
@@ -616,7 +659,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                         }
                       />
                     </div>
-                    <div className="flex flex-1 flex-col gap-1.5">
+                    <div className="flex flex-1 flex-col gap-4">
                       <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-advance-ref-amount-${index}`}>
                         {t('financial_pl.fields.advanceRefAmount', 'Amount')}
                       </label>
@@ -650,7 +693,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                 </div>
               </fieldset>
 
-              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+              <fieldset className="flex flex-col gap-4 rounded-md border border-border p-4">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.orderSnapshotGroup', 'Order snapshot (ZAL / KOR_ZAL)')}
                 </legend>
@@ -662,7 +705,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                 />
                 {orderSnapshot != null ? (
                   <>
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2">
                       <label className={labelClass} htmlFor="financial_pl-order-total">
                         {t('financial_pl.fields.orderTotalValue', 'Order total value')}
                       </label>
@@ -678,9 +721,9 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                     {orderLines.map((row, index) => (
                       <div
                         key={index}
-                        className="flex flex-col gap-2 rounded-md border border-border p-2 sm:flex-row sm:items-end"
+                        className="flex flex-col gap-2 rounded-md border border-border p-2 @md:flex-row @md:items-end"
                       >
-                        <div className="flex flex-[2] flex-col gap-1.5">
+                        <div className="flex flex-[2] flex-col gap-4">
                           <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-name-${index}`}>
                             {t('financial_pl.fields.orderLineName', 'Name')}
                           </label>
@@ -691,7 +734,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                             onChange={(event) => updateOrderLine(index, { name: event.target.value })}
                           />
                         </div>
-                        <div className="flex flex-1 flex-col gap-1.5">
+                        <div className="flex flex-1 flex-col gap-4">
                           <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-qty-${index}`}>
                             {t('financial_pl.fields.orderLineQuantity', 'Quantity')}
                           </label>
@@ -705,7 +748,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                             }
                           />
                         </div>
-                        <div className="flex flex-1 flex-col gap-1.5">
+                        <div className="flex flex-1 flex-col gap-4">
                           <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-price-${index}`}>
                             {t('financial_pl.fields.orderLineUnitPrice', 'Unit price')}
                           </label>
@@ -719,7 +762,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                             }
                           />
                         </div>
-                        <div className="flex flex-1 flex-col gap-1.5">
+                        <div className="flex flex-1 flex-col gap-4">
                           <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-net-${index}`}>
                             {t('financial_pl.fields.orderLineNetValue', 'Net value')}
                           </label>
@@ -733,7 +776,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                             }
                           />
                         </div>
-                        <div className="flex flex-1 flex-col gap-1.5">
+                        <div className="flex flex-1 flex-col gap-4">
                           <label className="text-xs text-muted-foreground" htmlFor={`financial_pl-order-line-vat-${index}`}>
                             {t('financial_pl.fields.orderLineVatRate', 'VAT rate')}
                           </label>
@@ -777,12 +820,12 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
             {t('financial_pl.invoices.plvat.section.jpk', 'JPK markings')}
           </AccordionTrigger>
           <AccordionContent>
-            <div className="flex flex-col gap-4">
-              <fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+            <div className="flex flex-col gap-2">
+              <fieldset className="flex flex-col gap-4 rounded-md border border-border p-4">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.marginScheme', 'Margin scheme')}
                 </legend>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-margin-scheme">
                     {t('financial_pl.fields.marginScheme', 'Margin scheme')}
                   </label>
@@ -821,8 +864,8 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                   ) : null}
                 </div>
                 {marginScheme ? (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="flex flex-col gap-1.5">
+                  <div className="grid grid-cols-1 gap-3 @sm:grid-cols-2">
+                    <div className="flex flex-col gap-2">
                       <label className={labelClass} htmlFor="financial_pl-margin-purchase-cost">
                         {t('financial_pl.fields.marginPurchaseCost', 'Purchase cost (for JPK)')}
                       </label>
@@ -837,7 +880,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                         }}
                       />
                     </div>
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2">
                       <label className={labelClass} htmlFor="financial_pl-margin-vat-rate">
                         {t('financial_pl.fields.marginVatRate', 'VAT rate on margin')}
                       </label>
@@ -866,59 +909,92 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.gtuGroup', 'GTU markings (JPK)')}
                 </legend>
-                <Input
-                  value={gtuFilter}
-                  disabled={busy}
-                  onChange={(event) => setGtuFilter(event.target.value)}
-                  placeholder={t('financial_pl.fields.gtuFilter', 'Filter GTU codes…')}
-                  aria-label={t('financial_pl.fields.gtuFilter', 'Filter GTU codes')}
-                />
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {GTU_CODES.filter((code) => {
-                    const q = gtuFilter.trim().toLowerCase()
-                    if (!q || gtuCodes.includes(code)) return true
-                    return code.toLowerCase().includes(q) || t(`financial_pl.fields.gtu.${code}`, code).toLowerCase().includes(q)
-                  }).map((code) => (
-                    <CheckboxField
-                      key={code}
-                      label={t(`financial_pl.fields.gtu.${code}`, code)}
-                      checked={gtuCodes.includes(code)}
-                      disabled={busy}
-                      onCheckedChange={(next) => toggleGtu(code, Boolean(next))}
+                {/*
+                  Read-only: list only what was actually marked. Thirteen permanently-unchecked boxes
+                  and a filter that cannot be used say nothing about THIS invoice — the reader only
+                  needs the codes it carries.
+                */}
+                {busy ? (
+                  gtuCodes.length > 0 ? (
+                    <ul className="flex flex-col gap-1 text-sm text-foreground">
+                      {gtuCodes.map((code) => (
+                        <li key={code}>{t(`financial_pl.fields.gtu.${code}`, code)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      {t('financial_pl.fields.noneSelected', 'None')}
+                    </span>
+                  )
+                ) : (
+                  <>
+                    <Input
+                      value={gtuFilter}
+                      onChange={(event) => setGtuFilter(event.target.value)}
+                      placeholder={t('financial_pl.fields.gtuFilter', 'Filter GTU codes…')}
+                      aria-label={t('financial_pl.fields.gtuFilter', 'Filter GTU codes')}
                     />
-                  ))}
-                </div>
+                    <div className="grid grid-cols-2 gap-4 @sm:grid-cols-3">
+                      {GTU_CODES.filter((code) => {
+                        const q = gtuFilter.trim().toLowerCase()
+                        if (!q || gtuCodes.includes(code)) return true
+                        return code.toLowerCase().includes(q) || t(`financial_pl.fields.gtu.${code}`, code).toLowerCase().includes(q)
+                      }).map((code) => (
+                        <CheckboxField
+                          key={code}
+                          label={t(`financial_pl.fields.gtu.${code}`, code)}
+                          checked={gtuCodes.includes(code)}
+                          onCheckedChange={(next) => toggleGtu(code, Boolean(next))}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
               </fieldset>
 
               <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.procedureGroup', 'JPK procedure markings')}
                 </legend>
-                <Input
-                  value={procedureFilter}
-                  disabled={busy}
-                  onChange={(event) => setProcedureFilter(event.target.value)}
-                  placeholder={t('financial_pl.fields.procedureFilter', 'Filter procedure markings…')}
-                  aria-label={t('financial_pl.fields.procedureFilter', 'Filter procedure markings')}
-                />
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {JPK_PROCEDURE_MARKINGS.filter((code) => {
-                    const q = procedureFilter.trim().toLowerCase()
-                    if (!q || procedureMarkings[code]) return true
-                    return code.toLowerCase().includes(q) || t(`financial_pl.fields.procedure.${code}`, code).toLowerCase().includes(q)
-                  }).map((code) => (
-                    <CheckboxField
-                      key={code}
-                      label={t(`financial_pl.fields.procedure.${code}`, code)}
-                      checked={Boolean(procedureMarkings[code])}
-                      disabled={busy}
-                      onCheckedChange={(next) => toggleProcedure(code, Boolean(next))}
+                {busy ? (
+                  selectedProcedures.length > 0 ? (
+                    <ul className="flex flex-col gap-1 text-sm text-foreground">
+                      {selectedProcedures.map((code) => (
+                        <li key={code}>{t(`financial_pl.fields.procedure.${code}`, code)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      {t('financial_pl.fields.noneSelected', 'None')}
+                    </span>
+                  )
+                ) : (
+                  <>
+                    <Input
+                      value={procedureFilter}
+                      onChange={(event) => setProcedureFilter(event.target.value)}
+                      placeholder={t('financial_pl.fields.procedureFilter', 'Filter procedure markings…')}
+                      aria-label={t('financial_pl.fields.procedureFilter', 'Filter procedure markings')}
                     />
-                  ))}
-                </div>
+                    <div className="grid grid-cols-1 gap-4 @sm:grid-cols-2">
+                      {JPK_PROCEDURE_MARKINGS.filter((code) => {
+                        const q = procedureFilter.trim().toLowerCase()
+                        if (!q || procedureMarkings[code]) return true
+                        return code.toLowerCase().includes(q) || t(`financial_pl.fields.procedure.${code}`, code).toLowerCase().includes(q)
+                      }).map((code) => (
+                        <CheckboxField
+                          key={code}
+                          label={t(`financial_pl.fields.procedure.${code}`, code)}
+                          checked={Boolean(procedureMarkings[code])}
+                          onCheckedChange={(next) => toggleProcedure(code, Boolean(next))}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
               </fieldset>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-2">
                 <label className={labelClass} htmlFor="financial_pl-typ-dokumentu">
                   {t('financial_pl.fields.typDokumentu', 'Document type (JPK)')}
                 </label>
@@ -949,9 +1025,9 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
             {t('financial_pl.invoices.plvat.section.adjustments', 'Adjustments & exemption')}
           </AccordionTrigger>
           <AccordionContent>
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-1 gap-4 @sm:grid-cols-2">
+                <div className="flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-bad-debt-period">
                     {t('financial_pl.fields.badDebtReliefPeriod', 'Bad-debt relief period (YYYY-MM)')}
                   </label>
@@ -963,21 +1039,20 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
                     placeholder="2026-02"
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-bad-debt-due">
                     {t('financial_pl.fields.badDebtTerminPlatnosci', 'Bad-debt payment due date')}
                   </label>
-                  <Input
+                  <IsoDatePicker
                     id="financial_pl-bad-debt-due"
-                    type="date"
-                    value={value.badDebtTerminPlatnosci ?? ''}
+                    value={value.badDebtTerminPlatnosci}
                     disabled={busy}
-                    onChange={(event) => patch({ badDebtTerminPlatnosci: event.target.value.length ? event.target.value : null })}
+                    onChange={(next) => patch({ badDebtTerminPlatnosci: next.length ? next : null })}
                   />
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-2">
                 <label className={labelClass} htmlFor="financial_pl-vat-exemption">
                   {t('financial_pl.fields.vatExemptionBasis', 'VAT exemption legal basis')}
                 </label>
@@ -993,6 +1068,7 @@ export function PlVatMetaForm({ value, onChange, disabled, currencyCode, taxPoin
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+      </div>
     </div>
   )
 }

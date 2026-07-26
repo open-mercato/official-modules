@@ -303,6 +303,10 @@ export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps, opts: { up
 
   const name = asString(snapshot.companyName) ?? asString(snapshot.company_name) ?? asString(snapshot.name)
   const nip = asNip(snapshot.nip ?? snapshot.taxId ?? snapshot.tax_id)
+  // A non-Polish buyer is identified by an EU VAT ID rather than a NIP. Carried through here so the
+  // value the operator typed is the value filed — without this the field would be collected and
+  // silently dropped from the document.
+  const euVatId = asString(snapshot.euVatId) ?? asString(snapshot.eu_vat_id)
 
   const street = asString(snapshot.addressLine1) ?? asString(snapshot.address_line1)
   const cityLine = composeCityLine(snapshot)
@@ -340,6 +344,7 @@ export function buildBuyer(invoice: InvoiceRow, deps: Fa3MappingDeps, opts: { up
 
   return {
     nip,
+    ...(euVatId ? { euVatId } : {}),
     name,
     countryCode,
     addressLine1,
