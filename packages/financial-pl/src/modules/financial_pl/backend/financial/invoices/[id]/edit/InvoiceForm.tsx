@@ -7,6 +7,7 @@ import { z } from 'zod'
 import {
   AlertTriangle,
   PenLine,
+  Plus,
   Building2,
   FileText,
   Hash,
@@ -28,6 +29,9 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
+import { Separator } from '@open-mercato/ui/primitives/separator'
+import { FormSection } from '../../../../../components/FormSection'
+import { useInvoiceSettings } from '../../../../../components/useInvoiceSettings'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
@@ -55,6 +59,7 @@ import {
   PAYMENT_METHODS,
   type PaymentMethod,
   type PaymentValue,
+  type PaymentAccountOption,
 } from '../../../../../components/PaymentFields'
 import { isValidPolishNip } from '../../../../../lib/nip'
 import { searchCurrencies, isValidCurrencyCode } from '../../../../../lib/currencies'
@@ -132,6 +137,12 @@ const DEFAULT_CURRENCY = 'PLN'
 /** FA(3) invoice kinds offered at the top of the form. */
 const FORM_INVOICE_KINDS: readonly InvoiceKindColumn[] = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz']
 const INVOICE_FORM_ID = 'financial-pl-invoice-form'
+
+/** Optional document annotations offered beside the note, revealed only when asked for. */
+const OPTIONAL_NOTE_FIELDS = [
+  { id: 'contractNumber', labelKey: 'financial_pl.invoices.form.fields.contractNumber', fallback: 'Contract number' },
+  { id: 'transportTerms', labelKey: 'financial_pl.invoices.form.fields.transportTerms', fallback: 'Transport terms' },
+] as const
 
 /** What the document prints in place of a signature. */
 export const SIGNATURE_MODES = [
@@ -320,6 +331,7 @@ function isInvoiceTab(value: string): value is InvoiceTab {
 }
 
 type PaymentGroupProps = {
+  accounts?: PaymentAccountOption[]
   ctx: CrudFormGroupComponentProps
   payment: PaymentValue
   onChange: (payment: PaymentValue) => void
@@ -396,6 +408,7 @@ function PaymentGroup({
   disabled,
   dueTouched,
   lastAutoDue,
+  accounts,
 }: PaymentGroupProps) {
   const issueDate = formString(ctx.values.issueDate)
   const dueDate = formString(ctx.values.dueDate)
@@ -419,6 +432,7 @@ function PaymentGroup({
         if (next.termDays !== payment.termDays) deriveDue(next.termDays)
       }}
       disabled={disabled}
+      accounts={accounts}
     />
   )
 }
@@ -480,6 +494,7 @@ function InvoiceTabs({
   }
   const hasOrderId = orderIdValue.trim().length > 0
   const hasNotes = notesValue.trim().length > 0
+  const [revealedNoteFields, setRevealedNoteFields] = React.useState<string[]>([])
   // The "section has data" cue is rendered inside the trigger CHILDREN (not the DS
   // `count` prop) so it renders robustly across @open-mercato/ui Tabs versions: the
   // sandbox runtime's Tabs did not render a count-only badge (verified live in preview),
@@ -506,7 +521,11 @@ function InvoiceTabs({
   // tab bar entirely, so the invoice's own number and dates looked like they belonged to no tab.
   if (part === 'bar') {
     return (
-      <div className="flex flex-col gap-4">
+      // PADDING, not margin: the group stack is block flow with `space-y-3`, so a bottom margin
+      // here would simply collapse against the next group's top margin and add nothing. The rail
+      // separates navigation from the content it switches, so it earns more air than two sibling
+      // cards get between them.
+      <div className="flex flex-col gap-4 pb-3">
         <DateDerivationEffect
           ctx={ctx}
           payment={value.payment}
@@ -625,6 +644,46 @@ function InvoiceTabs({
               aria-invalid={Boolean(ctx.errors?.notes)}
             />
             {ctx.errors?.notes ? <p className="text-sm text-destructive">{ctx.errors.notes}</p> : null}
+
+            {/* Optional annotations, revealed on demand: most invoices carry neither, and two more
+                permanently-empty inputs would just be two more things to scroll past. */}
+            <div className="flex flex-wrap gap-2">
+              {OPTIONAL_NOTE_FIELDS.map((field) => {
+                const value = typeof ctx.values[field.id] === 'string' ? (ctx.values[field.id] as string) : ''
+                if (value || revealedNoteFields.includes(field.id)) return null
+                return (
+                  <Button
+                    key={field.id}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={readOnly}
+                    onClick={() => setRevealedNoteFields((prev) => [...prev, field.id])}
+                  >
+                    <Plus className="mr-1 size-4" />
+                    {t(field.labelKey, field.fallback)}
+                  </Button>
+                )
+              })}
+            </div>
+
+            {OPTIONAL_NOTE_FIELDS.map((field) => {
+              const value = typeof ctx.values[field.id] === 'string' ? (ctx.values[field.id] as string) : ''
+              if (!value && !revealedNoteFields.includes(field.id)) return null
+              return (
+                <div key={field.id} className="flex flex-col gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor={`financial_pl-${field.id}`}>
+                    {t(field.labelKey, field.fallback)}
+                  </label>
+                  <Input
+                    id={`financial_pl-${field.id}`}
+                    value={value}
+                    disabled={readOnly}
+                    onChange={(event) => ctx.setValue(field.id, event.target.value)}
+                  />
+                </div>
+              )
+            })}
           </FormSection>
           <FormSection
             icon={<PenLine className="size-4" />}
@@ -954,34 +1013,9 @@ const DUE_DATE_TERM_DAYS = [7, 14, 30] as const
  */
 const loadCurrencySuggestions = async (query?: string) => searchCurrencies(query)
 
-/** Card shell shared by every section of the invoice form, so the headers stop drifting apart. */
-function FormSection({
-  icon,
-  title,
-  className,
-  children,
-}: {
-  icon: React.ReactNode
-  title: string
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className={`overflow-hidden rounded-lg border bg-card ${className ?? ''}`}>
-      <header className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2.5">
-        <span aria-hidden="true" className="text-muted-foreground">
-          {icon}
-        </span>
-        <h3 className="text-[15px] font-semibold leading-none text-foreground">{title}</h3>
-      </header>
-      <div className="space-y-3 p-4">{children}</div>
-    </section>
-  )
-}
-
 /**
  * The provisional next invoice number, or null. Create mode only: on an existing invoice the number
- * is already assigned, and on a failed/abandoned form nothing is consumed — the endpoint reads the
+ * is already assigned, and nothing is consumed on an abandoned form — the endpoint reads the
  * sequence rather than claiming it.
  */
 function useNextInvoiceNumber(enabled: boolean): string | null {
@@ -1229,6 +1263,9 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
    */
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const suggestedNumber = useNextInvoiceNumber(!isEdit && !readOnly)
+  const invoiceSettings = useInvoiceSettings()
+  const bankAccounts: PaymentAccountOption[] = invoiceSettings?.bankAccounts ?? []
+
 
   // Submit-failure summary. `CrudForm` does render the thrown message, but only in a plain div at
   // the very bottom of the form — on this form that lands ~1900px down, so on a failed save nothing
@@ -1347,6 +1384,45 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   const setPayment = React.useCallback((payment: PaymentValue) => {
     setValue((prev) => ({ ...prev, payment }))
   }, [])
+  // Defaults apply ONCE, and only while creating: settings arrive asynchronously, so overwriting a
+  // field the operator is already typing into would be worse than having no default at all.
+  const defaultsAppliedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (isEdit || readOnly || !invoiceSettings || defaultsAppliedRef.current) return
+    defaultsAppliedRef.current = true
+    const defaultAccount =
+      invoiceSettings.bankAccounts?.find((account) => account.isDefault) ??
+      invoiceSettings.bankAccounts?.[0] ??
+      null
+    setValue((prev) => {
+      const payment: PaymentValue = { ...prev.payment }
+      if (invoiceSettings.defaultPaymentMethod) {
+        payment.method = invoiceSettings.defaultPaymentMethod as PaymentValue['method']
+      }
+      if (invoiceSettings.defaultTermDays != null) payment.termDays = invoiceSettings.defaultTermDays
+      if (defaultAccount && !(payment.bankAccount ?? '').trim() && payment.method === 'transfer') {
+        payment.bankAccount = defaultAccount.accountNumber
+        payment.bankName = defaultAccount.bankName ?? ''
+        payment.swift = defaultAccount.swift ?? ''
+      }
+      const priceMode: PriceMode =
+        invoiceSettings.defaultPriceMode === 'gross' || invoiceSettings.defaultPriceMode === 'net'
+          ? invoiceSettings.defaultPriceMode
+          : prev.priceMode
+      const taxRate = invoiceSettings.defaultTaxRate
+      return {
+        ...prev,
+        payment,
+        priceMode: prev.meta.marginScheme ? 'gross' : priceMode,
+        // Only the starter line: a default rate is a starting point, not a correction to lines the
+        // operator has already filled in.
+        lines: taxRate
+          ? prev.lines.map((line, index) => (index === 0 && !line.name.trim() ? { ...line, taxRate } : line))
+          : prev.lines,
+      }
+    })
+  }, [invoiceSettings, isEdit, readOnly])
+
   const saveAsDraftRef = React.useRef(false)
 
   const setPriceMode = React.useCallback((priceMode: PriceMode) => {
@@ -1358,6 +1434,8 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   // payload reflects the latest edits without depending on async state propagation.
   const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues & {
     notes?: string
+    contractNumber?: string
+    transportTerms?: string
     signatureMode?: string
     issuerSignatory?: string
     recipientSignatory?: string
@@ -1545,6 +1623,13 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     const notes = (header.notes ?? '').trim()
     if (notes) mergedMetadata.notes = notes
     else delete mergedMetadata.notes
+    const contractNumber = (header.contractNumber ?? '').trim()
+    if (contractNumber) mergedMetadata.contractNumber = contractNumber
+    else delete mergedMetadata.contractNumber
+    const transportTerms = (header.transportTerms ?? '').trim()
+    if (transportTerms) mergedMetadata.transportTerms = transportTerms
+    else delete mergedMetadata.transportTerms
+
     const signatureMode = isSignatureMode(header.signatureMode) ? header.signatureMode : DEFAULT_SIGNATURE_MODE
     const issuerSignatory = (header.issuerSignatory ?? '').trim()
     const recipientSignatory = (header.recipientSignatory ?? '').trim()
@@ -1760,6 +1845,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
               </FormSection>
               <FormSection icon={<Wallet className="size-4" />} title={t('financial_pl.invoices.form.sections.payment', 'Payment / settlement')}>
                 <PaymentGroup
+                  accounts={bankAccounts}
                   ctx={ctx}
                   payment={value.payment}
                   onChange={setPayment}
@@ -1820,6 +1906,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     setPriceMode,
     fieldErrors,
     suggestedNumber,
+    bankAccounts,
     t,
     value,
   ])
@@ -1881,7 +1968,24 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
         formId={INVOICE_FORM_ID}
         hideFooterActions
         extraActions={
+          /*
+            Ordered by what each control does, not by what was added when. Looking at the document
+            comes first and is ruled off from everything that writes; the KSeF switch is a modifier
+            on the primary action, so it sits inside the commit cluster next to it rather than
+            floating between two unrelated buttons.
+          */
           <>
+            {headerActions}
+            {!isEdit && !readOnly ? (
+              <Separator orientation="vertical" className="mx-1 h-6" />
+            ) : null}
+            {!isEdit && !readOnly ? (
+              <SwitchField
+                label={t('financial_pl.invoices.form.sendToKsefOnCreate', 'Send to KSeF')}
+                checked={sendToKsef}
+                onCheckedChange={(next) => setSendToKsef(Boolean(next))}
+              />
+            ) : null}
             {!isEdit && !readOnly ? (
               <Button
                 type="submit"
@@ -1894,14 +1998,6 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
                 {t('financial_pl.invoices.form.saveDraft', 'Save draft')}
               </Button>
             ) : null}
-            {!isEdit && !readOnly ? (
-              <SwitchField
-                label={t('financial_pl.invoices.form.sendToKsefOnCreate', 'Send to KSeF after saving')}
-                checked={sendToKsef}
-                onCheckedChange={(next) => setSendToKsef(Boolean(next))}
-              />
-            ) : null}
-            {headerActions}
           </>
         }
         backHref="/backend/financial/invoices"
@@ -1959,6 +2055,8 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
             placeholder: t('financial_pl.invoices.form.fields.currencyPlaceholder', 'Search currency (e.g. PLN, EUR)…'),
             loadOptions: async (query?: string) => searchCurrencies(query),
           },
+          { id: 'contractNumber', label: 'contractNumber', type: 'text' },
+          { id: 'transportTerms', label: 'transportTerms', type: 'text' },
           { id: 'signatureMode', label: 'signatureMode', type: 'text' },
           { id: 'issuerSignatory', label: 'issuerSignatory', type: 'text' },
           { id: 'recipientSignatory', label: 'recipientSignatory', type: 'text' },

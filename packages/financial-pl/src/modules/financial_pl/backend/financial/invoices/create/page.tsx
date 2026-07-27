@@ -20,6 +20,7 @@ import {
 } from '../[id]/edit/InvoiceForm'
 import { InvoiceDocumentPreview } from '../../../../components/InvoiceDocumentPreview'
 import { PAYMENT_METHODS } from '../../../../components/PaymentFields'
+import { useInvoiceSettings } from '../../../../components/useInvoiceSettings'
 
 /**
  * Create-invoice page (SPEC-013). Renders the shared {@link InvoiceForm} in create mode, with the
@@ -41,6 +42,9 @@ export default function CreateInvoicePage() {
   // so it moved into a drawer — the form gets the full width, and the preview gets more room than
   // the sidebar ever gave it.
   const [previewOpen, setPreviewOpen] = React.useState(false)
+  // The logo and footer live in invoice settings and print on the document, so the preview has to
+  // read them too — otherwise the settings screen promises something the preview never shows.
+  const invoiceSettings = useInvoiceSettings()
 
   const paymentMethodLabel = React.useMemo(() => {
     const method = snapshot?.payment?.method
@@ -82,6 +86,8 @@ export default function CreateInvoicePage() {
             </DrawerHeader>
             <DrawerBody className="pb-6">
               <InvoiceDocumentPreview
+                logoDataUrl={invoiceSettings?.logoDataUrl ?? null}
+                footerNote={invoiceSettings?.footerNote ?? null}
                 invoiceNumber={snapshot?.invoiceNumber ?? null}
                 invoiceNumberProvisional={snapshot?.invoiceNumberProvisional}
                 seller={null}

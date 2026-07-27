@@ -11,9 +11,6 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { isValidBankAccount, normalizeAccountNumber } from '../lib/bank-account'
-import { lookupPolishBank } from '../lib/pl-bank-registry'
-import { isValidSwift } from '../lib/pl-format'
 import { IsoDatePicker } from './IsoDatePicker'
 
 export const PAYMENT_METHODS = [
@@ -40,16 +37,29 @@ export type PaymentValue = {
   paidDate?: string
 }
 
+/** A settlement account configured in invoice settings, offered as a pick here. */
+export type PaymentAccountOption = {
+  id: string
+  label?: string | null
+  accountNumber: string
+  bankName?: string | null
+  swift?: string | null
+  isDefault?: boolean
+}
+
 export type PaymentFieldsProps = {
   value: PaymentValue
   onChange: (v: PaymentValue) => void
   disabled?: boolean
+  /** Accounts from invoice settings. Empty ⇒ the picker is hidden and the number is typed. */
+  accounts?: PaymentAccountOption[]
 }
 
 // Matches the field-label style used across the invoice form (PlVatMetaForm, CrudForm builtins).
 // These were 12px muted while the section above them used 14px foreground, so the same form showed
 // two different label treatments depending on which component rendered the field.
 const labelClass = 'text-sm font-medium text-foreground'
+const LEGACY_ACCOUNT_ID = '__stored__'
 
 function optionalNumber(raw: string): number | undefined {
   if (!raw.trim()) return undefined
@@ -57,19 +67,35 @@ function optionalNumber(raw: string): number | undefined {
   return Number.isFinite(next) ? next : undefined
 }
 
-export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps) {
+export function PaymentFields({ value, onChange, disabled, accounts }: PaymentFieldsProps) {
   const t = useT()
   const busy = Boolean(disabled)
-  const manualBankFieldsRef = React.useRef<Set<'bankName' | 'swift'>>(new Set())
-  const bankAccountRaw = (value.bankAccount ?? '').trim()
-  const bankAccountInvalid = bankAccountRaw.length > 0 && !isValidBankAccount(bankAccountRaw)
-  const swiftRaw = (value.swift ?? '').trim()
-  const swiftInvalid = swiftRaw.length > 0 && !isValidSwift(swiftRaw)
 
   const patch = React.useCallback(
     (next: Partial<PaymentValue>) => onChange({ ...value, ...next }),
     [onChange, value],
   )
+
+  const storedAccount = (value.bankAccount ?? '').trim()
+  const options = React.useMemo<PaymentAccountOption[]>(() => {
+    const configured = accounts ?? []
+    if (!storedAccount) return configured
+    if (configured.some((account) => account.accountNumber.trim() === storedAccount)) return configured
+    // An account removed from settings after the invoice was written still has to be selectable,
+    // otherwise opening that invoice would silently clear its account number.
+    return [
+      ...configured,
+      {
+        id: LEGACY_ACCOUNT_ID,
+        label: `${storedAccount}${value.bankName ? ` (${value.bankName})` : ''}`,
+        accountNumber: storedAccount,
+        bankName: value.bankName ?? null,
+        swift: value.swift ?? null,
+      },
+    ]
+  }, [accounts, storedAccount, value.bankName, value.swift])
+  const selectedAccount = options.find((account) => account.accountNumber.trim() === storedAccount) ?? null
+  const selectedAccountId = selectedAccount?.id ?? null
 
   const updateMethod = React.useCallback(
     (method: PaymentMethod) => {
@@ -78,7 +104,6 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
         delete next.bankAccount
         delete next.bankName
         delete next.swift
-        manualBankFieldsRef.current.clear()
       }
       onChange(next)
     },
@@ -116,108 +141,61 @@ export function PaymentFields({ value, onChange, disabled }: PaymentFieldsProps)
           is the one that actually prints on the invoice. `termDays` stays in the model (it seeds the
           due-date derivation) but is no longer asked for twice.
         */}
-        {value.method === 'transfer' ? (
-    <div className="flex flex-col gap-2">
-      <label className={labelClass} htmlFor="financial_pl-payment-swift">
-        {t('financial_pl.invoices.form.payment.swift', 'SWIFT/BIC')}
-      </label>
-      <Input
-        id="financial_pl-payment-swift"
-        value={value.swift ?? ''}
-        disabled={busy}
-        aria-invalid={swiftInvalid || undefined}
-        onChange={(event) => {
-          manualBankFieldsRef.current.add('swift')
-          patch({ swift: event.target.value.toUpperCase() })
-        }}
-      />
-      {swiftInvalid ? (
-        <span className="text-xs text-status-error-text">
-          {t('financial_pl.validation.swift', 'Enter a valid SWIFT/BIC (8 or 11 characters).')}
-        </span>
-      ) : null}
-    </div>
-        ) : null}
       </div>
 
-      {value.method === 'other' ? (
-        <div className="flex flex-col gap-2">
-          <label className={labelClass} htmlFor="financial_pl-payment-method-other">
-            {t('financial_pl.invoices.form.payment.methodOther', 'Other payment method')}
-            <span aria-hidden="true"> *</span>
-          </label>
-          <Input
-            id="financial_pl-payment-method-other"
-            value={value.methodOther ?? ''}
-            disabled={busy}
-            // No native `required`: SPEC-018 keeps tab panels mounted, so this control can be
-            // hidden (display:none) on an inactive tab — a blank native-required control under
-            // display:none silently blocks form submission ("not focusable"). The invoice form
-            // gates this in handleSubmit (other⇒methodOther) and routes to the Faktura tab;
-            // `aria-required` keeps the a11y semantics without native validation.
-            aria-required="true"
-            onChange={(event) => patch({ methodOther: event.target.value })}
-            placeholder={t(
-              'financial_pl.invoices.form.payment.methodOtherPlaceholder',
-              'Describe the payment method',
-            )}
-          />
-        </div>
-      ) : null}
-
       {value.method === 'transfer' ? (
-        // The account number spans the row: an IBAN is 28+ characters and was being truncated into
-        // a third of the width, while the bank name and SWIFT beside it are short.
-        <div className="grid grid-cols-1 gap-4">
-          <div className="flex flex-col gap-2">
-            <label className={labelClass} htmlFor="financial_pl-payment-bank-account">
-              {t('financial_pl.invoices.form.payment.bankAccount', 'Bank account')}
-            </label>
-            <Input
-              id="financial_pl-payment-bank-account"
-              value={value.bankAccount ?? ''}
+        // Pick-only on the invoice: the account number is defined once in invoice settings and
+        // chosen here. Free entry let a typo reach the printed document, and every one-off account
+        // typed in silently disappeared instead of becoming reusable.
+        <div className="flex flex-col gap-2">
+          <label className={labelClass} htmlFor="financial_pl-payment-account-pick">
+            {t('financial_pl.invoices.form.payment.accountPick', 'Account')}
+          </label>
+          {options.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t(
+                'financial_pl.invoices.form.payment.noAccounts',
+                'No bank accounts configured yet — add one in invoice settings.',
+              )}{' '}
+              <a className="underline" href="/backend/financial/invoice-settings">
+                {t('financial_pl.nav.invoiceSettings', 'Invoice settings')}
+              </a>
+            </p>
+          ) : (
+            <Select
+              value={selectedAccountId ?? ''}
               disabled={busy}
-              aria-invalid={bankAccountInvalid || undefined}
-              onChange={(event) => {
-                const nextAccount = event.target.value
-                const info = lookupPolishBank(normalizeAccountNumber(nextAccount))
-                const patchObj: Partial<PaymentValue> = { bankAccount: nextAccount }
-                // Auto-fill bank name / SWIFT from the account. Track the CURRENT account: refresh any
-                // field the operator has NOT manually edited (so switching to a different recognized
-                // bank updates it — code-jury Codex), and never clobber a manually-typed value. An
-                // unrecognized/incomplete account leaves prior values untouched (no clear-flicker while
-                // typing, and a manual/foreign entry is preserved).
-                if (info) {
-                  if (!manualBankFieldsRef.current.has('bankName')) patchObj.bankName = info.name
-                  if (!manualBankFieldsRef.current.has('swift')) patchObj.swift = info.swift
-                }
-                patch(patchObj)
+              onValueChange={(next) => {
+                const picked = options.find((account) => account.id === next)
+                if (!picked) return
+                patch({
+                  bankAccount: picked.accountNumber,
+                  bankName: picked.bankName ?? '',
+                  swift: picked.swift ?? '',
+                })
               }}
-              placeholder="PL00 0000 0000 0000 0000 0000 0000"
-            />
-            {bankAccountInvalid ? (
-              <span className="text-xs text-status-error-text">
-                {t(
-                  'financial_pl.validation.bankAccount',
-                  'Enter a valid IBAN or 26-digit Polish account number (NRB).',
-                )}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex flex-col gap-2">
-            <label className={labelClass} htmlFor="financial_pl-payment-bank-name">
-              {t('financial_pl.invoices.form.payment.bankName', 'Bank name')}
-            </label>
-            <Input
-              id="financial_pl-payment-bank-name"
-              value={value.bankName ?? ''}
-              disabled={busy}
-              onChange={(event) => {
-                manualBankFieldsRef.current.add('bankName')
-                patch({ bankName: event.target.value })
-              }}
-            />
-          </div>
+            >
+              <SelectTrigger id="financial_pl-payment-account-pick" className="w-full">
+                <SelectValue
+                  placeholder={t('financial_pl.invoices.form.payment.accountPlaceholder', 'Choose an account')}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.label?.trim() || account.accountNumber}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {selectedAccount ? (
+            <span className="text-xs text-muted-foreground">
+              {[selectedAccount.accountNumber, selectedAccount.bankName, selectedAccount.swift]
+                .filter((part) => (part ?? '').toString().trim().length > 0)
+                .join(', ')}
+            </span>
+          ) : null}
         </div>
       ) : null}
 

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from 'react'
-import type { ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { FileCog, Plus, Send } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -9,6 +9,7 @@ import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Label } from '@open-mercato/ui/primitives/label'
+import { FormSection } from '../../../components/FormSection'
 import {
   Select,
   SelectContent,
@@ -16,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
-import { Card, CardContent, CardHeader, CardTitle } from '@open-mercato/ui/primitives/card'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   Dialog,
@@ -87,7 +87,7 @@ const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
 const filingStatusMap: StatusMap<'draft' | 'generated' | 'submitted' | 'accepted' | 'rejected'> = {
   draft: 'neutral',
   generated: 'info',
-  submitted: 'warning',
+  submitted: 'info',
   accepted: 'success',
   rejected: 'error',
 }
@@ -169,6 +169,16 @@ export default function FinancialPlJpkPage() {
     [currentYear],
   )
   const [addOpen, setAddOpen] = React.useState(false)
+  const [filingsSorting, setFilingsSorting] = React.useState<SortingState>([{ id: 'period', desc: true }])
+  const [recordsSorting, setRecordsSorting] = React.useState<SortingState>([{ id: 'period', desc: true }])
+  const handleFilingsSortingChange = React.useCallback((next: SortingState) => {
+    setFilingsSorting(next)
+    setFilingsPage(1)
+  }, [])
+  const handleRecordsSortingChange = React.useCallback((next: SortingState) => {
+    setRecordsSorting(next)
+    setRecordsPage(1)
+  }, [])
   const [recordForm, setRecordForm] = React.useState(emptyRecordForm)
 
   const [reloadToken, setReloadToken] = React.useState(0)
@@ -188,6 +198,11 @@ export default function FinancialPlJpkPage() {
     setFilingsError(null)
     try {
       const params = new URLSearchParams({ page: String(filingsPage), pageSize: String(PAGE_SIZE) })
+      const activeSort = filingsSorting[0]
+      if (activeSort) {
+        params.set('sortField', activeSort.id)
+        params.set('sortDir', activeSort.desc ? 'desc' : 'asc')
+      }
       const call = await apiCall<FilingResponse>(`/api/financial_pl/ksef/jpk/filings?${params.toString()}`)
       if (!call.ok) {
         setFilingsError(t('financial_pl.jpk.filings.errors.load', 'Failed to load JPK filings.'))
@@ -218,13 +233,18 @@ export default function FinancialPlJpkPage() {
     } finally {
       setFilingsLoading(false)
     }
-  }, [currentYear, filingsPage, t])
+  }, [currentYear, filingsPage, filingsSorting, t])
 
   const loadRecords = React.useCallback(async () => {
     setRecordsLoading(true)
     setRecordsError(null)
     try {
       const params = new URLSearchParams({ page: String(recordsPage), pageSize: String(PAGE_SIZE) })
+      const activeSort = recordsSorting[0]
+      if (activeSort) {
+        params.set('sortField', activeSort.id)
+        params.set('sortDir', activeSort.desc ? 'desc' : 'asc')
+      }
       const call = await apiCall<PurchaseRecordResponse>(`/api/financial_pl/ksef/jpk/purchase-records?${params.toString()}`)
       if (!call.ok) {
         setRecordsError(t('financial_pl.jpk.purchaseRecords.errors.load', 'Failed to load purchase records.'))
@@ -331,6 +351,33 @@ export default function FinancialPlJpkPage() {
 
   // Download streams the already-generated XML — window.open the GET endpoint. A draft filing
   // has no XML yet (the GET would 422), so prompt the operator to generate it first.
+  const [generatingFilingId, setGeneratingFilingId] = React.useState<string | null>(null)
+
+  const handleGenerateXml = React.useCallback(
+    async (row: FilingRow) => {
+      setGeneratingFilingId(row.id)
+      try {
+        // The route reads `filingId` from the QUERY STRING, not the body (same contract as its GET).
+        const call = await apiCall<{ ok?: boolean; status?: string; error?: string }>(
+          `/api/financial_pl/ksef/jpk/export?filingId=${encodeURIComponent(row.id)}`,
+          { method: 'POST' },
+        )
+        if (!call.ok) {
+          flash(
+            call.result?.error ?? t('financial_pl.jpk.filings.errors.generateFailed', 'Could not generate the filing.'),
+            'error',
+          )
+          return
+        }
+        flash(t('financial_pl.jpk.filings.generated', 'Filing generated.'), 'success')
+        refresh()
+      } finally {
+        setGeneratingFilingId(null)
+      }
+    },
+    [refresh, t],
+  )
+
   const handleDownload = React.useCallback(
     (row: FilingRow) => {
       if (typeof window === 'undefined') return
@@ -404,7 +451,6 @@ export default function FinancialPlJpkPage() {
         id: 'status',
         accessorKey: 'status',
         header: t('financial_pl.jpk.filings.table.status', 'Status'),
-        enableSorting: false,
         cell: ({ row }) => (
           <StatusBadge variant={statusVariant(row.original.status)} dot>
             {t(`financial_pl.jpk.filings.status.${row.original.status}`, row.original.status)}
@@ -428,13 +474,10 @@ export default function FinancialPlJpkPage() {
           if (filing.status === 'submitted') {
             return (
               <div className="flex flex-col items-start gap-1.5">
-                <StatusBadge variant="success" dot>
-                  {t('financial_pl.jpkSubmit.submitted', 'Submitted')}
-                </StatusBadge>
                 {filing.submissionReference ? (
                   <span className="font-mono text-xs text-muted-foreground">{filing.submissionReference}</span>
                 ) : null}
-                <Tag variant={filing.hasUpo ? 'success' : 'warning'} dot>
+                <Tag variant={filing.hasUpo ? 'success' : 'neutral'} dot>
                   {filing.hasUpo
                     ? t('financial_pl.jpkSubmit.upoAvailable', 'UPO available')
                     : t('financial_pl.jpkSubmit.upoPending', 'UPO pending')}
@@ -486,7 +529,6 @@ export default function FinancialPlJpkPage() {
         id: 'supplier',
         accessorKey: 'supplierName',
         header: t('financial_pl.jpk.purchaseRecords.table.supplier', 'Supplier'),
-        enableSorting: false,
         cell: ({ row }) => (
           <div className="flex flex-col">
             <span className="text-sm">{row.original.supplierName ?? '—'}</span>
@@ -630,13 +672,14 @@ export default function FinancialPlJpkPage() {
             </p>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('financial_pl.jpk.generate.title', 'Generate filing')}</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <FormSection
+            icon={<FileCog className="size-4" />}
+            title={t('financial_pl.jpk.generate.title', 'Generate filing')}
+            className="mx-1 sm:mx-2"
+            bodyClassName="p-4"
+          >
               <div className="flex flex-wrap items-end gap-4">
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="jpk-variant">{t('financial_pl.jpk.generate.variant', 'Variant')}</Label>
                   <Select value={variant} onValueChange={(value) => setVariant(value as JpkVariant)}>
                     <SelectTrigger id="jpk-variant" className="w-40">
@@ -651,7 +694,7 @@ export default function FinancialPlJpkPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="jpk-year">{t('financial_pl.jpk.generate.year', 'Year')}</Label>
                   <Input
                     id="jpk-year"
@@ -663,7 +706,7 @@ export default function FinancialPlJpkPage() {
                     onChange={(e) => setYear(Number(e.target.value) || currentYear)}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="jpk-month">{t('financial_pl.jpk.generate.month', 'Month')}</Label>
                   <Select value={String(month)} onValueChange={(value) => setMonth(Number(value) || 1)}>
                     <SelectTrigger id="jpk-month" className="w-32">
@@ -678,7 +721,7 @@ export default function FinancialPlJpkPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="jpk-kod-urzedu">{t('financial_pl.jpk.generate.kodUrzedu', 'Tax office code')}</Label>
                   <Input
                     id="jpk-kod-urzedu"
@@ -690,7 +733,7 @@ export default function FinancialPlJpkPage() {
                     onChange={(e) => setKodUrzedu(e.target.value)}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="jpk-context-nip">{t('financial_pl.jpk.generate.contextNip', 'Context NIP (optional)')}</Label>
                   <Input
                     id="jpk-context-nip"
@@ -705,8 +748,7 @@ export default function FinancialPlJpkPage() {
                   {t('financial_pl.jpk.generate.action', 'Generate')}
                 </Button>
               </div>
-            </CardContent>
-          </Card>
+          </FormSection>
 
           <div className="flex flex-col gap-3">
             {filingsError ? (
@@ -717,6 +759,10 @@ export default function FinancialPlJpkPage() {
                 title={t('financial_pl.jpk.filings.title', 'Filings')}
                 columns={filingColumns}
                 data={filings}
+                sortable
+                manualSorting
+                sorting={filingsSorting}
+                onSortingChange={handleFilingsSortingChange}
                 isLoading={filingsLoading}
                 pagination={{
                   page: filingsPage,
@@ -733,6 +779,16 @@ export default function FinancialPlJpkPage() {
                 rowActions={(row) => (
                   <RowActions
                     items={[
+                      ...(row.status === 'draft'
+                        ? [{
+                            id: 'generate',
+                            label:
+                              generatingFilingId === row.id
+                                ? t('financial_pl.jpk.filings.actions.generating', 'Generating…')
+                                : t('financial_pl.jpk.filings.actions.generate', 'Generate XML'),
+                            onSelect: () => void handleGenerateXml(row),
+                          }]
+                        : []),
                       {
                         id: 'download',
                         label: t('financial_pl.jpk.filings.actions.download', 'Download XML'),
@@ -757,6 +813,10 @@ export default function FinancialPlJpkPage() {
               <DataTable<PurchaseRecordRow>
                 stickyActionsColumn
                 title={t('financial_pl.jpk.purchaseRecords.title', 'Purchase records')}
+                sortable
+                manualSorting
+                sorting={recordsSorting}
+                onSortingChange={handleRecordsSortingChange}
                 actions={
                   <Button variant="secondary" onClick={openAddDialog}>
                     <Plus className="h-4 w-4" aria-hidden />
@@ -812,7 +872,7 @@ export default function FinancialPlJpkPage() {
             <DialogTitle>{t('financial_pl.jpk.purchaseRecords.add.title', 'Add purchase record')}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-2">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-year">{t('financial_pl.jpk.purchaseRecords.form.year', 'Year')}</Label>
               <Input
                 id="rec-year"
@@ -823,7 +883,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(e) => updateRecordForm('year', e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-month">{t('financial_pl.jpk.purchaseRecords.form.month', 'Month')}</Label>
               <Select value={recordForm.month} onValueChange={(value) => updateRecordForm('month', value)}>
                 <SelectTrigger id="rec-month">
@@ -838,7 +898,7 @@ export default function FinancialPlJpkPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-document">{t('financial_pl.jpk.purchaseRecords.form.documentNumber', 'Document number')}</Label>
               <Input
                 id="rec-document"
@@ -846,7 +906,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(e) => updateRecordForm('documentNumber', e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-date">{t('financial_pl.jpk.purchaseRecords.form.purchaseDate', 'Purchase date')}</Label>
               <IsoDatePicker
                 id="rec-date"
@@ -854,7 +914,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(next) => updateRecordForm('purchaseDate', next)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-nip">{t('financial_pl.jpk.purchaseRecords.form.supplierNip', 'Supplier NIP')}</Label>
               <Input
                 id="rec-nip"
@@ -863,7 +923,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(e) => updateRecordForm('supplierNip', e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-supplier">{t('financial_pl.jpk.purchaseRecords.form.supplierName', 'Supplier name')}</Label>
               <Input
                 id="rec-supplier"
@@ -871,7 +931,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(e) => updateRecordForm('supplierName', e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-net">{t('financial_pl.jpk.purchaseRecords.form.net', 'Net (other)')}</Label>
               <Input
                 id="rec-net"
@@ -880,7 +940,7 @@ export default function FinancialPlJpkPage() {
                 onChange={(e) => updateRecordForm('netOther', e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="rec-vat">{t('financial_pl.jpk.purchaseRecords.form.vat', 'VAT (other)')}</Label>
               <Input
                 id="rec-vat"

@@ -7,7 +7,7 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
-import { InvoiceSettings } from '../../data/entities'
+import { InvoiceSettings, type InvoiceBankAccount } from '../../data/entities'
 import { invoiceSettingsPutSchema } from '../../data/validators'
 
 export const metadata = {
@@ -23,8 +23,7 @@ const EMPTY_SETTINGS = {
   defaultTaxRate: null as string | null,
   defaultCurrencyCode: null as string | null,
   defaultPriceMode: null as string | null,
-  defaultBankAccount: null as string | null,
-  defaultBankName: null as string | null,
+  bankAccounts: [] as InvoiceBankAccount[],
 }
 
 function toDto(row: InvoiceSettings | null) {
@@ -37,8 +36,7 @@ function toDto(row: InvoiceSettings | null) {
     defaultTaxRate: row.defaultTaxRate ?? null,
     defaultCurrencyCode: row.defaultCurrencyCode ?? null,
     defaultPriceMode: row.defaultPriceMode ?? null,
-    defaultBankAccount: row.defaultBankAccount ?? null,
-    defaultBankName: row.defaultBankName ?? null,
+    bankAccounts: row.bankAccounts ?? [],
   }
 }
 
@@ -97,8 +95,18 @@ export async function PUT(req: Request) {
     if (parsed.defaultTaxRate !== undefined) row.defaultTaxRate = parsed.defaultTaxRate
     if (parsed.defaultCurrencyCode !== undefined) row.defaultCurrencyCode = parsed.defaultCurrencyCode
     if (parsed.defaultPriceMode !== undefined) row.defaultPriceMode = parsed.defaultPriceMode
-    if (parsed.defaultBankAccount !== undefined) row.defaultBankAccount = parsed.defaultBankAccount
-    if (parsed.defaultBankName !== undefined) row.defaultBankName = parsed.defaultBankName
+    if (parsed.bankAccounts !== undefined) {
+      const accounts = parsed.bankAccounts ?? []
+      // Exactly one default, decided server-side: two defaults (or none, with accounts present)
+      // would leave the create form guessing which account to prefill.
+      const firstDefault = accounts.findIndex((account) => account.isDefault)
+      const defaultIndex = firstDefault >= 0 ? firstDefault : accounts.length > 0 ? 0 : -1
+      row.bankAccounts = accounts.map((account, index) => ({
+        ...account,
+        accountNumber: account.accountNumber.trim(),
+        isDefault: index === defaultIndex,
+      }))
+    }
     await em.flush()
     return NextResponse.json({ ok: true, settings: toDto(row) })
   } catch (err) {
@@ -119,8 +127,16 @@ const settingsSchema = z.object({
   defaultTaxRate: z.string().nullable(),
   defaultCurrencyCode: z.string().nullable(),
   defaultPriceMode: z.string().nullable(),
-  defaultBankAccount: z.string().nullable(),
-  defaultBankName: z.string().nullable(),
+  bankAccounts: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string().nullable().optional(),
+      accountNumber: z.string(),
+      bankName: z.string().nullable().optional(),
+      swift: z.string().nullable().optional(),
+      isDefault: z.boolean().optional(),
+    }),
+  ),
 })
 
 export const openApi: OpenApiRouteDoc = {

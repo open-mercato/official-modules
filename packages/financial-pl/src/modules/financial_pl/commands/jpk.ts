@@ -433,11 +433,23 @@ export const generateCommand: CommandHandler<JpkGenerateInput, { filingId: strin
       undefined,
       scope,
     )
-    if (!filing) throw new CrudHttpError(404, { error: '[internal] JPK filing not found' })
+    if (!filing) {
+      throw new CrudHttpError(404, {
+        error: translate(
+          'financial_pl.errors.jpk_filing_not_found',
+          'This JPK filing is not available in the selected organization.',
+        ),
+      })
+    }
     // A filing already submitted to the Ministry must not be silently regenerated/clobbered
     // (a terminal state). Fail loud rather than overwrite the filed XML + status.
     if (filing.status === 'submitted') {
-      throw new CrudHttpError(409, { error: '[internal] a submitted JPK filing cannot be regenerated' })
+      throw new CrudHttpError(409, {
+        error: translate(
+          'financial_pl.errors.jpk_filing_submitted',
+          'A JPK filing that has been submitted cannot be regenerated.',
+        ),
+      })
     }
 
     const credentials = await readKsefCredentials(ctx, scope)

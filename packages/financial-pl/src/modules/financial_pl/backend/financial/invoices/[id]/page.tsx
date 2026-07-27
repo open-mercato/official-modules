@@ -29,6 +29,7 @@ import { KsefStatusBadge } from '../../../../components/KsefStatusBadge'
 import { KsefActions } from '../../../../components/KsefActions'
 import { CorrectionForm } from '../../../../components/CorrectionForm'
 import { InvoiceDocumentPreview } from '../../../../components/InvoiceDocumentPreview'
+import { useInvoiceSettings } from '../../../../components/useInvoiceSettings'
 import { PlVatMetaForm, type InvoiceMeta, type ProcedureMarkings } from '../../../../components/PlVatMetaForm'
 import type { InvoiceLineInput } from '../../../../components/InvoiceLinesField'
 import { buyerFromMetadata } from '../../../../components/BuyerFields'
@@ -374,6 +375,9 @@ function SectionCard({
 
 export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  // Logo + footer come from invoice settings, not from the invoice: they are how this seller's
+  // documents look, and must match what the create preview showed.
+  const invoiceSettings = useInvoiceSettings()
   // This app renders backend pages via a `/[...slug]` catch-all that passes the resolved route
   // segment as a synchronous `params` prop (mirrors core `sales/.../[id]/page.tsx`). `useParams()`
   // would return the raw slug array here, not `{ id }`, so read the prop directly.
@@ -612,6 +616,8 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
               the system rather than a set of admin cards.
             */}
             <InvoiceDocumentPreview
+              logoDataUrl={invoiceSettings?.logoDataUrl ?? null}
+              footerNote={invoiceSettings?.footerNote ?? null}
               className="lg:col-span-3"
               seller={{ name: seller?.name ?? null, nip: meta?.contextNip ?? null, addressLine1: seller?.addressLine1 ?? null, addressLine2: seller?.addressLine2 ?? null }}
               buyer={{

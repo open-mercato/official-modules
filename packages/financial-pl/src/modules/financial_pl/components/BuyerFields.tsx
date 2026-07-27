@@ -438,9 +438,11 @@ export function BuyerFields({ value, onChange, disabled, errors }: BuyerFieldsPr
         </div>
       </div>
 
-      {/* Postal code and city are one fact read together and both are short — `@xs` rather than
-          `@md` so they pair inside the ~340px buyer column, not only at full page width. */}
-      <div className="grid grid-cols-1 gap-4 @xs:grid-cols-2">
+      {/* Postal code and city are one fact read together — `@xs` rather than `@md` so they pair
+          inside the ~340px buyer column, not only at full page width. Split unevenly: a Polish
+          postal code is a fixed six characters, while a town name is not, so equal halves wasted
+          room on the code and truncated the town. */}
+      <div className="grid grid-cols-1 gap-4 @xs:grid-cols-[minmax(0,0.55fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-2">
           <label className={labelClass} htmlFor="financial_pl-buyer-postal">
             {t('financial_pl.buyer.postalCode', 'Postal code')}

@@ -894,7 +894,19 @@ export const invoiceSettingsPutSchema = z.object({
   defaultTaxRate: z.string().max(10).nullish(),
   defaultCurrencyCode: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).nullish(),
   defaultPriceMode: z.enum(['net', 'gross']).nullish(),
-  defaultBankAccount: z.string().max(64).nullish(),
-  defaultBankName: z.string().max(200).nullish(),
+  bankAccounts: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(64),
+        label: z.string().max(80).nullish(),
+        accountNumber: z.string().trim().min(1).max(64),
+        bankName: z.string().max(200).nullish(),
+        swift: z.string().max(11).nullish(),
+        isDefault: z.boolean().optional(),
+      }),
+    )
+    // Capped so a malformed client cannot grow the row without bound; well above any real seller.
+    .max(20)
+    .nullish(),
 })
 export type InvoiceSettingsPutInput = z.infer<typeof invoiceSettingsPutSchema>

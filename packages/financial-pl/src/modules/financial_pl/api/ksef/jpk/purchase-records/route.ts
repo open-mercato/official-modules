@@ -52,6 +52,25 @@ function toRow(record: PurchaseVatRecord) {
   }
 }
 
+
+/**
+ * Translate a client sort request into an `orderBy`. Only whitelisted columns are accepted — the
+ * value reaches the ORM, so an arbitrary field name from the query string must never get through.
+ * Period always falls back to (year, month) together: sorting by year alone reorders nothing
+ * useful within a year.
+ */
+function resolveOrderBy(
+  sortField: string | null,
+  sortDir: string | null,
+  allowed: Record<string, string[]>,
+  fallback: Record<string, 'asc' | 'desc'>,
+): Record<string, 'asc' | 'desc'> {
+  const fields = sortField ? allowed[sortField] : undefined
+  if (!fields) return fallback
+  const dir: 'asc' | 'desc' = sortDir === 'asc' ? 'asc' : 'desc'
+  return Object.fromEntries(fields.map((field) => [field, dir]))
+}
+
 export async function GET(req: Request) {
   try {
     const container = await createRequestContainer()
@@ -83,7 +102,17 @@ export async function GET(req: Request) {
 
     const em = (container.resolve('em') as EntityManager).fork()
     const [rows, total] = await em.findAndCount(PurchaseVatRecord, filter, {
-      orderBy: { year: 'desc', month: 'desc', createdAt: 'desc' },
+      orderBy: resolveOrderBy(
+        url.searchParams.get('sortField'),
+        url.searchParams.get('sortDir'),
+        {
+          period: ['year', 'month'],
+          documentNumber: ['documentNumber'],
+          supplier: ['supplierName'],
+          purchaseDate: ['purchaseDate'],
+        },
+        { year: 'desc', month: 'desc', createdAt: 'desc' },
+      ),
       limit: pageSize,
       offset: (page - 1) * pageSize,
     })

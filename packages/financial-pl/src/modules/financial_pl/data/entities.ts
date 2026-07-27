@@ -689,6 +689,17 @@ export class ReceiveCursor {
   deletedAt?: Date | null
 }
 
+/** One configured settlement account (stored in `InvoiceSettings.bankAccounts`). */
+export type InvoiceBankAccount = {
+  id: string
+  /** Optional human name ("PLN — main", "EUR"), shown in the picker when present. */
+  label?: string | null
+  accountNumber: string
+  bankName?: string | null
+  swift?: string | null
+  isDefault?: boolean
+}
+
 /**
  * Per-organization invoice issuing settings — the presentation choices (logo, footer note) and the
  * defaults a new invoice starts from. One row per organization + tenant.
@@ -739,11 +750,13 @@ export class InvoiceSettings {
   @Property({ name: 'default_price_mode', type: 'text', nullable: true })
   defaultPriceMode?: string | null
 
-  @Property({ name: 'default_bank_account', type: 'text', nullable: true })
-  defaultBankAccount?: string | null
-
-  @Property({ name: 'default_bank_name', type: 'text', nullable: true })
-  defaultBankName?: string | null
+  /**
+   * Bank accounts the seller settles in, in display order. A list rather than one default: the
+   * account number prints on the invoice, and a seller with a PLN and a EUR account picks per
+   * invoice. Exactly one entry may carry `isDefault`, which is what a new invoice starts with.
+   */
+  @Property({ name: 'bank_accounts', type: 'json', nullable: true })
+  bankAccounts?: InvoiceBankAccount[] | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

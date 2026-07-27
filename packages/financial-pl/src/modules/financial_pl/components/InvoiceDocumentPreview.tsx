@@ -55,6 +55,10 @@ export type DocumentPayment = {
 }
 
 export type InvoiceDocumentPreviewProps = {
+  /** Seller logo as a data URL, from invoice settings. Presentation only — never filed to KSeF. */
+  logoDataUrl?: string | null
+  /** Free-text footer from invoice settings (register entry, thank-you line, complaints address). */
+  footerNote?: string | null
   /** Invoice number. While creating this is the provisional peek, flagged as such. */
   invoiceNumber?: string | null
   /** True when `invoiceNumber` is a preview of the next number, not an assigned one. */
@@ -179,6 +183,8 @@ function hasParty(party: DocumentParty | null): boolean {
 }
 
 export function InvoiceDocumentPreview({
+  logoDataUrl,
+  footerNote,
   invoiceNumber,
   invoiceNumberProvisional,
   seller,
@@ -215,9 +221,21 @@ export function InvoiceDocumentPreview({
     // that width rather than the viewport.
     <article className={`@container rounded-lg border bg-card p-6 ${className ?? ''}`}>
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-          {t('financial_pl.invoices.detail.documentTitle', 'INVOICE')}
-        </h2>
+        <span className="flex items-baseline gap-3">
+          {logoDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a data: URL has no remote origin
+            // to optimise, and next/image would only add a loader in front of an inline image.
+            <img
+              src={logoDataUrl}
+              alt=""
+              aria-hidden="true"
+              className="max-h-10 max-w-32 self-center object-contain"
+            />
+          ) : null}
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            {t('financial_pl.invoices.detail.documentTitle', 'INVOICE')}
+          </h2>
+        </span>
         {invoiceNumber ? (
           <span className="flex items-baseline gap-2">
             <span className="text-base font-medium tabular-nums text-foreground">{invoiceNumber}</span>
@@ -508,6 +526,11 @@ export function InvoiceDocumentPreview({
             </span>
           ) : null}
         </div>
+      ) : null}
+      {footerNote && footerNote.trim() ? (
+        <p className="mt-6 whitespace-pre-line border-t border-border pt-4 text-xs text-muted-foreground">
+          {footerNote}
+        </p>
       ) : null}
     </article>
   )

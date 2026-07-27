@@ -1,8 +1,3 @@
-import React from 'react'
-import { Inbox } from 'lucide-react'
-
-const receivedInvoicesIcon = React.createElement(Inbox, { width: 16, height: 16, 'aria-hidden': true })
-
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['financial_pl.view'],
@@ -15,7 +10,7 @@ export const metadata = {
   // duplicated the route. The page keeps its title, icon and breadcrumb — it is hidden from the
   // navigation, not removed.
   navHidden: true,
-  icon: receivedInvoicesIcon,
+  icon: 'inbox',
   breadcrumb: [{ label: 'Received invoices', labelKey: 'financial_pl.nav.received' }],
 } as const
 

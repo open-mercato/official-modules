@@ -523,7 +523,7 @@ export function InvoiceLinesField({
       {/* Shared column header — replaces the label repeated on every line, which is what made the
           editor so tall. Hidden when the row stacks, where each field keeps its own label. */}
       {value.length > 0 ? (
-        <div className="hidden grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_auto] @xl:items-start border-b border-border/60 bg-muted/50 px-3 py-2 @xl:grid">
+        <div className="hidden grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_minmax(0,0.8fr)_auto] @xl:items-start border-b border-border/60 bg-muted/50 px-3 py-2 @xl:grid">
           <span className="w-6" />
           <span className="text-xs font-medium text-muted-foreground">
             {t('financial_pl.lines.name', 'Name')}
@@ -550,6 +550,9 @@ export function InvoiceLinesField({
           </span>
           <span className="text-xs font-medium text-muted-foreground">
             {t('financial_pl.lines.taxRate', 'VAT rate (%)')}
+          </span>
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('financial_pl.lines.gtu', 'GTU')}
           </span>
           <span className="w-9" />
         </div>
@@ -598,7 +601,7 @@ export function InvoiceLinesField({
                 <Trash2 className="size-4" />
               </IconButton>
             </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_auto] @xl:items-start">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 @xl:grid-cols-[auto_minmax(0,2.5fr)_repeat(5,minmax(0,1fr))_minmax(0,0.8fr)_auto] @xl:items-start">
               <span className="hidden w-6 shrink-0 text-xs tabular-nums text-muted-foreground @xl:block @xl:pt-2.5">
                 {index + 1}.
               </span>
@@ -812,6 +815,47 @@ export function InvoiceLinesField({
                   </>
                 ) : null}
               </div>
+              <div className="col-span-2 flex flex-col gap-2 @xl:col-span-1">
+                <label className={lineLabelClass} htmlFor={`financial_pl-line-gtu-${index}`}>
+                  {t('financial_pl.lines.gtu', 'GTU')}
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id={`financial_pl-line-gtu-${index}`}
+                      type="button"
+                      variant="outline"
+                      disabled={busy}
+                      // Justified like the neighbouring selects: label left, chevron right, so the
+                      // row reads as one strip of controls rather than a button dropped into it.
+                      className="w-full justify-between font-normal"
+                    >
+                      {/* One code fits; several would blow the column, so the rest collapse to a
+                          count and the full list stays in the tooltip. */}
+                      <span className="truncate" title={selectedGtu.join(', ')}>
+                        {selectedGtu.length === 0
+                          ? t('financial_pl.lines.gtuNone', 'None')
+                          : selectedGtu.length === 1
+                            ? selectedGtu[0]
+                            : `${selectedGtu[0]} +${selectedGtu.length - 1}`}
+                      </span>
+                      <ChevronDown className="ml-1 size-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="max-h-72 w-80 overflow-y-auto p-2">
+                    <div className="flex flex-col gap-1">
+                      {GTU_CODES.map((code) => (
+                        <CheckboxField
+                          key={code}
+                          label={t(`financial_pl.fields.gtu.${code}`, code)}
+                          checked={selectedGtu.includes(code)}
+                          onCheckedChange={(next) => toggleLineGtu(index, code, Boolean(next))}
+                        />
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
               {/* Last column of the wide row — deleting is a row-level action, so it sits at the
                   end of the row it deletes. When the row stacks it moves into the header band. */}
               <div className="hidden @xl:flex @xl:justify-center @xl:pt-1">
@@ -832,33 +876,6 @@ export function InvoiceLinesField({
               the operator checks before filing, so they get their own surface, right-aligned figures
               and a bold gross — the same weighting the printed document uses.
             */}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-muted-foreground">
-                {t('financial_pl.lines.gtu', 'GTU')}
-              </span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button type="button" variant="outline" size="sm" disabled={busy}>
-                    {selectedGtu.length > 0
-                      ? selectedGtu.join(', ')
-                      : t('financial_pl.lines.gtuNone', 'None')}
-                    <ChevronDown className="ml-1 size-3.5" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="max-h-72 w-80 overflow-y-auto p-2">
-                  <div className="flex flex-col gap-1">
-                    {GTU_CODES.map((code) => (
-                      <CheckboxField
-                        key={code}
-                        label={t(`financial_pl.fields.gtu.${code}`, code)}
-                        checked={selectedGtu.includes(code)}
-                        onCheckedChange={(next) => toggleLineGtu(index, code, Boolean(next))}
-                      />
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
             </div>
             <div className="grid grid-cols-2 gap-3 rounded-md bg-muted/50 p-3 sm:grid-cols-4">
               <span className="flex flex-col gap-0.5">
