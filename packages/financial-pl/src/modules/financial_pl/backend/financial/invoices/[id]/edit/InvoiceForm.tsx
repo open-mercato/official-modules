@@ -332,6 +332,7 @@ function isInvoiceTab(value: string): value is InvoiceTab {
 
 type PaymentGroupProps = {
   accounts?: PaymentAccountOption[]
+  onCreateAccount?: (account: Omit<PaymentAccountOption, 'id'>) => Promise<boolean>
   ctx: CrudFormGroupComponentProps
   payment: PaymentValue
   onChange: (payment: PaymentValue) => void
@@ -409,6 +410,7 @@ function PaymentGroup({
   dueTouched,
   lastAutoDue,
   accounts,
+  onCreateAccount,
 }: PaymentGroupProps) {
   const issueDate = formString(ctx.values.issueDate)
   const dueDate = formString(ctx.values.dueDate)
@@ -433,6 +435,7 @@ function PaymentGroup({
       }}
       disabled={disabled}
       accounts={accounts}
+      onCreateAccount={onCreateAccount}
     />
   )
 }
@@ -1263,7 +1266,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
    */
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const suggestedNumber = useNextInvoiceNumber(!isEdit && !readOnly)
-  const invoiceSettings = useInvoiceSettings()
+  const { settings: invoiceSettings, refresh: refreshInvoiceSettings } = useInvoiceSettings()
   const bankAccounts: PaymentAccountOption[] = invoiceSettings?.bankAccounts ?? []
 
 
@@ -1384,6 +1387,48 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   const setPayment = React.useCallback((payment: PaymentValue) => {
     setValue((prev) => ({ ...prev, payment }))
   }, [])
+
+  const handleCreateAccount = React.useCallback(
+    async (account: Omit<PaymentAccountOption, 'id'>) => {
+      const current = await apiCall<{ settings?: { bankAccounts?: PaymentAccountOption[] } }>(
+        '/api/financial_pl/invoice-settings',
+      )
+      if (!current.ok) {
+        flash(t('financial_pl.invoices.form.payment.accountAddFailed', 'Could not save the account.'), 'error')
+        return false
+      }
+      const existing = current.result?.settings?.bankAccounts ?? []
+      const next = [
+        ...existing,
+        { ...account, id: crypto.randomUUID(), isDefault: existing.length === 0 },
+      ]
+      const saved = await apiCall<{ ok?: boolean; error?: string }>('/api/financial_pl/invoice-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ bankAccounts: next }),
+      })
+      if (!saved.ok) {
+        flash(
+          saved.result?.error ??
+            t('financial_pl.invoices.form.payment.accountAddFailed', 'Could not save the account.'),
+          'error',
+        )
+        return false
+      }
+      refreshInvoiceSettings()
+      setValue((prev) => ({
+        ...prev,
+        payment: {
+          ...prev.payment,
+          bankAccount: account.accountNumber,
+          bankName: account.bankName ?? '',
+          swift: account.swift ?? '',
+        },
+      }))
+      flash(t('financial_pl.invoices.form.payment.accountAdded', 'Account added.'), 'success')
+      return true
+    },
+    [refreshInvoiceSettings, t],
+  )
   // Defaults apply ONCE, and only while creating: settings arrive asynchronously, so overwriting a
   // field the operator is already typing into would be worse than having no default at all.
   const defaultsAppliedRef = React.useRef(false)
@@ -1846,6 +1891,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
               <FormSection icon={<Wallet className="size-4" />} title={t('financial_pl.invoices.form.sections.payment', 'Payment / settlement')}>
                 <PaymentGroup
                   accounts={bankAccounts}
+                  onCreateAccount={readOnly ? undefined : handleCreateAccount}
                   ctx={ctx}
                   payment={value.payment}
                   onChange={setPayment}
@@ -1907,6 +1953,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     fieldErrors,
     suggestedNumber,
     bankAccounts,
+    handleCreateAccount,
     t,
     value,
   ])

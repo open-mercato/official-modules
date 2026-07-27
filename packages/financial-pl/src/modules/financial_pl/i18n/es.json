@@ -636,5 +636,12 @@
   "financial_pl.errors.jpk_filing_not_found": "Esta declaración JPK no está disponible en la organización seleccionada.",
   "financial_pl.errors.jpk_filing_submitted": "Una declaración JPK ya enviada no se puede volver a generar.",
   "financial_pl.invoices.form.fields.contractNumber": "Número de contrato",
-  "financial_pl.invoices.form.fields.transportTerms": "Condiciones de transporte"
+  "financial_pl.invoices.form.fields.transportTerms": "Condiciones de transporte",
+  "financial_pl.invoices.form.payment.accountAdd": "Añadir cuenta",
+  "financial_pl.invoices.form.payment.accountAddTitle": "Añadir una cuenta bancaria",
+  "financial_pl.invoices.form.payment.accountAddSave": "Añadir cuenta",
+  "financial_pl.invoices.form.payment.accountAddSaving": "Guardando…",
+  "financial_pl.invoices.form.payment.accountAddCancel": "Cancelar",
+  "financial_pl.invoices.form.payment.accountAdded": "Cuenta añadida.",
+  "financial_pl.invoices.form.payment.accountAddFailed": "No se pudo guardar la cuenta."
 }

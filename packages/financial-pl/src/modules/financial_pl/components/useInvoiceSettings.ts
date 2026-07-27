@@ -22,8 +22,11 @@ export type InvoiceSettingsDto = {
  * the document, which needs the logo and footer note — those are stored here and printed there, so
  * a second copy of this fetch would be a second chance for the two to disagree.
  */
-export function useInvoiceSettings(): InvoiceSettingsDto | null {
+export function useInvoiceSettings(): { settings: InvoiceSettingsDto | null; refresh: () => void } {
   const [settings, setSettings] = React.useState<InvoiceSettingsDto | null>(null)
+  // Bumped to re-run the fetch after the invoice form adds an account inline, so the picker shows
+  // it without a page reload.
+  const [nonce, setNonce] = React.useState(0)
   React.useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -34,8 +37,9 @@ export function useInvoiceSettings(): InvoiceSettingsDto | null {
     return () => {
       cancelled = true
     }
-  }, [])
-  return settings
+  }, [nonce])
+  const refresh = React.useCallback(() => setNonce((prev) => prev + 1), [])
+  return { settings, refresh }
 }
 
 export default useInvoiceSettings

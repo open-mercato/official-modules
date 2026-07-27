@@ -636,5 +636,12 @@
   "financial_pl.errors.jpk_filing_not_found": "Ta deklaracja JPK nie jest dostępna w wybranej organizacji.",
   "financial_pl.errors.jpk_filing_submitted": "Deklaracji JPK wysłanej do MF nie można wygenerować ponownie.",
   "financial_pl.invoices.form.fields.contractNumber": "Numer umowy",
-  "financial_pl.invoices.form.fields.transportTerms": "Warunki transportu"
+  "financial_pl.invoices.form.fields.transportTerms": "Warunki transportu",
+  "financial_pl.invoices.form.payment.accountAdd": "Dodaj konto",
+  "financial_pl.invoices.form.payment.accountAddTitle": "Dodaj konto bankowe",
+  "financial_pl.invoices.form.payment.accountAddSave": "Dodaj konto",
+  "financial_pl.invoices.form.payment.accountAddSaving": "Zapisywanie…",
+  "financial_pl.invoices.form.payment.accountAddCancel": "Anuluj",
+  "financial_pl.invoices.form.payment.accountAdded": "Konto dodane.",
+  "financial_pl.invoices.form.payment.accountAddFailed": "Nie udało się zapisać konta."
 }

@@ -636,5 +636,12 @@
   "financial_pl.errors.jpk_filing_not_found": "This JPK filing is not available in the selected organization.",
   "financial_pl.errors.jpk_filing_submitted": "A JPK filing that has been submitted cannot be regenerated.",
   "financial_pl.invoices.form.fields.contractNumber": "Contract number",
-  "financial_pl.invoices.form.fields.transportTerms": "Transport terms"
+  "financial_pl.invoices.form.fields.transportTerms": "Transport terms",
+  "financial_pl.invoices.form.payment.accountAdd": "Add account",
+  "financial_pl.invoices.form.payment.accountAddTitle": "Add a bank account",
+  "financial_pl.invoices.form.payment.accountAddSave": "Add account",
+  "financial_pl.invoices.form.payment.accountAddSaving": "Saving…",
+  "financial_pl.invoices.form.payment.accountAddCancel": "Cancel",
+  "financial_pl.invoices.form.payment.accountAdded": "Account added.",
+  "financial_pl.invoices.form.payment.accountAddFailed": "Could not save the account."
 }

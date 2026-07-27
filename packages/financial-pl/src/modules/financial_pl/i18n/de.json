@@ -636,5 +636,12 @@
   "financial_pl.errors.jpk_filing_not_found": "Diese JPK-Meldung ist in der gewählten Organisation nicht verfügbar.",
   "financial_pl.errors.jpk_filing_submitted": "Eine bereits übermittelte JPK-Meldung kann nicht erneut erzeugt werden.",
   "financial_pl.invoices.form.fields.contractNumber": "Vertragsnummer",
-  "financial_pl.invoices.form.fields.transportTerms": "Transportbedingungen"
+  "financial_pl.invoices.form.fields.transportTerms": "Transportbedingungen",
+  "financial_pl.invoices.form.payment.accountAdd": "Konto hinzufügen",
+  "financial_pl.invoices.form.payment.accountAddTitle": "Bankkonto hinzufügen",
+  "financial_pl.invoices.form.payment.accountAddSave": "Konto hinzufügen",
+  "financial_pl.invoices.form.payment.accountAddSaving": "Wird gespeichert…",
+  "financial_pl.invoices.form.payment.accountAddCancel": "Abbrechen",
+  "financial_pl.invoices.form.payment.accountAdded": "Konto hinzugefügt.",
+  "financial_pl.invoices.form.payment.accountAddFailed": "Das Konto konnte nicht gespeichert werden."
 }

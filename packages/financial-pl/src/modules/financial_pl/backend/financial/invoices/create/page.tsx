@@ -44,7 +44,7 @@ export default function CreateInvoicePage() {
   const [previewOpen, setPreviewOpen] = React.useState(false)
   // The logo and footer live in invoice settings and print on the document, so the preview has to
   // read them too — otherwise the settings screen promises something the preview never shows.
-  const invoiceSettings = useInvoiceSettings()
+  const { settings: invoiceSettings } = useInvoiceSettings()
 
   const paymentMethodLabel = React.useMemo(() => {
     const method = snapshot?.payment?.method

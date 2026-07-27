@@ -377,7 +377,7 @@ export default function FinancialPlInvoiceDetailPage(props: { params?: { id?: st
   const t = useT()
   // Logo + footer come from invoice settings, not from the invoice: they are how this seller's
   // documents look, and must match what the create preview showed.
-  const invoiceSettings = useInvoiceSettings()
+  const { settings: invoiceSettings } = useInvoiceSettings()
   // This app renders backend pages via a `/[...slug]` catch-all that passes the resolved route
   // segment as a synchronous `params` prop (mirrors core `sales/.../[id]/page.tsx`). `useParams()`
   // would return the raw slug array here, not `{ id }`, so read the prop directly.

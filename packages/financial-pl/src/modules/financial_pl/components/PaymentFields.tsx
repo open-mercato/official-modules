@@ -1,7 +1,18 @@
 'use client'
 
 import * as React from 'react'
+import { Plus } from 'lucide-react'
 import { Input } from '@open-mercato/ui/primitives/input'
+import { Button } from '@open-mercato/ui/primitives/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@open-mercato/ui/primitives/dialog'
+import { isValidBankAccount, normalizeAccountNumber } from '../lib/bank-account'
+import { lookupPolishBank } from '../lib/pl-bank-registry'
 import {
   Select,
   SelectContent,
@@ -51,8 +62,13 @@ export type PaymentFieldsProps = {
   value: PaymentValue
   onChange: (v: PaymentValue) => void
   disabled?: boolean
-  /** Accounts from invoice settings. Empty ⇒ the picker is hidden and the number is typed. */
+  /** Accounts from invoice settings. */
   accounts?: PaymentAccountOption[]
+  /**
+   * Persist a new account to invoice settings and select it. Omitted ⇒ no add affordance, so the
+   * only way in is the settings screen. Resolves false when the save failed.
+   */
+  onCreateAccount?: (account: Omit<PaymentAccountOption, 'id'>) => Promise<boolean>
 }
 
 // Matches the field-label style used across the invoice form (PlVatMetaForm, CrudForm builtins).
@@ -67,7 +83,7 @@ function optionalNumber(raw: string): number | undefined {
   return Number.isFinite(next) ? next : undefined
 }
 
-export function PaymentFields({ value, onChange, disabled, accounts }: PaymentFieldsProps) {
+export function PaymentFields({ value, onChange, disabled, accounts, onCreateAccount }: PaymentFieldsProps) {
   const t = useT()
   const busy = Boolean(disabled)
 
@@ -75,6 +91,17 @@ export function PaymentFields({ value, onChange, disabled, accounts }: PaymentFi
     (next: Partial<PaymentValue>) => onChange({ ...value, ...next }),
     [onChange, value],
   )
+
+  const [addOpen, setAddOpen] = React.useState(false)
+  const [savingAccount, setSavingAccount] = React.useState(false)
+  const [draftAccount, setDraftAccount] = React.useState<Omit<PaymentAccountOption, 'id'>>({
+    label: '',
+    accountNumber: '',
+    bankName: '',
+    swift: '',
+  })
+  const draftAccountInvalid =
+    draftAccount.accountNumber.trim().length > 0 && !isValidBankAccount(draftAccount.accountNumber.trim())
 
   const storedAccount = (value.bankAccount ?? '').trim()
   const options = React.useMemo<PaymentAccountOption[]>(() => {
@@ -189,6 +216,124 @@ export function PaymentFields({ value, onChange, disabled, accounts }: PaymentFi
               </SelectContent>
             </Select>
           )}
+          {onCreateAccount ? (
+            <>
+              <div className="flex justify-start">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setDraftAccount({ label: '', accountNumber: '', bankName: '', swift: '' })
+                    setAddOpen(true)
+                  }}
+                >
+                  <Plus className="mr-1 size-4" />
+                  {t('financial_pl.invoices.form.payment.accountAdd', 'Add account')}
+                </Button>
+              </div>
+              <Dialog open={addOpen} onOpenChange={setAddOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>
+                      {t('financial_pl.invoices.form.payment.accountAddTitle', 'Add a bank account')}
+                    </DialogTitle>
+                  </DialogHeader>
+                  <div className="flex flex-col gap-3 px-6 py-2">
+                    <div className="flex flex-col gap-2">
+                      <label className={labelClass} htmlFor="financial_pl-new-account-label">
+                        {t('financial_pl.settings.bankAccountLabel', 'Name')}
+                      </label>
+                      <Input
+                        id="financial_pl-new-account-label"
+                        value={draftAccount.label ?? ''}
+                        onChange={(event) => setDraftAccount((prev) => ({ ...prev, label: event.target.value }))}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className={labelClass} htmlFor="financial_pl-new-account-number">
+                        {t('financial_pl.invoices.form.payment.bankAccount', 'Bank account')}
+                        <span aria-hidden="true" className="text-status-error-text"> *</span>
+                      </label>
+                      <Input
+                        id="financial_pl-new-account-number"
+                        value={draftAccount.accountNumber}
+                        aria-invalid={draftAccountInvalid || undefined}
+                        placeholder="PL00 0000 0000 0000 0000 0000 0000"
+                        onChange={(event) => {
+                          const nextAccount = event.target.value
+                          const info = lookupPolishBank(normalizeAccountNumber(nextAccount))
+                          setDraftAccount((prev) => ({
+                            ...prev,
+                            accountNumber: nextAccount,
+                            ...(info && !prev.bankName?.trim() ? { bankName: info.name } : {}),
+                            ...(info && !prev.swift?.trim() ? { swift: info.swift } : {}),
+                          }))
+                        }}
+                      />
+                      {draftAccountInvalid ? (
+                        <span className="text-xs text-status-error-text">
+                          {t(
+                            'financial_pl.validation.bankAccount',
+                            'Enter a valid IBAN or 26-digit Polish account number (NRB).',
+                          )}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-2">
+                      <div className="flex flex-col gap-2">
+                        <label className={labelClass} htmlFor="financial_pl-new-account-bank">
+                          {t('financial_pl.invoices.form.payment.bankName', 'Bank name')}
+                        </label>
+                        <Input
+                          id="financial_pl-new-account-bank"
+                          value={draftAccount.bankName ?? ''}
+                          onChange={(event) => setDraftAccount((prev) => ({ ...prev, bankName: event.target.value }))}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <label className={labelClass} htmlFor="financial_pl-new-account-swift">
+                          {t('financial_pl.invoices.form.payment.swift', 'SWIFT/BIC')}
+                        </label>
+                        <Input
+                          id="financial_pl-new-account-swift"
+                          value={draftAccount.swift ?? ''}
+                          onChange={(event) =>
+                            setDraftAccount((prev) => ({ ...prev, swift: event.target.value.toUpperCase() }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <DialogFooter layout="equal">
+                    <Button type="button" variant="outline" onClick={() => setAddOpen(false)} disabled={savingAccount}>
+                      {t('financial_pl.invoices.form.payment.accountAddCancel', 'Cancel')}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={savingAccount || draftAccountInvalid || !draftAccount.accountNumber.trim()}
+                      onClick={async () => {
+                        setSavingAccount(true)
+                        const ok = await onCreateAccount({
+                          label: draftAccount.label?.trim() || null,
+                          accountNumber: draftAccount.accountNumber.trim(),
+                          bankName: draftAccount.bankName?.trim() || null,
+                          swift: draftAccount.swift?.trim() || null,
+                        })
+                        setSavingAccount(false)
+                        if (ok) setAddOpen(false)
+                      }}
+                    >
+                      {savingAccount
+                        ? t('financial_pl.invoices.form.payment.accountAddSaving', 'Saving…')
+                        : t('financial_pl.invoices.form.payment.accountAddSave', 'Add account')}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </>
+          ) : null}
           {selectedAccount ? (
             <span className="text-xs text-muted-foreground">
               {[selectedAccount.accountNumber, selectedAccount.bankName, selectedAccount.swift]
