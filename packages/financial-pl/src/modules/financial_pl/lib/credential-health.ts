@@ -1,4 +1,5 @@
 import { X509Certificate } from 'node:crypto'
+import { normalizePem } from './pem'
 
 export type CredentialHealth = {
   token: { present: boolean; sunsetDate: string; daysToSunset: number | null }
@@ -22,20 +23,24 @@ const CERT_EXPIRING_WARNING_DAYS = 30
 export function assessCredentialHealth(input: CredentialHealthInput, now: Date = new Date()): CredentialHealth {
   const tokenPresent = hasText(input.ksefToken)
   const daysToSunset = tokenPresent ? daysBetween(TOKEN_SUNSET_AT, now) : null
-  const authCert = assessCertificate(input.authCertPem, now)
-  const offlineCert = assessCertificate(input.offlineCertPem, now)
+  const auth = assessCertificate(input.authCertPem, now)
+  const offline = assessCertificate(input.offlineCertPem, now)
 
   const warnings: string[] = []
   if (tokenPresent && daysToSunset !== null && daysToSunset < TOKEN_SUNSET_WARNING_DAYS) {
     warnings.push('token_sunset_soon')
   }
-  if (authCert.expiringSoon) warnings.push('auth_cert_expiring')
-  if (offlineCert.expiringSoon) warnings.push('offline_cert_expiring')
+  if (auth.assessment.expiringSoon) warnings.push('auth_cert_expiring')
+  if (offline.assessment.expiringSoon) warnings.push('offline_cert_expiring')
+  // A stored cert that does not parse is a broken credential, not a healthy absent one — say so,
+  // or the operator's first symptom is a failed filing.
+  if (auth.unreadable) warnings.push('auth_cert_unreadable')
+  if (offline.unreadable) warnings.push('offline_cert_unreadable')
 
   return {
     token: { present: tokenPresent, sunsetDate: TOKEN_SUNSET_DATE, daysToSunset },
-    authCert,
-    offlineCert,
+    authCert: auth.assessment,
+    offlineCert: offline.assessment,
     warnings,
   }
 }
@@ -43,26 +48,31 @@ export function assessCredentialHealth(input: CredentialHealthInput, now: Date =
 function assessCertificate(
   pem: string | null | undefined,
   now: Date,
-): CredentialHealth['authCert'] {
+): { assessment: CredentialHealth['authCert']; unreadable: boolean } {
   const trimmedPem = pem?.trim()
-  if (!trimmedPem) return { present: false, notAfter: null, daysToExpiry: null, expiringSoon: false }
+  if (!trimmedPem) {
+    return { assessment: { present: false, notAfter: null, daysToExpiry: null, expiringSoon: false }, unreadable: false }
+  }
 
   try {
-    const cert = new X509Certificate(trimmedPem)
+    const cert = new X509Certificate(normalizePem(trimmedPem))
     const notAfterDate = new Date(cert.validTo)
     if (Number.isNaN(notAfterDate.getTime())) {
-      return { present: true, notAfter: null, daysToExpiry: null, expiringSoon: false }
+      return { assessment: { present: true, notAfter: null, daysToExpiry: null, expiringSoon: false }, unreadable: false }
     }
 
     const daysToExpiry = daysBetween(notAfterDate, now)
     return {
-      present: true,
-      notAfter: notAfterDate.toISOString().slice(0, 10),
-      daysToExpiry,
-      expiringSoon: daysToExpiry < CERT_EXPIRING_WARNING_DAYS,
+      assessment: {
+        present: true,
+        notAfter: notAfterDate.toISOString().slice(0, 10),
+        daysToExpiry,
+        expiringSoon: daysToExpiry < CERT_EXPIRING_WARNING_DAYS,
+      },
+      unreadable: false,
     }
   } catch {
-    return { present: true, notAfter: null, daysToExpiry: null, expiringSoon: false }
+    return { assessment: { present: true, notAfter: null, daysToExpiry: null, expiringSoon: false }, unreadable: true }
   }
 }
 

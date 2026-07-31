@@ -19,6 +19,7 @@
  * `AuthTokenRequest` validates against the official authv2.xsd with xmllint.
  */
 import { createPrivateKey, webcrypto, X509Certificate } from 'node:crypto'
+import { normalizePem } from './pem'
 import * as xadesjs from 'xadesjs'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 
@@ -72,9 +73,9 @@ function pemBodyToDer(pem: string): Buffer {
 
 /** The base64 DER of an X.509 cert PEM, for KeyInfo/X509Data and the XAdES SigningCertificate. */
 export function certificatePemToDerBase64(certificatePem: string): string {
-  // Validates it parses as a real X.509 cert (throws on garbage) and normalizes
-  // any extra PEM whitespace.
-  const cert = new X509Certificate(certificatePem)
+  // Validates it parses as a real X.509 cert (throws on garbage). Tolerates the paste
+  // corruptions a stored credential PEM commonly carries (see normalizePem).
+  const cert = new X509Certificate(normalizePem(certificatePem))
   return cert.raw.toString('base64')
 }
 
@@ -86,7 +87,7 @@ export function certificatePemToDerBase64(certificatePem: string): string {
 async function importSigningKey(
   privateKeyPem: string,
 ): Promise<{ key: webcrypto.CryptoKey; algorithm: { name: string; hash: string } }> {
-  const keyObject = createPrivateKey(privateKeyPem)
+  const keyObject = createPrivateKey(normalizePem(privateKeyPem))
   const pkcs8 = keyObject.export({ format: 'der', type: 'pkcs8' }) as Buffer
   if (keyObject.asymmetricKeyType === 'rsa' || keyObject.asymmetricKeyType === 'rsa-pss') {
     const key = await webcrypto.subtle.importKey(

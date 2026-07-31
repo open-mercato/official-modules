@@ -21,6 +21,7 @@ import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { z } from 'zod'
 import { KsefClient, type KsefCertificateInfo } from '../lib/ksef-client'
 import { authenticate, type KsefAuthConfig } from '../lib/ksef-auth'
+import { normalizePem } from '../lib/pem'
 import { runCertificateEnrollment } from '../lib/cert-enrollment'
 import { resolveKsefEnvironment } from '../config'
 
@@ -72,6 +73,12 @@ function credString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
+/** Stored PEMs are operator-pasted and commonly newline-stripped — repair on read. */
+function credPem(value: unknown): string | undefined {
+  const text = credString(value)
+  return text ? normalizePem(text) : undefined
+}
+
 type CertCredentials = {
   raw: Record<string, unknown>
   contextNip: string
@@ -93,8 +100,8 @@ async function requireCertCredentials(
   const raw = (await svc.getRaw('ksef_pl', scope)) ?? {}
   const nipDigits = typeof raw.contextNip === 'string' ? raw.contextNip.replace(/[^0-9]/g, '') : ''
   const contextNip = /^[0-9]{10}$/.test(nipDigits) ? nipDigits : undefined
-  const certificatePem = credString(raw.certificatePem)
-  const certificatePrivateKeyPem = credString(raw.certificatePrivateKeyPem)
+  const certificatePem = credPem(raw.certificatePem)
+  const certificatePrivateKeyPem = credPem(raw.certificatePrivateKeyPem)
   if (!certificatePem || !certificatePrivateKeyPem || !contextNip) {
     throw new CrudHttpError(409, {
       error:
@@ -119,7 +126,20 @@ async function authenticateCert(
     privateKeyPem: creds.certificatePrivateKeyPem,
   }
   const client = new KsefClient(resolveKsefEnvironment(creds.environment))
-  const a = await authenticate(client, undefined, auth, AUTH_POLL)
+  let a: Awaited<ReturnType<typeof authenticate>>
+  try {
+    a = await authenticate(client, undefined, auth, AUTH_POLL)
+  } catch (err) {
+    // authenticate() reports KSeF rejections as {ok:false}, but stored-credential material that
+    // cannot be parsed (corrupt PEM/key) THROWS from the signing path — surface that as an
+    // actionable client error, not an anonymous 500.
+    if (err instanceof CrudHttpError) throw err
+    throw new CrudHttpError(422, {
+      error:
+        'The stored KSeF certificate credential could not be used for signing — re-save the certificate and private key PEM fields on the ksef_pl credential page.',
+      code: 'certificate_credential_invalid',
+    })
+  }
   if (!a.ok) {
     throw new CrudHttpError(502, { error: a.errorMessage, code: 'certificate_auth_failed' })
   }

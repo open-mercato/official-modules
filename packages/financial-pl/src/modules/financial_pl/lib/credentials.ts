@@ -9,6 +9,7 @@
  *  - auto: explicit opt-in to prefer currently-valid certificate material, falling back to token.
  */
 import { X509Certificate } from 'node:crypto'
+import { normalizePem } from './pem'
 
 import type { KsefAuthConfig } from './ksef-auth'
 import type { KsefEnvironmentColumn } from '../data/entities'
@@ -42,6 +43,13 @@ type CredentialsService = {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/** PEM fields are operator-pasted and commonly arrive newline-stripped — repair on read so every
+ *  consumer (XAdES auth, offline KOD II signer, JPK signer, validity checks) sees parseable PEM. */
+function asPem(value: unknown): string | undefined {
+  const text = asString(value)
+  return text ? normalizePem(text) : undefined
 }
 
 function isCertificateValidNow(certificatePem: string, now: Date): boolean {
@@ -85,14 +93,14 @@ export async function readKsefCredentials(
     return {
       authMethod,
       ksefToken: asString(creds.ksefToken),
-      certificatePem: asString(creds.certificatePem),
-      certificatePrivateKeyPem: asString(creds.certificatePrivateKeyPem),
+      certificatePem: asPem(creds.certificatePem),
+      certificatePrivateKeyPem: asPem(creds.certificatePrivateKeyPem),
       certificateSerialNumber: asString(creds.certificateSerialNumber),
-      offlineCertificatePem: asString(creds.offlineCertificatePem),
-      offlineCertificatePrivateKeyPem: asString(creds.offlineCertificatePrivateKeyPem),
+      offlineCertificatePem: asPem(creds.offlineCertificatePem),
+      offlineCertificatePrivateKeyPem: asPem(creds.offlineCertificatePrivateKeyPem),
       offlineCertificateSerialNumber: asString(creds.offlineCertificateSerialNumber),
-      jpkSignerCertPem: asString(creds.jpkSignerCertPem),
-      jpkSignerPrivateKeyPem: asString(creds.jpkSignerPrivateKeyPem),
+      jpkSignerCertPem: asPem(creds.jpkSignerCertPem),
+      jpkSignerPrivateKeyPem: asPem(creds.jpkSignerPrivateKeyPem),
       environment,
     }
   } catch {

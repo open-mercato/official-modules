@@ -43,12 +43,14 @@ describe('assessCredentialHealth', () => {
     expect(health.warnings).toEqual([])
   })
 
-  it('does not throw for an unparseable PEM', () => {
+  it('does not throw for an unparseable PEM and flags it instead of staying silent', () => {
     expect(() => assessCredentialHealth({ authCertPem: 'not a pem' }, NOW)).not.toThrow()
 
     const health = assessCredentialHealth({ authCertPem: 'not a pem' }, NOW)
     expect(health.authCert).toEqual({ present: true, notAfter: null, daysToExpiry: null, expiringSoon: false })
-    expect(health.warnings).toEqual([])
+    // Present-but-unreadable is a broken credential; silence here meant the operator's first
+    // symptom was a failed filing.
+    expect(health.warnings).toEqual(['auth_cert_unreadable'])
   })
 
   it('reports no credentials as absent with no warnings', () => {
