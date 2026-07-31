@@ -77,10 +77,10 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@open-mercato/core": "0.6.6-develop.6422.1.b3d024f05c",
-    "@open-mercato/queue": "0.6.6-develop.6422.1.b3d024f05c",
-    "@open-mercato/shared": "0.6.6-develop.6422.1.b3d024f05c",
-    "@open-mercato/ui": "0.6.6-develop.6422.1.b3d024f05c",
+    "@open-mercato/core": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/queue": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/shared": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/ui": "0.6.6-develop.6366.1.fba69a7362",
     "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
     "@types/qrcode": "^1.5.6",
