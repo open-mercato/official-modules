@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import type { PaymentAccountOption } from './PaymentFields'
+import type { InvoiceNumberingSeries } from '../data/entities'
 
 export type InvoiceSettingsDto = {
   logoDataUrl?: string | null
@@ -13,6 +14,7 @@ export type InvoiceSettingsDto = {
   defaultCurrencyCode?: string | null
   defaultPriceMode?: string | null
   bankAccounts?: PaymentAccountOption[]
+  numberingSeries?: InvoiceNumberingSeries[]
 }
 
 /**

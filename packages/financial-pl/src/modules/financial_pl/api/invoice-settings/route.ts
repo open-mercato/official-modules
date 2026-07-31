@@ -7,7 +7,7 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
-import { InvoiceSettings, type InvoiceBankAccount } from '../../data/entities'
+import { InvoiceSettings, type InvoiceBankAccount, type InvoiceNumberingSeries } from '../../data/entities'
 import { invoiceSettingsPutSchema } from '../../data/validators'
 
 export const metadata = {
@@ -24,6 +24,7 @@ const EMPTY_SETTINGS = {
   defaultCurrencyCode: null as string | null,
   defaultPriceMode: null as string | null,
   bankAccounts: [] as InvoiceBankAccount[],
+  numberingSeries: [] as InvoiceNumberingSeries[],
 }
 
 function toDto(row: InvoiceSettings | null) {
@@ -37,6 +38,7 @@ function toDto(row: InvoiceSettings | null) {
     defaultCurrencyCode: row.defaultCurrencyCode ?? null,
     defaultPriceMode: row.defaultPriceMode ?? null,
     bankAccounts: row.bankAccounts ?? [],
+    numberingSeries: row.numberingSeries ?? [],
   }
 }
 
@@ -107,6 +109,16 @@ export async function PUT(req: Request) {
         isDefault: index === defaultIndex,
       }))
     }
+    if (parsed.numberingSeries !== undefined) {
+      // Unlike bank accounts, zero defaults is a valid state (the form then preselects the system
+      // default numbering); the schema already rejects more than one default among active entries.
+      row.numberingSeries = parsed.numberingSeries === null
+        ? null
+        : parsed.numberingSeries.map((series) => ({
+            ...series,
+            name: series.name?.trim() || null,
+          }))
+    }
     await em.flush()
     return NextResponse.json({ ok: true, settings: toDto(row) })
   } catch (err) {
@@ -135,6 +147,16 @@ const settingsSchema = z.object({
       bankName: z.string().nullable().optional(),
       swift: z.string().nullable().optional(),
       isDefault: z.boolean().optional(),
+    }),
+  ),
+  numberingSeries: z.array(
+    z.object({
+      id: z.string(),
+      code: z.string(),
+      name: z.string().nullable().optional(),
+      format: z.string(),
+      isDefault: z.boolean().optional(),
+      isActive: z.boolean().optional(),
     }),
   ),
 })

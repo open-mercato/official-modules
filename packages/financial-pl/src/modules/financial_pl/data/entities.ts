@@ -700,14 +700,35 @@ export type InvoiceBankAccount = {
   isDefault?: boolean
 }
 
+/** One numbering series (stored in `InvoiceSettings.numberingSeries`).
+ *
+ * Only the series METADATA lives here — code, display name, number format. The counter itself is
+ * core's `sales_document_sequences` row under the namespaced document kind `invoice:<CODE>`
+ * (see `lib/invoice-numbering.ts`), claimed through core's `salesDocumentNumberGenerator`, so
+ * every counter has exactly one owner and deleting/recreating a series never resets numbering. */
+export type InvoiceNumberingSeries = {
+  id: string
+  /** Short stable key ("FV", "EXP") — becomes part of the counter's document kind, so it is
+   *  normalized to uppercase and never renamed once invoices were issued from it. */
+  code: string
+  name?: string | null
+  /** Number template ({seq}/{yyyy}/{mm}/{dd}/{hh}); deterministic tokens only. */
+  format: string
+  /** Preselected on a new invoice. At most one active entry may carry this. */
+  isDefault?: boolean
+  /** Absent counts as active; a deactivated series stays listed but cannot be claimed from. */
+  isActive?: boolean
+}
+
 /**
  * Per-organization invoice issuing settings — the presentation choices (logo, footer note) and the
  * defaults a new invoice starts from. One row per organization + tenant.
  *
  * Deliberately NOT stored here: the seller's name/address/NIP, which belong to the `ksef_pl`
- * integration credential and are already edited there, and the invoice numbering scheme, which is a
- * core `sales` document-numbers setting. Duplicating either would create two sources of truth for
- * something that must match what is filed with KSeF.
+ * integration credential and are already edited there, and the numbering COUNTERS, which stay in
+ * core's `sales_document_sequences` (one row per series via the namespaced document kind).
+ * Duplicating either would create two sources of truth for something that must match what is
+ * filed with KSeF — only series metadata (name + format) is kept here.
  */
 @Entity({ tableName: 'financial_pl_invoice_settings' })
 @Index({
@@ -757,6 +778,14 @@ export class InvoiceSettings {
    */
   @Property({ name: 'bank_accounts', type: 'json', nullable: true })
   bankAccounts?: InvoiceBankAccount[] | null
+
+  /**
+   * Numbering series the operator can pick on a new invoice (domestic vs export, per branch…).
+   * Metadata only — see `InvoiceNumberingSeries`; counters live in core. Empty/null means the
+   * form offers only the system default (core assigns the number exactly as before).
+   */
+  @Property({ name: 'numbering_series', type: 'json', nullable: true })
+  numberingSeries?: InvoiceNumberingSeries[] | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { CreditCard, FileImage, Plus, Settings2, Trash2 } from 'lucide-react'
+import { CreditCard, FileImage, Hash, Plus, Settings2, Trash2 } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
@@ -25,6 +25,11 @@ import { FormSection } from '../../../components/FormSection'
 import { isValidBankAccount, normalizeAccountNumber } from '../../../lib/bank-account'
 import { lookupPolishBank } from '../../../lib/pl-bank-registry'
 import { isValidSwift } from '../../../lib/pl-format'
+import {
+  renderInvoiceNumberTemplate,
+  validateSeriesFormat,
+  validateSeriesList,
+} from '../../../lib/invoice-numbering'
 
 /** Kept in sync with `invoiceSettingsPutSchema`; the server is still the authority. */
 const MAX_LOGO_BYTES = 500_000
@@ -42,6 +47,7 @@ type InvoiceSettings = {
   defaultCurrencyCode: string | null
   defaultPriceMode: string | null
   bankAccounts: BankAccount[]
+  numberingSeries: NumberingSeries[]
 }
 
 type BankAccount = {
@@ -53,6 +59,15 @@ type BankAccount = {
   isDefault?: boolean
 }
 
+type NumberingSeries = {
+  id: string
+  code: string
+  name?: string | null
+  format: string
+  isDefault?: boolean
+  isActive?: boolean
+}
+
 const EMPTY: InvoiceSettings = {
   logoDataUrl: null,
   footerNote: null,
@@ -62,7 +77,11 @@ const EMPTY: InvoiceSettings = {
   defaultCurrencyCode: null,
   defaultPriceMode: null,
   bankAccounts: [],
+  numberingSeries: [],
 }
+
+/** Starter format for a fresh series row — the Polish shape operators expect. */
+const SERIES_FORMAT_STARTER = '{seq}/{mm}/{yyyy}'
 
 /**
  * Per-organization invoice defaults (SPEC-013 follow-up): the logo and footer printed on the
@@ -70,8 +89,9 @@ const EMPTY: InvoiceSettings = {
  *
  * Deliberately NOT here: the seller's identity (name, NIP, address), which lives on the `ksef_pl`
  * integration credential and is what the KSeF filing actually uses — an editable second copy would
- * let the printed document and the filed document disagree. Numbering is also out: core owns the
- * sequence, and a format editable from two places would produce gaps.
+ * let the printed document and the filed document disagree. Numbering series live here as METADATA
+ * only (code, name, format); every counter stays core-owned in `sales_document_sequences` under
+ * the namespaced kind `invoice:<CODE>` — see `lib/invoice-numbering.ts` for the model decision.
  */
 export default function InvoiceSettingsPage() {
   const t = useT()
@@ -161,6 +181,70 @@ export default function InvoiceSettingsPage() {
     [],
   )
 
+  const patchSeries = React.useCallback(
+    (index: number, next: Partial<NumberingSeries>) =>
+      setSettings((prev) => ({
+        ...prev,
+        numberingSeries: prev.numberingSeries.map((series, i) => (i === index ? { ...series, ...next } : series)),
+      })),
+    [],
+  )
+
+  const addSeries = React.useCallback(
+    () =>
+      setSettings((prev) => ({
+        ...prev,
+        numberingSeries: [
+          ...prev.numberingSeries,
+          {
+            id: crypto.randomUUID(),
+            code: '',
+            name: '',
+            format: SERIES_FORMAT_STARTER,
+            // Unlike bank accounts, no auto-default: with zero defaults the form preselects the
+            // system numbering, which stays the safe status quo until the operator opts in.
+            isDefault: false,
+            isActive: true,
+          },
+        ],
+      })),
+    [],
+  )
+
+  const removeSeries = React.useCallback(
+    (index: number) =>
+      setSettings((prev) => ({
+        ...prev,
+        numberingSeries: prev.numberingSeries.filter((_, i) => i !== index),
+      })),
+    [],
+  )
+
+  /** Toggle semantics: marking a series default clears the others; clicking the current default
+   *  clears it entirely — zero defaults is valid (the form then preselects system numbering). */
+  const toggleDefaultSeries = React.useCallback(
+    (index: number) =>
+      setSettings((prev) => ({
+        ...prev,
+        numberingSeries: prev.numberingSeries.map((series, i) => ({
+          ...series,
+          isDefault: i === index ? !series.isDefault : false,
+        })),
+      })),
+    [],
+  )
+
+  const toggleSeriesActive = React.useCallback(
+    (index: number) =>
+      setSettings((prev) => ({
+        ...prev,
+        numberingSeries: prev.numberingSeries.map((series, i) =>
+          i === index ? { ...series, isActive: series.isActive === false } : series,
+        ),
+      })),
+    [],
+  )
+
   const onPickLogo = React.useCallback(
     (file: File | undefined) => {
       setLogoError(null)
@@ -215,11 +299,26 @@ export default function InvoiceSettingsPage() {
             swift: trimmed(account.swift ?? null),
             isDefault: Boolean(account.isDefault),
           })),
+        numberingSeries: settings.numberingSeries
+          .filter((series) => series.code.trim().length > 0 && series.format.trim().length > 0)
+          .map((series) => ({
+            id: series.id,
+            code: series.code.trim().toUpperCase(),
+            name: trimmed(series.name ?? null),
+            format: series.format.trim(),
+            isDefault: Boolean(series.isDefault),
+            isActive: series.isActive !== false,
+          })),
       }),
     })
     setSaving(false)
     if (!res.ok) {
-      flash(res.result?.error ?? t('financial_pl.settings.saveFailed', 'Could not save invoice settings.'), 'error')
+      // Surface the first zod detail when present — "Validation failed" alone does not say which
+      // series rule (duplicate code/format, reserved format…) was violated.
+      const detail = Array.isArray((res.result as { details?: Array<{ message?: string }> } | undefined)?.details)
+        ? (res.result as { details: Array<{ message?: string }> }).details.find((issue) => issue?.message)?.message
+        : undefined
+      flash(detail ?? res.result?.error ?? t('financial_pl.settings.saveFailed', 'Could not save invoice settings.'), 'error')
       return
     }
     flash(t('financial_pl.settings.saved', 'Invoice settings saved.'), 'success')
@@ -532,6 +631,135 @@ export default function InvoiceSettingsPage() {
                   <Button type="button" size="sm" onClick={addAccount}>
                     <Plus className="mr-1 size-4" />
                     {t('financial_pl.settings.bankAccountAdd', 'Add account')}
+                  </Button>
+                </div>
+              </div>
+            </FormSection>
+
+            <FormSection
+              icon={<Hash className="size-4" />}
+              title={t('financial_pl.settings.numberingSeries', 'Numbering series')}
+              description={t(
+                'financial_pl.settings.numberingSeriesHint',
+                'Optional separate numbering per sales stream (domestic, export, per branch). Each series keeps its own gap-free counter, owned by the platform. Without series, invoices use the system default numbering.',
+              )}
+            >
+              <div className="flex flex-col gap-3">
+                {settings.numberingSeries.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    {t('financial_pl.settings.numberingSeriesEmpty', 'No series configured — invoices use the system default numbering.')}
+                  </p>
+                ) : null}
+
+                {settings.numberingSeries.map((series, index) => {
+                  const formatCheck = series.format.trim() ? validateSeriesFormat(series.format.trim()) : null
+                  const formatError = formatCheck && !formatCheck.ok
+                    ? formatCheck.issue === 'missingSeq'
+                      ? t('financial_pl.settings.seriesFormatMissingSeq', 'The format must contain {seq} — without it numbers would repeat.')
+                      : formatCheck.issue === 'invalidToken'
+                        ? t('financial_pl.settings.seriesFormatInvalidToken', 'Unsupported token: {token}. Allowed: {seq}, {yyyy}, {yy}, {mm}, {dd}, {hh}.', { token: formatCheck.token })
+                        : formatCheck.issue === 'tooLong'
+                          ? t('financial_pl.settings.seriesFormatTooLong', 'The format is too long.')
+                          : t('financial_pl.settings.seriesFormatRequired', 'A format is required.')
+                    : null
+                  const inactive = series.isActive === false
+                  return (
+                    <div key={series.id} className={`flex flex-col gap-2 rounded-md border border-border p-3 ${inactive ? 'opacity-60' : ''}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="grid grid-cols-[minmax(0,0.5fr)_minmax(0,1fr)] gap-2">
+                          <Input
+                            value={series.code}
+                            onChange={(event) => patchSeries(index, { code: event.target.value.toUpperCase() })}
+                            placeholder={t('financial_pl.settings.seriesCode', 'Code, e.g. FV')}
+                            aria-label={t('financial_pl.settings.seriesCode', 'Code, e.g. FV')}
+                            maxLength={12}
+                          />
+                          <Input
+                            value={series.name ?? ''}
+                            onChange={(event) => patchSeries(index, { name: event.target.value })}
+                            placeholder={t('financial_pl.settings.seriesName', 'Name, e.g. "Domestic sales"')}
+                            aria-label={t('financial_pl.settings.seriesName', 'Name, e.g. "Domestic sales"')}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={series.isDefault ? 'secondary' : 'outline'}
+                            aria-pressed={Boolean(series.isDefault)}
+                            onClick={() => toggleDefaultSeries(index)}
+                          >
+                            {series.isDefault
+                              ? t('financial_pl.settings.seriesDefault', 'Default')
+                              : t('financial_pl.settings.seriesMakeDefault', 'Make default')}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={!inactive}
+                            onClick={() => toggleSeriesActive(index)}
+                          >
+                            {inactive
+                              ? t('financial_pl.settings.seriesInactive', 'Inactive')
+                              : t('financial_pl.settings.seriesActive', 'Active')}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            aria-label={t('financial_pl.settings.seriesRemove', 'Remove series')}
+                            title={t('financial_pl.settings.seriesRemove', 'Remove series')}
+                            onClick={() => removeSeries(index)}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </div>
+                      </div>
+                      <Input
+                        value={series.format}
+                        aria-invalid={formatError ? true : undefined}
+                        onChange={(event) => patchSeries(index, { format: event.target.value })}
+                        placeholder="FV/{seq}/{mm}/{yyyy}"
+                        aria-label={t('financial_pl.settings.seriesFormat', 'Number format')}
+                        className="font-mono"
+                      />
+                      {formatError ? (
+                        <span className="text-xs text-status-error-text">{formatError}</span>
+                      ) : series.format.trim() ? (
+                        <span className="text-xs text-muted-foreground">
+                          {t('financial_pl.settings.seriesFormatExample', 'Example: {example}', {
+                            example: renderInvoiceNumberTemplate(series.format.trim(), 1, new Date()),
+                          })}
+                        </span>
+                      ) : null}
+                    </div>
+                  )
+                })}
+
+                {(() => {
+                  // Cross-row rules checked on the completed rows only, so a half-typed row does
+                  // not shout; the server re-validates regardless.
+                  const complete = settings.numberingSeries.filter(
+                    (series) => series.code.trim().length > 0 && series.format.trim().length > 0,
+                  )
+                  const listCheck = validateSeriesList(complete)
+                  if (listCheck.ok) return null
+                  const message =
+                    listCheck.issue === 'duplicateCode'
+                      ? t('financial_pl.settings.seriesDuplicateCode', 'Duplicate series code: {value}.', { value: listCheck.value })
+                      : listCheck.issue === 'duplicateFormat'
+                        ? t('financial_pl.settings.seriesDuplicateFormat', 'Two series share the format {value} — their numbers would collide.', { value: listCheck.value })
+                        : listCheck.issue === 'reservedFormat'
+                          ? t('financial_pl.settings.seriesReservedFormat', 'The format {value} is reserved for the system default numbering.', { value: listCheck.value })
+                          : t('financial_pl.settings.seriesMultipleDefaults', 'Only one active series can be the default.')
+                  return <span className="text-xs text-status-error-text">{message}</span>
+                })()}
+
+                <div className="flex justify-end">
+                  <Button type="button" size="sm" onClick={addSeries}>
+                    <Plus className="mr-1 size-4" />
+                    {t('financial_pl.settings.seriesAdd', 'Add series')}
                   </Button>
                 </div>
               </div>

@@ -3,6 +3,8 @@ import { isValidPolishNip } from '../lib/nip'
 import { isMappedFa3VatRate } from '../lib/fa3'
 import { isStructurallyValidKsefNumber } from '../lib/ksef-number'
 import { GTU_CODES, JPK_PROCEDURE_MARKINGS, JPK_TYP_DOKUMENTU, type JpkProcedureMarking } from '../lib/jpk-markings-codes'
+import { SERIES_FORMAT_MAX_LENGTH, validateSeriesFormat, validateSeriesList } from '../lib/invoice-numbering'
+import { DEFAULT_INVOICE_NUMBER_FORMAT } from '@open-mercato/core/modules/sales/lib/documentNumberTokens'
 import type { AdvanceInvoiceRef, AdvancePaymentSnapshot, InvoiceKindColumn, OrderSnapshot } from './entities'
 
 // 10 digits AND a valid NIP checksum, so a malformed NIP is rejected with a clear 422
@@ -907,6 +909,57 @@ export const invoiceSettingsPutSchema = z.object({
     )
     // Capped so a malformed client cannot grow the row without bound; well above any real seller.
     .max(20)
+    .nullish(),
+  numberingSeries: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(64),
+        // The code becomes part of the counter's document-kind key, so only a stable,
+        // casing-normalized charset is allowed.
+        code: z
+          .string()
+          .trim()
+          .toUpperCase()
+          .regex(/^[A-Z0-9][A-Z0-9_-]{0,11}$/, 'Series code: 1–12 characters, A–Z, 0–9, dash or underscore.'),
+        name: z.string().max(80).nullish(),
+        format: z
+          .string()
+          .trim()
+          .min(1)
+          .max(SERIES_FORMAT_MAX_LENGTH)
+          .superRefine((value, ctx) => {
+            const result = validateSeriesFormat(value)
+            if (result.ok) return
+            const message =
+              result.issue === 'missingSeq'
+                ? 'The format must contain a {seq} token — without it numbers would repeat.'
+                : result.issue === 'invalidToken'
+                  ? `The format contains an unsupported token: ${result.token}. Allowed: {seq}, {yyyy}, {yy}, {mm}, {dd}, {hh}.`
+                  : result.issue === 'tooLong'
+                    ? `The format must stay under ${SERIES_FORMAT_MAX_LENGTH} characters.`
+                    : 'The format is required.'
+            ctx.addIssue({ code: 'custom', message })
+          }),
+        isDefault: z.boolean().optional(),
+        isActive: z.boolean().optional(),
+      }),
+    )
+    .max(20)
+    .superRefine((list, ctx) => {
+      // The system-default template is reserved: a series rendering the same shape would collide
+      // with numbers core's own counter assigns to no-series invoices.
+      const result = validateSeriesList(list, { reservedFormats: [DEFAULT_INVOICE_NUMBER_FORMAT] })
+      if (result.ok) return
+      const message =
+        result.issue === 'duplicateCode'
+          ? `Duplicate series code: ${result.value}. Codes must be unique — each one owns its own counter.`
+          : result.issue === 'duplicateFormat'
+            ? `Two series share the format ${result.value} — their independent counters would produce colliding numbers.`
+            : result.issue === 'reservedFormat'
+              ? `The format ${result.value} is reserved for the system default numbering.`
+              : 'Only one active series can be the default.'
+      ctx.addIssue({ code: 'custom', message })
+    })
     .nullish(),
 })
 export type InvoiceSettingsPutInput = z.infer<typeof invoiceSettingsPutSchema>

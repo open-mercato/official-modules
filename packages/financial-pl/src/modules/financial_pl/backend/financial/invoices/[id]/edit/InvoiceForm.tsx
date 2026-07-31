@@ -52,7 +52,7 @@ import {
   collectLineGtuCodes,
 } from '../../../../../components/InvoiceLinesField'
 import { PlVatMetaForm, type InvoiceMeta } from '../../../../../components/PlVatMetaForm'
-import type { InvoiceKindColumn } from '../../../../../data/entities'
+import type { InvoiceKindColumn, InvoiceNumberingSeries } from '../../../../../data/entities'
 import { BuyerFields, buyerToSnapshot, type BuyerValue } from '../../../../../components/BuyerFields'
 import {
   PaymentFields,
@@ -1019,15 +1019,21 @@ const loadCurrencySuggestions = async (query?: string) => searchCurrencies(query
 /**
  * The provisional next invoice number, or null. Create mode only: on an existing invoice the number
  * is already assigned, and nothing is consumed on an abandoned form — the endpoint reads the
- * sequence rather than claiming it.
+ * sequence rather than claiming it. With a numbering series selected the peek targets that series'
+ * own counter and format.
  */
-function useNextInvoiceNumber(enabled: boolean): string | null {
+function useNextInvoiceNumber(enabled: boolean, seriesId: string | null): string | null {
   const [number, setNumber] = React.useState<string | null>(null)
   React.useEffect(() => {
     if (!enabled) return
     let cancelled = false
+    // Reset so a slow response for the previously selected series never lingers as the suggestion.
+    setNumber(null)
     void (async () => {
-      const res = await apiCall<{ number?: string | null }>('/api/financial_pl/next-invoice-number')
+      const url = seriesId
+        ? `/api/financial_pl/next-invoice-number?seriesId=${encodeURIComponent(seriesId)}`
+        : '/api/financial_pl/next-invoice-number'
+      const res = await apiCall<{ number?: string | null }>(url)
       if (cancelled || !res.ok) return
       const next = typeof res.result?.number === 'string' ? res.result.number.trim() : ''
       if (next) setNumber(next)
@@ -1035,9 +1041,12 @@ function useNextInvoiceNumber(enabled: boolean): string | null {
     return () => {
       cancelled = true
     }
-  }, [enabled])
+  }, [enabled, seriesId])
   return number
 }
+
+/** Radix `SelectItem` forbids an empty value, so "no series" travels as this sentinel. */
+const SYSTEM_NUMBERING_VALUE = '__system__'
 
 function InvoiceDetailFields({
   ctx,
@@ -1045,12 +1054,19 @@ function InvoiceDetailFields({
   invoiceKind,
   onInvoiceKindChange,
   suggestedNumber,
+  numberingSeries,
+  numberingSeriesId,
+  onNumberingSeriesChange,
 }: {
   ctx: CrudFormGroupComponentProps
   disabled?: boolean
   invoiceKind: InvoiceKindColumn
   onInvoiceKindChange: (next: InvoiceKindColumn) => void
   suggestedNumber?: string | null
+  /** Active series to offer; absent/empty hides the picker (edit mode, or none configured). */
+  numberingSeries?: InvoiceNumberingSeries[]
+  numberingSeriesId?: string | null
+  onNumberingSeriesChange?: (next: string | null) => void
 }) {
   const t = useT()
   const locale = useLocale()
@@ -1088,6 +1104,33 @@ function InvoiceDetailFields({
           </SelectContent>
         </Select>
       </div>
+
+      {numberingSeries && numberingSeries.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <label className={labelClass} htmlFor="financial_pl-numbering-series">
+            {t('financial_pl.invoices.form.fields.numberingSeries', 'Numbering series')}
+          </label>
+          <Select
+            value={numberingSeriesId ?? SYSTEM_NUMBERING_VALUE}
+            onValueChange={(next) => onNumberingSeriesChange?.(next === SYSTEM_NUMBERING_VALUE ? null : next)}
+            disabled={disabled}
+          >
+            <SelectTrigger id="financial_pl-numbering-series" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {numberingSeries.map((series) => (
+                <SelectItem key={series.id} value={series.id}>
+                  {series.name ? `${series.code} — ${series.name}` : series.code}
+                </SelectItem>
+              ))}
+              <SelectItem value={SYSTEM_NUMBERING_VALUE}>
+                {t('financial_pl.invoices.form.fields.numberingSeriesSystem', 'System default')}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-2">
         <label className={labelClass} htmlFor="financial_pl-invoice-number">
@@ -1265,9 +1308,28 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
    * themselves show the error.
    */
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
-  const suggestedNumber = useNextInvoiceNumber(!isEdit && !readOnly)
   const { settings: invoiceSettings, refresh: refreshInvoiceSettings } = useInvoiceSettings()
   const bankAccounts: PaymentAccountOption[] = invoiceSettings?.bankAccounts ?? []
+  const numberingSeriesOptions = React.useMemo(
+    () => (invoiceSettings?.numberingSeries ?? []).filter((series) => series.isActive !== false),
+    [invoiceSettings],
+  )
+  const [numberingSeriesId, setNumberingSeriesId] = React.useState<string | null>(null)
+  // Preselect the default series once settings arrive — but never fight an operator who already
+  // picked one (mirrors the dueTouched pattern for the smart date defaults).
+  const seriesTouched = React.useRef(false)
+  React.useEffect(() => {
+    if (isEdit || seriesTouched.current) return
+    const preset = numberingSeriesOptions.find((series) => series.isDefault) ?? null
+    setNumberingSeriesId(preset ? preset.id : null)
+  }, [isEdit, numberingSeriesOptions])
+  /**
+   * One claimed number per (form session, series), kept for retry: a create that fails after the
+   * claim would otherwise burn a second number on resubmit. Only a series switch abandons a kept
+   * claim (that gap is deliberate and rare — see the claim route).
+   */
+  const claimedNumberRef = React.useRef<{ seriesId: string; number: string } | null>(null)
+  const suggestedNumber = useNextInvoiceNumber(!isEdit && !readOnly, numberingSeriesId)
 
 
   // Submit-failure summary. `CrudForm` does render the thrown message, but only in a plain div at
@@ -1698,6 +1760,37 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
       Object.keys(mergedMetadata).length || hadMetadata ? { metadata: mergedMetadata } : {}
 
     const headerPayload = buildInvoiceHeaderPayload(header)
+    // Series numbering — claim only NOW, after every validation above has passed, so an abandoned
+    // or invalid form never consumes the counter. A manually typed number always wins (it is a
+    // legal override; core's unique index catches an accidental duplicate). The claimed number is
+    // kept for retry so a transient create failure does not leave a gap in the series.
+    if (!isEdit && !headerPayload.invoiceNumber && numberingSeriesId) {
+      const kept = claimedNumberRef.current
+      if (kept && kept.seriesId === numberingSeriesId) {
+        headerPayload.invoiceNumber = kept.number
+      } else {
+        const claim = await apiCall<{ number?: string; seriesCode?: string }>(
+          '/api/financial_pl/next-invoice-number/claim',
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: numberingSeriesId }),
+          },
+        )
+        const claimedNumber = claim.ok ? (claim.result?.number ?? '').trim() : ''
+        if (!claimedNumber) {
+          throw failSubmit(
+            t('financial_pl.invoices.form.errors.claimNumber', 'Failed to reserve the next number in the selected series.'),
+          )
+        }
+        claimedNumberRef.current = { seriesId: numberingSeriesId, number: claimedNumber }
+        headerPayload.invoiceNumber = claimedNumber
+      }
+      // Provenance on the invoice itself: which series minted the number. `metadataPayload` holds a
+      // reference to this object, and it is never empty here (priceMode is always set above).
+      const claimedSeries = numberingSeriesOptions.find((series) => series.id === numberingSeriesId)
+      if (claimedSeries) mergedMetadata.numberingSeries = { id: claimedSeries.id, code: claimedSeries.code }
+    }
     const totalsPayload = buildInvoiceTotalsPayload(
       value.lines,
       effectiveCurrency,
@@ -1824,6 +1917,8 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     runMutation,
     setActiveTab,
     t,
+    numberingSeriesId,
+    numberingSeriesOptions,
     value.buyer,
     value.lines,
     value.meta,
@@ -1886,6 +1981,16 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
                   invoiceKind={value.meta.invoiceKind ?? 'vat'}
                   onInvoiceKindChange={(next) => setMeta({ ...value.meta, invoiceKind: next })}
                   suggestedNumber={suggestedNumber}
+                  numberingSeries={isEdit ? undefined : numberingSeriesOptions}
+                  numberingSeriesId={numberingSeriesId}
+                  onNumberingSeriesChange={(next) => {
+                    // Radix emits '' when CrudForm resets on mount — that is not an operator pick,
+                    // so it must not mark the picker touched (it would block the default-preselect
+                    // effect forever). Same hazard the invoice-kind select guards with `|| 'vat'`.
+                    if (next === '') return
+                    seriesTouched.current = true
+                    setNumberingSeriesId(next)
+                  }}
                 />
               </FormSection>
               <FormSection icon={<Wallet className="size-4" />} title={t('financial_pl.invoices.form.sections.payment', 'Payment / settlement')}>
@@ -1952,6 +2057,8 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     setPriceMode,
     fieldErrors,
     suggestedNumber,
+    numberingSeriesOptions,
+    numberingSeriesId,
     bankAccounts,
     handleCreateAccount,
     t,
