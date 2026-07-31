@@ -1,0 +1,22 @@
+name: Partner label command
+
+# Thin caller — the logic and the certified-partners registry live in
+# open-mercato/open-mercato:
+#   .github/workflows/partner-label.yml
+#   .github/certified-partners.yml
+#
+# Contributors listed in the registry can comment
+# /label partner-request or /unlabel partner-request on issues and PRs.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  partner-label:
+    if: startsWith(github.event.comment.body, '/label ') || startsWith(github.event.comment.body, '/unlabel ')
+    uses: open-mercato/open-mercato/.github/workflows/partner-label.yml@main
