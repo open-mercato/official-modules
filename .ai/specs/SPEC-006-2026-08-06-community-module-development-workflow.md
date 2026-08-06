@@ -43,6 +43,7 @@ This spec keeps SPEC-001's **package contract** (npm package name vs snake_case 
 3. **Slow, multi-step inner loop.** Prior guidance was: edit source → build → update the package inside the in-repo sandbox → run generation → run the app. Authors need: edit source → change appears in a running consumer with hot reload — no registry, no in-repo app.
 4. **Duplicated per-package tooling.** Each package carried its own build and watch scripts; there was no single command surface, and drift was easy (one package even declared a watch script with no backing file).
 5. **A real packaging failure.** When a package is linked locally, the consumer resolves the package's **built output**. Without an explicit manifest allow-list, the built-output directory (commonly git-ignored) is **not shipped** by the local-link tooling, so the consumer resolves missing runtime files and fails. The workflow must close this class of failure.
+6. **Ongoing maintenance is fragile (observed).** Keeping the bundled app current depends on a platform-sync step that has failed in practice — including yarn install / lockfile errors — and the repository must continuously be held in a state where the in-repo app still builds. This recurring toil (keeping "always a working app" inside the repo) is exactly what the external-consumer model removes: the modules repo no longer owns an application to keep alive.
 
 ---
 
@@ -322,3 +323,4 @@ Each step leaves the repo working. Steps marked ✅ exist on the working branch 
 - Records supersession of SPEC-001 (sandbox app + local dev mode) and SPEC-002 (verdaccio).
 - Captures the seven resolved gate decisions; marks Phases 1–3 implemented and Phase 4 (core-CLI port + publish positioning) open.
 - Records removal of the CI/release + npm publish stack (go-forward publish deferred) and incidental repo slimming (skills now installed via the skills CLI, not a bundled script).
+- Adds observed maintenance-fragility motivation to the Problem Statement (platform-sync / yarn install failures; the toil of keeping an always-building in-repo app).
