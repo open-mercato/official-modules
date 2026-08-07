@@ -127,6 +127,10 @@ export function CorrectionForm({
   const [issueDate, setIssueDate] = React.useState<Date | null>(() => new Date())
   const [lines, setLines] = React.useState<InvoiceLineInput[]>(() => originalLines.map(toCorrectionLine))
   const [busy, setBusy] = React.useState(false)
+  // Creating the credit memo is irreversible even when the following KSeF request fails. Keep the
+  // created id and retry ONLY the send step; otherwise every click would create another orphan KOR.
+  const createdCreditMemoIdRef = React.useRef<string | null>(null)
+  const [createdCreditMemoId, setCreatedCreditMemoId] = React.useState<string | null>(null)
 
   /**
    * Recompute each line's net/VAT/gross on every edit, the way the invoice form does. Without this
@@ -146,6 +150,7 @@ export function CorrectionForm({
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const busyOrDisabled = busy || Boolean(disabled)
+  const formLocked = busyOrDisabled || createdCreditMemoId !== null
 
   // Running gross total for the footer — the operator should see what the correction is worth
   // without scrolling back through the lines.
@@ -193,20 +198,27 @@ export function CorrectionForm({
     try {
       const creditMemoId = await runMutation<string>({
         operation: async () => {
-          const create = await apiCall<CreditMemoResponse>('/api/sales/credit-memos', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-          if (!create.ok) {
-            throw new Error(
-              (typeof create.result?.error === 'string' ? create.result.error : null) ??
-                t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'),
-            )
-          }
-          const id = create.result?.creditMemoId ?? create.result?.id ?? create.result?.item?.id
+          let id = createdCreditMemoIdRef.current
           if (!id) {
-            throw new Error(t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'))
+            const create = await apiCall<CreditMemoResponse>('/api/sales/credit-memos', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(payload),
+            })
+            if (!create.ok) {
+              throw new Error(
+                (typeof create.result?.error === 'string' ? create.result.error : null) ??
+                  t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'),
+              )
+            }
+            id = create.result?.creditMemoId ?? create.result?.id ?? create.result?.item?.id ?? null
+            if (!id) {
+              throw new Error(t('financial_pl.correction.createFailed', 'Failed to create the credit memo.'))
+            }
+            // Set this before the KSeF call: a failed request must leave the form in send-only retry
+            // mode, including retries initiated by useGuardedMutation itself.
+            createdCreditMemoIdRef.current = id
+            setCreatedCreditMemoId(id)
           }
           const send = await apiCall<FromCreditMemoResponse>('/api/financial_pl/ksef/submissions/from-credit-memo', {
             method: 'POST',
@@ -260,7 +272,7 @@ export function CorrectionForm({
         <Textarea
           id="financial_pl-correction-reason"
           value={reason}
-          disabled={busyOrDisabled}
+          disabled={formLocked}
           aria-invalid={reasonError || undefined}
           aria-describedby={reasonError ? 'financial_pl-correction-reason-error' : undefined}
           onChange={(event) => {
@@ -289,7 +301,7 @@ export function CorrectionForm({
           id="financial_pl-correction-issue-date"
           value={issueDate}
           onChange={setIssueDate}
-          disabled={busyOrDisabled}
+          disabled={formLocked}
           displayFormat="dd.MM.yyyy"
           locale={dateLocale}
           className="w-auto"
@@ -312,9 +324,18 @@ export function CorrectionForm({
           priceMode={activePriceMode}
           onPriceModeChange={setActivePriceMode}
           originalLines={originalLines}
-          disabled={busyOrDisabled}
+          disabled={formLocked}
         />
       </div>
+
+      {createdCreditMemoId ? (
+        <Alert variant="warning">
+          {t(
+            'financial_pl.correction.createdRetryHint',
+            'The correction document was created, but KSeF submission did not finish. The fields are locked; retry sends the same correction and will not create a duplicate.',
+          )}
+        </Alert>
+      ) : null}
 
       {/* Before → after: the whole point of a correction is the difference. */}
       <div className="grid grid-cols-3 gap-3 rounded-md border border-border p-3">
@@ -378,7 +399,9 @@ export function CorrectionForm({
         ) : null}
         <Button type="button" disabled={busyOrDisabled} onClick={handleSubmit}>
           <FileWarning className="mr-1 size-4" />
-          {t('financial_pl.correction.submit', 'Issue correction')}
+          {createdCreditMemoId
+            ? t('financial_pl.correction.retrySubmission', 'Retry KSeF submission')
+            : t('financial_pl.correction.submit', 'Issue correction')}
         </Button>
       </DialogFooter>
       {ConfirmDialogElement}

@@ -38,7 +38,7 @@ function invoicePayload() {
     grandTotalNetAmount: 100,
     grandTotalGrossAmount: 123,
     lines: [
-      { name: 'Usługa A', quantity: 2, unitPriceNet: 50, taxRate: 23 },
+      { name: 'Usługa A', quantity: 2, unitPriceNet: 50, taxRate: 23, currencyCode: 'PLN' },
     ],
   };
 }

@@ -562,6 +562,20 @@ async function keepJpkSubmissionResumable(
   })
 }
 
+function isTerminalJpkFailureStatus(status: string | undefined): boolean {
+  if (!status) return false
+  const normalized = status.toLowerCase()
+  return (
+    normalized.startsWith('4') ||
+    normalized.startsWith('5') ||
+    normalized.includes('fail') ||
+    normalized.includes('reject') ||
+    normalized.includes('error') ||
+    normalized.includes('blad') ||
+    normalized.includes('błąd')
+  )
+}
+
 export const submitFilingCommand: CommandHandler<
   { filingId: string },
   { filingId: string; status: 'submitted'; referenceNumber: string }
@@ -710,6 +724,21 @@ export const submitFilingCommand: CommandHandler<
         await tx.flush()
       })
       return { filingId: claimed.filingId, status: 'submitted', referenceNumber: result.referenceNumber }
+    }
+
+    if (result.referenceNumber && isTerminalJpkFailureStatus(result.status)) {
+      await resetJpkSubmissionToGenerated(
+        em,
+        scope,
+        claimed.filingId,
+        result.error,
+        result.referenceNumber,
+      )
+      throw new CrudHttpError(502, {
+        error: result.error,
+        code: 'jpk_submit_failed',
+        referenceNumber: result.referenceNumber,
+      })
     }
 
     if (result.referenceNumber) {

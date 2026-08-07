@@ -90,7 +90,7 @@ export default function CreateInvoicePage() {
                 footerNote={invoiceSettings?.footerNote ?? null}
                 invoiceNumber={snapshot?.invoiceNumber ?? null}
                 invoiceNumberProvisional={snapshot?.invoiceNumberProvisional}
-                seller={null}
+                seller={invoiceSettings?.seller ?? null}
                 buyer={{
                   name: snapshot?.buyer?.companyName ?? null,
                   nip: snapshot?.buyer?.nip ?? null,

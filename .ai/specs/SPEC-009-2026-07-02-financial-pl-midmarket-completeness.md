@@ -144,7 +144,6 @@ A raw `PUT /api/sales/invoices` from a session with **no selected organization**
 | Faktura VAT RR / RR KOR | flat-rate-farmer niche; voluntary |
 | PEF (B2G) FA_PEF(3) | B2G out of module scope |
 | Awaria-announcement polling | offline/awaryjny issuance already supported; auto-detection is an enhancement |
-| One-click create+send | still blocked on released core (no invoice-status transition API) — unchanged from SPEC-008 |
 
 ## Architecture & compatibility notes
 
@@ -186,3 +185,9 @@ Each phase gates on `yarn workspace @open-mercato/financial-pl test` + typecheck
 **`margin_vat_rate` storage decision:** stored as a **text** column (this module has no numeric columns — every amount/rate is text), coerced to a number at the API boundary. Chosen during code-jury reconciliation to keep the MikroORM snapshot drift-free and to remove a string↔number round-trip hazard.
 
 **Code-stage 4-model jury (post-implementation):** see the analysis record. Fixed blockers: margin mixed-mode false-rejection on core's `tax_rate=0` default (Codex+Kimi); gross-mode PDF VAT recompute-from-net drift (Codex); BC — net-line stored-total preservation (Codex); correction (KOR) UI dropping discount/gross fields (Codex); payment-QR NIP-normalization crash + pipe-injection (Kimi); MikroORM snapshot drift for the new columns (Claude). Strengthened two weak tests (Codex). Rejected as false positive: DeepSeek "marża without purchase cost = fraudulent JPK" — `SprzedazVAT_Marza` (full gross) is always emitted; only the optional K-field VAT decomposition defers to manual completion (statutorily normal).
+
+### 2026-08-06 — final UI acceptance fixes
+- Explicit, confirmed KSeF send now constitutes issuance for blank/draft/pending invoices; canceled/void invoices remain blocked. This unblocks create+send without inventing a core status transition.
+- KSeF edit locks include `queued` and `offline_issued`; an offline-issued invoice exposes one send-now action rather than contradictory Send/Retry/Issue actions.
+- Correction authoring stores the corrected-invoice id in metadata as a compatibility fallback and retries the same already-created credit memo after a send failure, preventing orphan/duplicate KOR documents.
+- Edit prefill preserves gross unit price and discounts, the draft preview shows the configured seller, the order reference is UUID-validated before number claim, and certificate enrollment supports Cmd/Ctrl+Enter.

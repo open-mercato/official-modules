@@ -393,6 +393,11 @@ export default function FinancialPlJpkPage() {
     [t],
   )
 
+  const handleUpoDownload = React.useCallback((row: FilingRow) => {
+    if (typeof window === 'undefined' || row.status !== 'submitted' || !row.hasUpo) return
+    window.open(`/api/financial_pl/ksef/jpk/upo?filingId=${encodeURIComponent(row.id)}`, '_blank', 'noopener')
+  }, [])
+
   const handleSubmit = React.useCallback(
     async (row: FilingRow) => {
       if (row.status !== 'generated') return
@@ -794,6 +799,13 @@ export default function FinancialPlJpkPage() {
                         label: t('financial_pl.jpk.filings.actions.download', 'Download XML'),
                         onSelect: () => handleDownload(row),
                       },
+                      ...(row.status === 'submitted' && row.hasUpo
+                        ? [{
+                            id: 'download-upo',
+                            label: t('financial_pl.jpk.filings.actions.downloadUpo', 'Download UPO'),
+                            onSelect: () => handleUpoDownload(row),
+                          }]
+                        : []),
                     ]}
                   />
                 )}

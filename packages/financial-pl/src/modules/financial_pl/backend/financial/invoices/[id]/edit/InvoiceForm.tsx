@@ -749,12 +749,12 @@ function InvoiceTabs({
           aria-label={t('financial_pl.invoices.form.tabs.dodatkowe', 'Additional')}
           className={activeTab === 'dodatkowe' ? 'mt-2 max-w-xl' : 'hidden'}
         >
-          <FormSection icon={<Hash className="size-4" />} title={t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)')}>
+          <FormSection icon={<Hash className="size-4" />} title={t('financial_pl.invoices.form.fields.orderId', 'Order UUID (optional)')}>
             <Input
               value={orderIdValue}
               onChange={(event) => ctx.setValue('orderId', event.target.value)}
               disabled={readOnly}
-              aria-label={t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)')}
+              aria-label={t('financial_pl.invoices.form.fields.orderId', 'Order UUID (optional)')}
               aria-invalid={Boolean(ctx.errors?.orderId)}
             />
             {ctx.errors?.orderId ? <p className="text-sm text-destructive">{ctx.errors.orderId}</p> : null}
@@ -1288,6 +1288,8 @@ function PreviewSync({
 export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onPreviewChange, headerActions, asideContent }: InvoiceFormProps) {
   const t = useT()
   const router = useRouter()
+  const [clientReady, setClientReady] = React.useState(false)
+  React.useEffect(() => setClientReady(true), [])
   const isEdit = Boolean(invoiceId)
   const formTitle = isEdit
     ? t('financial_pl.invoices.edit.title', 'Edit invoice')
@@ -1568,6 +1570,17 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     if (!isValidCurrencyCode(effectiveCurrency)) {
       throw failSubmit(t('financial_pl.validation.currencyInvalid', 'Select a valid ISO currency code.'))
     }
+    const orderId = header.orderId.trim()
+    if (orderId && !UUID_RE.test(orderId)) {
+      problems.push({
+        tab: 'dodatkowe',
+        field: 'orderId',
+        message: t(
+          'financial_pl.validation.orderIdUuid',
+          'Order ID must be a valid UUID copied from an Open Mercato sales order.',
+        ),
+      })
+    }
     const marginScheme = value.meta.marginScheme ?? null
     const effectivePriceMode: PriceMode = marginScheme ? 'gross' : value.priceMode
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency, effectivePriceMode, marginScheme)
@@ -1691,9 +1704,15 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
 
     // One gate for every field check: report them all, mark the fields, and land the operator on the
     // tab holding the first problem.
-    if (problems.length > 0 && !asDraft) {
-      setFieldErrors(Object.fromEntries(problems.map((p) => [p.field, p.message])))
-      setActiveTab(problems[0].tab)
+    // Drafts may intentionally be incomplete, but values that are present still have to be
+    // persistable. Core stores orderId as a UUID, so letting an invalid value reach the API turns
+    // a useful field error into a generic failed-to-create response.
+    const blockingProblems = asDraft
+      ? problems.filter((problem) => problem.field === 'orderId')
+      : problems
+    if (blockingProblems.length > 0) {
+      setFieldErrors(Object.fromEntries(blockingProblems.map((p) => [p.field, p.message])))
+      setActiveTab(blockingProblems[0].tab)
       // Land the caret on the first offending control. Deferred twice: the tab switch and the
       // freshly-marked inputs both have to render before there is anything to focus.
       // A timeout, not rAF: CrudForm runs its own post-submit focus handling, and a frame-level
@@ -1710,7 +1729,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
         first.focus({ preventScroll: true })
         first.scrollIntoView({ block: 'center', behavior: 'smooth' })
       }, 120)
-      throw failSubmit([...new Set(problems.map((p) => p.message))].join(' '))
+      throw failSubmit([...new Set(blockingProblems.map((p) => p.message))].join(' '))
     }
     setFieldErrors({})
 
@@ -2065,8 +2084,33 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     value,
   ])
 
+  // CrudForm resets its controlled values whenever `initialValues` changes by identity. Keep the
+  // object stable while buyer, line, payment, and tax state changes; otherwise interacting with
+  // those sections can silently restore invoice dates and header fields to their mount defaults.
+  const crudInitialValues = React.useMemo(() => ({
+    invoiceNumber: value.header.invoiceNumber,
+    issueDate: value.header.issueDate,
+    dueDate: value.header.dueDate,
+    saleDate: value.header.saleDate,
+    currencyCode: value.header.currencyCode,
+    orderId: value.header.orderId,
+    notes: value.notes ?? '',
+  }), [
+    value.header.invoiceNumber,
+    value.header.issueDate,
+    value.header.dueDate,
+    value.header.saleDate,
+    value.header.currencyCode,
+    value.header.orderId,
+    value.notes,
+  ])
+
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className="flex flex-col gap-4"
+      data-financial-pl-invoice-form-ready={clientReady ? '1' : '0'}
+      data-financial-pl-invoice-settings-ready={invoiceSettings ? '1' : '0'}
+    >
       {/*
         Page heading. `CrudForm` renders its own title through the DS `EditHeader`, which uses a
         plain <div> — so a CrudForm page ships no <h1> and its sections jump straight to <h3>,
@@ -2216,7 +2260,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
           { id: 'recipientSignatory', label: 'recipientSignatory', type: 'text' },
           {
             id: 'orderId',
-            label: t('financial_pl.invoices.form.fields.orderId', 'Order ID (optional)'),
+            label: t('financial_pl.invoices.form.fields.orderId', 'Order UUID (optional)'),
             type: 'text',
           },
           {
@@ -2227,15 +2271,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
           },
         ]}
         groups={groups}
-        initialValues={{
-          invoiceNumber: value.header.invoiceNumber,
-          issueDate: value.header.issueDate,
-          dueDate: value.header.dueDate,
-          saleDate: value.header.saleDate,
-          currencyCode: value.header.currencyCode,
-          orderId: value.header.orderId,
-          notes: value.notes ?? '',
-        }}
+        initialValues={crudInitialValues}
         schema={z.object({
           invoiceNumber: z.string().optional(),
           issueDate: z.string().optional(),

@@ -15,6 +15,12 @@ export type InvoiceSettingsDto = {
   defaultPriceMode?: string | null
   bankAccounts?: PaymentAccountOption[]
   numberingSeries?: InvoiceNumberingSeries[]
+  seller?: {
+    name: string | null
+    nip: string | null
+    addressLine1: string | null
+    addressLine2: string | null
+  } | null
 }
 
 /**

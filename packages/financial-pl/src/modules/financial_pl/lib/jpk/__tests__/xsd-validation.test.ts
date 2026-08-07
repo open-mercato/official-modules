@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildJpkXml, type BuildJpkXmlInput } from '../build-jpk-xml'
 import { computeJpkDeclaration } from '../compute-declaration'
-import type { JpkSprzedazRow, JpkZakupRow } from '../jpk-codes'
+import { JPK_NAMESPACE, type JpkSprzedazRow, type JpkZakupRow } from '../jpk-codes'
 
 const SCHEMA_DIR = join(__dirname, '..', 'schema')
 
@@ -82,6 +82,13 @@ if (!hasXmllint()) {
 }
 
 describe('JPK XSD validation gate', () => {
+  it('uses the final CRWDE namespaces effective from 2026-02-01', () => {
+    expect(JPK_NAMESPACE).toEqual({
+      V7M: 'http://crd.gov.pl/wzor/2025/12/19/14090/',
+      V7K: 'http://crd.gov.pl/wzor/2025/12/19/14089/',
+    })
+  })
+
   itx('JPK_V7M(3) full file (sales + purchases + declaration) validates', () => {
     expect(validate(buildJpkXml(fullFile('V7M', 10)), 'V7M')).toBe('')
   })

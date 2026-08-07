@@ -46,8 +46,9 @@ export const integration: IntegrationDefinition = {
         key: 'ksefToken',
         label: 'KSeF Authorization Token',
         type: 'secret',
-        required: true,
-        helpText: 'Authorization token issued for the context NIP from the KSeF portal.',
+        required: false,
+        helpText:
+          'Optional transitional authorization token issued for the context NIP. Leave blank when authentication method is certificate.',
       },
       {
         key: 'sellerName',

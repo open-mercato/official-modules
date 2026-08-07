@@ -16,7 +16,7 @@ const CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50
 const ZIP_VERSION_STORE = 20
 const UTF8_FILE_NAME_FLAG = 0x0800
-const STORE_COMPRESSION_METHOD = 0
+const DEFLATE_COMPRESSION_METHOD = 8
 const DOS_TIME_MIDNIGHT = 0
 const DOS_DATE_1980_01_01 = 0x0021
 const ZIP64_LIMIT = 0xffffffff
@@ -36,6 +36,8 @@ export type JpkStatusPollDeps = {
 export type JpkSubmissionDeps = JpkStatusPollDeps & {
   signer: { certificatePem: string; privateKeyPem: string }
   mfPublicCertPem: string
+  /** TEST-only: ask the MF gateway to validate the qualified-signature trust path. */
+  validateQualifiedSignature?: boolean
   zip?: (xml: string) => Buffer
   onReference?: (referenceNumber: string) => Promise<void> | void
 }
@@ -69,6 +71,7 @@ type StatusPayload = {
 type ZipEntry = {
   fileNameBytes: Buffer
   data: Buffer
+  compressedData: Buffer
   crc32: number
   localHeaderOffset: number
 }
@@ -80,23 +83,26 @@ type PollOptions = {
 }
 
 export function defaultZip(xml: string): Buffer {
-  return buildSingleEntryStoreModeZip(JPK_ZIP_FILE_NAME, Buffer.from(xml, 'utf8'))
+  return buildSingleEntryDeflateZip(JPK_ZIP_FILE_NAME, Buffer.from(xml, 'utf8'))
 }
 
-function buildSingleEntryStoreModeZip(fileName: string, data: Buffer): Buffer {
+function buildSingleEntryDeflateZip(fileName: string, data: Buffer): Buffer {
   const fileNameBytes = Buffer.from(fileName, 'utf8')
   if (fileNameBytes.length === 0) throw new Error('[internal] JPK ZIP entry file name must be non-empty')
   assertZip16(fileNameBytes.length, `file name length for ${fileName}`)
   assertZip32(data.length, `file size for ${fileName}`)
+  const compressedData = zlib.deflateRawSync(data)
+  assertZip32(compressedData.length, `compressed file size for ${fileName}`)
 
   const entry: ZipEntry = {
     fileNameBytes,
     data,
+    compressedData,
     crc32: computeCrc32(data),
     localHeaderOffset: 0,
   }
   const localHeader = localFileHeader(entry)
-  const centralDirectoryOffset = localHeader.length + fileNameBytes.length + data.length
+  const centralDirectoryOffset = localHeader.length + fileNameBytes.length + compressedData.length
   assertZip32(centralDirectoryOffset, 'central directory offset')
 
   const centralHeader = centralDirectoryHeader(entry)
@@ -106,7 +112,7 @@ function buildSingleEntryStoreModeZip(fileName: string, data: Buffer): Buffer {
   return Buffer.concat([
     localHeader,
     fileNameBytes,
-    data,
+    compressedData,
     centralHeader,
     fileNameBytes,
     endOfCentralDirectory(1, centralDirectorySize, centralDirectoryOffset),
@@ -118,11 +124,11 @@ function localFileHeader(entry: ZipEntry): Buffer {
   header.writeUInt32LE(LOCAL_FILE_HEADER_SIGNATURE, 0)
   header.writeUInt16LE(ZIP_VERSION_STORE, 4)
   header.writeUInt16LE(UTF8_FILE_NAME_FLAG, 6)
-  header.writeUInt16LE(STORE_COMPRESSION_METHOD, 8)
+  header.writeUInt16LE(DEFLATE_COMPRESSION_METHOD, 8)
   header.writeUInt16LE(DOS_TIME_MIDNIGHT, 10)
   header.writeUInt16LE(DOS_DATE_1980_01_01, 12)
   header.writeUInt32LE(entry.crc32, 14)
-  header.writeUInt32LE(entry.data.length, 18)
+  header.writeUInt32LE(entry.compressedData.length, 18)
   header.writeUInt32LE(entry.data.length, 22)
   header.writeUInt16LE(entry.fileNameBytes.length, 26)
   header.writeUInt16LE(0, 28)
@@ -135,11 +141,11 @@ function centralDirectoryHeader(entry: ZipEntry): Buffer {
   header.writeUInt16LE(ZIP_VERSION_STORE, 4)
   header.writeUInt16LE(ZIP_VERSION_STORE, 6)
   header.writeUInt16LE(UTF8_FILE_NAME_FLAG, 8)
-  header.writeUInt16LE(STORE_COMPRESSION_METHOD, 10)
+  header.writeUInt16LE(DEFLATE_COMPRESSION_METHOD, 10)
   header.writeUInt16LE(DOS_TIME_MIDNIGHT, 12)
   header.writeUInt16LE(DOS_DATE_1980_01_01, 14)
   header.writeUInt32LE(entry.crc32, 16)
-  header.writeUInt32LE(entry.data.length, 20)
+  header.writeUInt32LE(entry.compressedData.length, 20)
   header.writeUInt32LE(entry.data.length, 24)
   header.writeUInt16LE(entry.fileNameBytes.length, 28)
   header.writeUInt16LE(0, 30)
@@ -335,7 +341,7 @@ async function postXml(fetchImpl: typeof fetch, url: string, body: string, timeo
 async function postJson(
   fetchImpl: typeof fetch,
   url: string,
-  body: Record<string, string>,
+  body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<Response> {
   return fetchWithTimeout(fetchImpl, url, {
@@ -343,6 +349,28 @@ async function postJson(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   }, timeoutMs)
+}
+
+async function gatewayHttpError(label: string, response: Response): Promise<string> {
+  let detail = ''
+  try {
+    const body = toRecord(await readJson(response))
+    const code = body?.Code ?? body?.code
+    const message = body?.Message ?? body?.message
+    const fields = [code, message].filter(
+      (value): value is string | number => typeof value === 'string' || typeof value === 'number',
+    )
+    if (fields.length > 0) detail = `: ${fields.join(' — ')}`
+  } catch {
+    // The status code remains actionable when an upstream proxy returns a non-JSON error body.
+  }
+  return `${label} failed with HTTP ${response.status}${detail}`
+}
+
+function validateQualifiedSignatureOnTest(deps: JpkSubmissionDeps): boolean {
+  if (deps.environment !== 'test') return false
+  if (typeof deps.validateQualifiedSignature === 'boolean') return deps.validateQualifiedSignature
+  return process.env.OM_JPK_VALIDATE_QUALIFIED_SIGNATURE === 'true'
 }
 
 function readStatusPayload(value: unknown): StatusPayload {
@@ -473,14 +501,18 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
     })
     const signedMetadataXml = await signJpkInitUpload(metadataXml, deps.signer)
     const gatewayUrl = resolveJpkGatewayUrl(deps.environment)
+    const validateSignature = validateQualifiedSignatureOnTest(deps)
+    const initUploadPath = validateSignature
+      ? '/api/Storage/InitUploadSigned?enableValidateQualifiedSignature=true'
+      : '/api/Storage/InitUploadSigned'
 
     const initResponse = await postXml(
       fetchImpl,
-      absoluteApiUrl(gatewayUrl, '/api/Storage/InitUploadSigned'),
+      absoluteApiUrl(gatewayUrl, initUploadPath),
       signedMetadataXml,
       pollOptions.requestTimeoutMs,
     )
-    if (!initResponse.ok) return { ok: false, error: `JPK InitUploadSigned failed with HTTP ${initResponse.status}` }
+    if (!initResponse.ok) return { ok: false, error: await gatewayHttpError('JPK InitUploadSigned', initResponse) }
 
     const initPayload = parseInitUploadResponse(await readJson(initResponse))
     if (!initPayload) return { ok: false, error: 'JPK InitUploadSigned returned an invalid response' }
@@ -513,14 +545,20 @@ export async function submitJpk(jpkXml: string, deps: JpkSubmissionDeps): Promis
       }
     }
 
-    const finishResponse = await postJson(fetchImpl, absoluteApiUrl(gatewayUrl, '/api/Storage/FinishUpload'), {
-      ReferenceNumber: initPayload.ReferenceNumber,
-    }, pollOptions.requestTimeoutMs)
+    const finishResponse = await postJson(
+      fetchImpl,
+      absoluteApiUrl(gatewayUrl, '/api/Storage/FinishUpload'),
+      {
+        ReferenceNumber: initPayload.ReferenceNumber,
+        AzureBlobNameList: initPayload.RequestToUploadFileList.map((entry) => entry.BlobName),
+      },
+      pollOptions.requestTimeoutMs,
+    )
     if (!finishResponse.ok) {
       return {
         ok: false,
         referenceNumber: initPayload.ReferenceNumber,
-        error: `JPK FinishUpload failed with HTTP ${finishResponse.status}`,
+        error: await gatewayHttpError('JPK FinishUpload', finishResponse),
       }
     }
 

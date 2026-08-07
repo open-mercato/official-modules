@@ -132,6 +132,33 @@ describe('resolveFa3FromCreditMemo', () => {
     ).rejects.toMatchObject({ status: 422, body: { code: 'credit_memo_not_linked' } })
   })
 
+  it('uses the immutable metadata link when an older core projection omits invoice_id', async () => {
+    const rows = baseRows({
+      'sales:sales_credit_memo': [
+        { ...CREDIT_MEMO, invoice_id: null, metadata: { correctedInvoiceId: 'inv-1' } },
+      ],
+    })
+    const { correctedInvoiceId } = await resolveFa3FromCreditMemo(
+      { queryEngine: makeQueryEngine(rows), contextNip: '2481632647', seller: SELLER },
+      { ...args, originalOutsideKsef: true },
+    )
+
+    expect(correctedInvoiceId).toBe('inv-1')
+  })
+
+  it('does not filter credit-memo lines by the nonexistent deleted_at column', async () => {
+    const rows = baseRows()
+    const query = jest.fn(async (entityId: string) => ({ items: rows[entityId] ?? [] }))
+
+    await resolveFa3FromCreditMemo(
+      { queryEngine: { query } as unknown as ResolveFa3QueryEngine, contextNip: '2481632647', seller: SELLER },
+      { ...args, originalOutsideKsef: true },
+    )
+
+    const lineQuery = query.mock.calls.find(([entityId]) => entityId === 'sales:sales_credit_memo_line')
+    expect(lineQuery?.[1]?.filters).toEqual({ credit_memo_id: { $eq: 'cm-1' } })
+  })
+
   it('rejects (422) a credit memo with no lines', async () => {
     const rows = baseRows({
       'sales:sales_credit_memo_line': [],

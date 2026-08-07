@@ -9,6 +9,7 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { InvoiceSettings, type InvoiceBankAccount, type InvoiceNumberingSeries } from '../../data/entities'
 import { invoiceSettingsPutSchema } from '../../data/validators'
+import { readSellerIdentity, type SellerIdentity } from '../../lib/seller-identity'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
@@ -25,10 +26,11 @@ const EMPTY_SETTINGS = {
   defaultPriceMode: null as string | null,
   bankAccounts: [] as InvoiceBankAccount[],
   numberingSeries: [] as InvoiceNumberingSeries[],
+  seller: null as SellerIdentity | null,
 }
 
-function toDto(row: InvoiceSettings | null) {
-  if (!row) return EMPTY_SETTINGS
+function toDto(row: InvoiceSettings | null, seller: SellerIdentity | null) {
+  if (!row) return { ...EMPTY_SETTINGS, seller }
   return {
     logoDataUrl: row.logoDataUrl ?? null,
     footerNote: row.footerNote ?? null,
@@ -39,6 +41,7 @@ function toDto(row: InvoiceSettings | null) {
     defaultPriceMode: row.defaultPriceMode ?? null,
     bankAccounts: row.bankAccounts ?? [],
     numberingSeries: row.numberingSeries ?? [],
+    seller,
   }
 }
 
@@ -63,7 +66,8 @@ export async function GET(req: Request) {
     const organizationId = requireOrganizationId(scope, auth.orgId)
     const em = (container.resolve('em') as EntityManager).fork()
     const row = await em.findOne(InvoiceSettings, { organizationId, tenantId: auth.tenantId, deletedAt: null })
-    return NextResponse.json({ settings: toDto(row) })
+    const seller = await readSellerIdentity(container, { organizationId, tenantId: auth.tenantId })
+    return NextResponse.json({ settings: toDto(row, seller) })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
     console.error('[internal] financial_pl.invoice-settings GET failed', err)
@@ -120,7 +124,8 @@ export async function PUT(req: Request) {
           }))
     }
     await em.flush()
-    return NextResponse.json({ ok: true, settings: toDto(row) })
+    const seller = await readSellerIdentity(container, { organizationId, tenantId: auth.tenantId })
+    return NextResponse.json({ ok: true, settings: toDto(row, seller) })
   } catch (err) {
     if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
     if (err instanceof z.ZodError) {
@@ -159,6 +164,14 @@ const settingsSchema = z.object({
       isActive: z.boolean().optional(),
     }),
   ),
+  seller: z
+    .object({
+      name: z.string().nullable(),
+      nip: z.string().nullable(),
+      addressLine1: z.string().nullable(),
+      addressLine2: z.string().nullable(),
+    })
+    .nullable(),
 })
 
 export const openApi: OpenApiRouteDoc = {

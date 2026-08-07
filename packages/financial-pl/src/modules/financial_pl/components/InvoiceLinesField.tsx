@@ -626,6 +626,12 @@ export function InvoiceLinesField({
                     // input it renders — same look the DS Input gives its own invalid state.
                     lineError('name') ? ' [&_input]:border-destructive' : ''
                   }`}
+                  onBlurCapture={(event) => {
+                    if (busy || !(event.target instanceof HTMLInputElement)) return
+                    const next = event.target.value.trim()
+                    if (next === line.name.trim()) return
+                    updateLineProduct(index, next)
+                  }}
                 >
                   <ComboboxInput
                     value={line.name}

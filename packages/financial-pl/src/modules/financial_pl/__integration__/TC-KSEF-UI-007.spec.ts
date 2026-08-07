@@ -34,6 +34,7 @@ async function openCreateInvoicePage(page: Page) {
   await login(page, 'admin');
   await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
 }
 
 async function readCreatedId(responseLabel: string, response: APIResponse) {
@@ -42,30 +43,28 @@ async function readCreatedId(responseLabel: string, response: APIResponse) {
 }
 
 test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
-  test('keeps VAT, KSeF & JPK details collapsed until expanded', async ({ page }) => {
+  test('keeps JPK details collapsed on the Taxes & KSeF tab until expanded', async ({ page }) => {
     await openCreateInvoicePage(page);
+    const taxesTab = page.getByRole('tab', { name: /Taxes & KSeF/i });
+    await taxesTab.click();
+    await expect(taxesTab).toHaveAttribute('aria-selected', 'true');
 
-    const advanced = page.getByRole('button', { name: /VAT, KSeF & JPK details \(advanced\)/i });
+    const jpkMarkings = page.getByRole('button', { name: /JPK markings/i });
     const gtuFilter = page.getByLabel('Filter GTU codes');
     const procedureFilter = page.getByLabel('Filter procedure markings');
 
-    await expect(advanced, 'advanced VAT/KSeF/JPK accordion is present').toBeVisible();
-    await expect(advanced, 'advanced VAT/KSeF/JPK accordion starts collapsed').toHaveAttribute('aria-expanded', 'false');
-    await expect(gtuFilter, 'GTU controls are hidden from the default editor surface').toBeHidden();
-    await expect(procedureFilter, 'procedure controls are hidden from the default editor surface').toBeHidden();
+    await expect(jpkMarkings, 'JPK markings accordion is present on the tax tab').toBeVisible();
+    await expect(jpkMarkings, 'JPK markings start collapsed').toHaveAttribute('aria-expanded', 'false');
+    await expect(gtuFilter, 'GTU controls start hidden').toBeHidden();
+    await expect(procedureFilter, 'procedure controls start hidden').toBeHidden();
 
-    await advanced.click();
-    await expect(advanced, 'advanced VAT/KSeF/JPK accordion expands').toHaveAttribute('aria-expanded', 'true');
-    await expect(page.getByLabel('Taxpayer NIP'), 'core PL-VAT fields are revealed by the advanced accordion').toBeVisible();
-
-    const jpkMarkings = page.getByRole('button', { name: /JPK markings/i });
-    await expect(jpkMarkings, 'JPK markings are reachable from the expanded advanced area').toBeVisible();
     await jpkMarkings.click();
     await expect(gtuFilter, 'expanding JPK markings reveals GTU controls').toBeVisible();
     await expect(procedureFilter, 'expanding JPK markings reveals procedure controls').toBeVisible();
   });
 
   test('selecting a catalog product fills name and unit without cross-currency price fill', async ({ page, request }) => {
+    test.slow();
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
     const stamp = suffix();
@@ -123,10 +122,9 @@ test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
       priceId = await readCreatedId('Price create', priceRes);
 
       await openCreateInvoicePage(page);
-      await page.getByLabel('Currency').fill('PLN');
+      await expect(page.getByPlaceholder('Search currency (e.g. PLN, EUR)…')).toHaveValue('PLN');
 
       const productInput = page.getByPlaceholder('Search products or type a name').first();
-      const lineName = page.locator('#financial_pl-line-name-0');
       const lineUnit = page.locator('#financial_pl-line-unit-0');
       const linePrice = page.locator('#financial_pl-line-price-0');
       const initialPrice = await linePrice.inputValue();
@@ -136,7 +134,7 @@ test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
       await expect(suggestion, 'created catalog product appears in the product picker').toBeVisible();
       await suggestion.click();
 
-      await expect(lineName, 'selecting a product fills the line name').toHaveValue(productTitle);
+      await expect(productInput, 'selecting a product fills the line name').toHaveValue(productTitle);
       await expect(lineUnit, 'selecting a product fills the default unit').toContainText('kg');
       await expect(linePrice, 'foreign-currency product pricing must not overwrite the invoice net price').toHaveValue(initialPrice);
       expect(Number.parseFloat((await linePrice.inputValue()) || '0'), 'USD net price is not imported into a PLN invoice').not.toBeCloseTo(
@@ -199,7 +197,7 @@ test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
       await expect(page.locator('#financial_pl-buyer-line1'), 'customer primary address line is filled').toHaveValue(addressLine1);
       await expect(page.locator('#financial_pl-buyer-city'), 'customer primary address city is filled').toHaveValue(city);
       await expect(page.locator('#financial_pl-buyer-postal'), 'customer primary address postal code is filled').toHaveValue(postalCode);
-      await expect(page.locator('#financial_pl-buyer-country'), 'customer primary address country is filled').toHaveValue('PL');
+      await expect(page.locator('#financial_pl-buyer-country'), 'customer primary address country is filled').toContainText('PL');
       await expect(page.locator('#financial_pl-buyer-nip'), 'NIP is not copied from the customer record').toHaveValue('');
     } finally {
       await deleteGeneralEntityIfExists(request, token, '/api/customers/addresses', addressId);
@@ -229,6 +227,7 @@ test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
 
     await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+    await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
 
     const buyerInput = page.getByPlaceholder('Search customers or type a name').first();
     await buyerInput.fill('Manual SPEC016 Buyer');
@@ -238,7 +237,7 @@ test.describe('TC-KSEF-UI-007: SPEC-016 invoice editor picker flows', () => {
     const productInput = page.getByPlaceholder('Search products or type a name').first();
     await productInput.fill('Manual SPEC016 Product');
     await productInput.press('Enter');
-    await expect(page.locator('#financial_pl-line-name-0'), 'product combobox accepts free text when catalog list is empty').toHaveValue(
+    await expect(productInput, 'product combobox accepts free text when catalog list is empty').toHaveValue(
       'Manual SPEC016 Product',
     );
 

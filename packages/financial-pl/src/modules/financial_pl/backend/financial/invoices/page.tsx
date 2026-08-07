@@ -37,7 +37,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { KsefStatusBadge } from '../../../components/KsefStatusBadge'
 import { InvoiceStatCard } from '../../../components/InvoiceStatCard'
 import { InvoiceEmailDialog, type InvoiceEmailTarget } from '../../../components/InvoiceEmailDialog'
-import { isInvoiceIssued } from '../../../lib/invoice-status'
+import { canIssueInvoiceToKsef } from '../../../lib/invoice-status'
 
 type InvoiceListItem = {
   id: string
@@ -220,7 +220,9 @@ function formatMonthLabel(period: MonthPeriod): string {
 }
 
 function isInvoiceEligibleForKsefBatch(row: InvoiceRow): boolean {
-  if (!isInvoiceIssued(row.status)) return false
+  // Match the single-invoice issuance rule: an explicit KSeF action may issue a blank/draft/
+  // pending core invoice, while terminal canceled/void states remain blocked.
+  if (!canIssueInvoiceToKsef(row.status)) return false
   const ksefStatus = row.ksefStatus?.trim().toLowerCase()
   return !ksefStatus || !BATCH_INELIGIBLE_KSEF_STATUSES.has(ksefStatus)
 }

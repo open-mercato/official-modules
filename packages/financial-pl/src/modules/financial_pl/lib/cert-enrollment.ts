@@ -133,6 +133,8 @@ export async function runCertificateEnrollment(
   const subject: KsefCsrSubject = {
     commonName: enrollmentData.commonName,
     countryName: enrollmentData.countryName,
+    givenName: enrollmentData.givenName,
+    surname: enrollmentData.surname,
     organizationName: enrollmentData.organizationName,
     serialNumber: enrollmentData.serialNumber,
     uniqueIdentifier: enrollmentData.uniqueIdentifier,

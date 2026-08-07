@@ -98,11 +98,11 @@ describe('buildBatchPackage', () => {
     expect(batchPackage.batchFile).toEqual({
       fileSize: plaintextZip.length,
       fileHash: sha256Base64(plaintextZip),
+      compressionType: 'Zip',
     })
     expect(batchPackage.fileParts).toEqual([
       {
         ordinalNumber: 1,
-        fileName: 'batch-part-1.zip.enc',
         fileSize: batchPackage.encryptedZip.length,
         fileHash: sha256Base64(batchPackage.encryptedZip),
       },

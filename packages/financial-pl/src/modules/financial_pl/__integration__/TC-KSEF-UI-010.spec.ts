@@ -27,6 +27,8 @@ async function openCreateInvoicePage(page: Page) {
   await login(page, 'admin');
   await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-settings-ready="1"]')).toBeVisible();
 }
 
 async function skipIfFinancialInvoicesUnavailable(request: ApiRequestContextParam, token: string) {
@@ -57,7 +59,7 @@ async function fillBuyer(page: Page, stamp: string) {
   await page.locator('#financial_pl-buyer-line1').fill(`Spec009 Street ${stamp}`);
   await page.locator('#financial_pl-buyer-postal').fill('00-009');
   await page.locator('#financial_pl-buyer-city').fill('Warszawa');
-  await page.locator('#financial_pl-buyer-country').fill('PL');
+  await expect(page.locator('#financial_pl-buyer-country'), 'buyer country defaults to PL').toContainText('PL');
 }
 
 async function fillCommittedProductLine(page: Page, stamp: string) {
@@ -65,7 +67,7 @@ async function fillCommittedProductLine(page: Page, stamp: string) {
   const productInput = page.getByPlaceholder('Search products or type a name').first();
   await productInput.fill(lineName);
   await productInput.press('Enter');
-  await expect(page.locator('#financial_pl-line-name-0'), 'product combobox commits custom line name').toHaveValue(
+  await expect(productInput, 'product combobox commits custom line name').toHaveValue(
     lineName,
   );
 
@@ -125,7 +127,7 @@ test.describe('TC-KSEF-UI-010: discounted invoice authoring', () => {
       await fillBuyer(page, stamp);
       await fillCommittedProductLine(page, stamp);
 
-      await expect(page.getByText(/Net:\s*180\.00\s+PLN/i), 'discounted line net is shown live').toBeVisible();
+      await expect(page.getByText('180.00 PLN', { exact: true }), 'discounted line net is shown live').toBeVisible();
       await expect(page.getByText(/Total discount:\s*20\.00\s+PLN/i), 'discount total is shown live').toBeVisible();
 
       await page.getByRole('button', { name: /^Create invoice$/i }).click();

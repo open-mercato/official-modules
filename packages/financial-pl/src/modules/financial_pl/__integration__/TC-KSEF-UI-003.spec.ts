@@ -35,7 +35,7 @@ function invoicePayload() {
     issueDate: '2026-06-22',
     grandTotalNetAmount: 100,
     grandTotalGrossAmount: 123,
-    lines: [{ name: 'Usługa testowa', quantity: 1, unitPriceNet: 100, taxRate: 23 }],
+    lines: [{ name: 'Usługa testowa', quantity: 1, unitPriceNet: 100, taxRate: 23, currencyCode: 'PLN' }],
   };
 }
 

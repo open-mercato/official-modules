@@ -90,7 +90,7 @@ export const openApi: OpenApiRouteDoc = {
     POST: {
       summary: 'Submit a sales invoice to KSeF',
       description:
-        'Resolves the FA(3) document directly from an issued sales invoice and queues an idempotent KSeF submission. Rejected (409) when the invoice is not yet issued (immutable), is a proforma, or has no KSeF credentials. Rejected (422) when the FA(3) document cannot be faithfully produced: an unsupported document type (correction/advance/final), a non-PLN currency, a VAT rate with no FA(3) mapping, no configured seller identity, or no resolvable buyer.',
+        'Resolves the FA(3) document from a sales invoice and queues an idempotent KSeF submission. This explicit, confirmed action issues a blank/draft/pending invoice; canceled or void invoices are rejected (409), as are proformas and missing credentials. Rejected (422) when the FA(3) document cannot be faithfully produced: an unsupported document type (correction/advance/final), a non-PLN currency, a VAT rate with no FA(3) mapping, no configured seller identity, or no resolvable buyer.',
       requestBody: { contentType: 'application/json', schema: sendFromInvoiceSchema },
       responses: [{ status: 202, description: 'Submission queued', schema: okResponseSchema }],
       errors: [

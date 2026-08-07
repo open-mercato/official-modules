@@ -13,6 +13,13 @@ const nipSchema = z
   .string()
   .regex(/^[0-9]{10}$/, 'NIP must be 10 digits')
   .refine((value) => isValidPolishNip(value), 'NIP checksum is invalid')
+// JPK_V7 Podmiot1/NIP uses the stricter ETDNIP XSD lexical pattern in addition
+// to the ordinary checksum. Validate it before generation so a checksum-valid
+// but schema-invalid NIP never produces an XML file that MF must reject.
+const jpkNipSchema = nipSchema.regex(
+  /^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/,
+  'NIP does not match the JPK_V7 schema pattern',
+)
 const vatRateSchema = z.union([z.number(), z.enum(['zw', 'np', 'oo'])])
 const moneySchema = z.string().regex(/^-?\d+(\.\d{1,2})?$/, 'Amount must be a decimal with up to 2 fraction digits')
 const optionalMoneySchema = z
@@ -617,7 +624,7 @@ export const jpkPurchaseRecordUpsertSchema = z.object({
   id: z.string().uuid().optional(),
   organizationId: z.string().uuid().optional(),
   tenantId: z.string().uuid().optional(),
-  contextNip: nipSchema.optional(),
+  contextNip: jpkNipSchema.optional(),
   year: z.number().int().min(2026).max(2100),
   month: z.number().int().min(1).max(12),
   supplierNip: nipSchema.optional(),
@@ -663,7 +670,7 @@ export const jpkFilingUpsertSchema = z.object({
   // The taxpayer NIP this filing is filed under (Podmiot1). A filing is scoped to a single NIP;
   // when omitted the generator falls back to the KSeF credential NIP. Threading it explicitly lets
   // a multi-NIP (org, tenant) keep one ACTIVE filing per NIP × period (see the unique index).
-  contextNip: nipSchema.optional(),
+  contextNip: jpkNipSchema.optional(),
   variant: z.enum(['V7M', 'V7K']),
   year: z.number().int().min(2026).max(2100),
   month: z.number().int().min(1).max(12),
@@ -716,7 +723,7 @@ export const ksefCertificateEnrollSchema = z.object({
 
 export const ksefCertificateRevokeSchema = z.object({
   serialNumber: z.string().min(1),
-  reason: z.string().min(1).optional(),
+  reason: z.enum(['Unspecified', 'Superseded', 'KeyCompromise']).optional(),
 })
 
 // --- Invoice PL VAT metadata PUT body (SPEC-009) ----------------------------------------------

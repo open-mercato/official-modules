@@ -34,6 +34,8 @@ export type CreditMemoCreatePayload = {
   issueDate: string
   metadata?: {
     priceMode?: 'net' | 'gross'
+    /** Durable fallback for runtimes whose core credit-memo projection omits `invoice_id`. */
+    correctedInvoiceId: string
   }
   lines: Array<{
     name: string
@@ -78,7 +80,10 @@ export function buildCreditMemoPayload(input: {
     reason: input.reason,
     currencyCode,
     issueDate,
-    ...(input.priceMode ? { metadata: { priceMode: input.priceMode } } : {}),
+    metadata: {
+      correctedInvoiceId: input.invoiceId,
+      ...(input.priceMode ? { priceMode: input.priceMode } : {}),
+    },
     lines: input.lines.map((line, index) => {
       const row: CreditMemoCreatePayload['lines'][number] = {
         name: line.name,

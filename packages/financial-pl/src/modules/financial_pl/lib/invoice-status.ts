@@ -20,6 +20,23 @@ export const INVOICE_NON_ISSUED_STATUSES: ReadonlySet<string> = new Set([
   'pending',
 ])
 
+/** Terminal core states that cannot lawfully be turned into a KSeF issuance. A blank, draft, or
+ * pending status is intentionally eligible: the explicit, confirmed KSeF action is itself the
+ * issuance transition, and the queued submission immediately activates the server-side lock. */
+export const INVOICE_KSEF_ISSUE_BLOCKED_STATUSES: ReadonlySet<string> = new Set([
+  'void',
+  'voided',
+  'cancel',
+  'canceled',
+  'cancelled',
+])
+
+export function canIssueInvoiceToKsef(status: unknown): boolean {
+  if (typeof status !== 'string') return true
+  const normalized = status.trim().toLowerCase()
+  return !INVOICE_KSEF_ISSUE_BLOCKED_STATUSES.has(normalized)
+}
+
 /**
  * Whether a core sales invoice is issued (finalized / immutable) per its `status`.
  * A missing/blank status is treated as NOT issued (conservative — never auto-submit

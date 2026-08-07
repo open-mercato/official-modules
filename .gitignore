@@ -62,3 +62,10 @@ apps/sandbox/storage/attachments
 
 # Playwright integration-test output (generated)
 /.ai/qa/test-results/
+/.ai/qa/test-env.json
+/.ai/qa/test-env-build-cache.json
+/.ai/qa/test-env-app.log
+/.ai/qa/test-env-runtime.pid
+/.ai/qa/test-env.lock/
+/.ai/qa/bin/
+/.ai/qa/secrets/

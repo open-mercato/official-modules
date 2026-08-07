@@ -160,7 +160,15 @@ export async function resolveFa3FromCreditMemo(
     throw new CrudHttpError(404, { error: '[internal] credit memo not found for FA(3) KOR resolution' })
   }
 
-  const correctedInvoiceId = asString(creditMemo.invoice_id)
+  // `invoice_id` is the canonical core link. The module also writes the same immutable reference
+  // into metadata when creating a KOR: older core/query projections have been observed to return a
+  // null `invoice_id`, and rejecting that freshly-created credit memo strands the operator after an
+  // irreversible create. Prefer the real column and use metadata only as a compatibility fallback.
+  const creditMemoMetadata = asRecord(creditMemo.metadata)
+  const correctedInvoiceId =
+    asString(creditMemo.invoice_id) ??
+    asString(creditMemoMetadata.correctedInvoiceId) ??
+    asString(creditMemoMetadata.corrected_invoice_id)
   if (!correctedInvoiceId) {
     throw new CrudHttpError(422, {
       error: tr(deps, 'financial_pl.errors.credit_memo_not_linked', CREDIT_MEMO_NOT_LINKED_DEFAULT),
@@ -420,7 +428,10 @@ async function loadNegatedCreditMemoLines(
   for (let page = 1; ; page++) {
     const res = await queryEngine.query<InvoiceLineRow>(E.sales.sales_credit_memo_line, {
       ...scope,
-      filters: { credit_memo_id: { $eq: creditMemoId }, deleted_at: { $eq: null } },
+      // Core credit-memo lines are immutable children and have no deleted_at column. Asking the
+      // query engine for that extension-only field produces an `ei.deleted_at` predicate without
+      // an extension join on a stock install (Postgres 42P01), blocking every live KOR filing.
+      filters: { credit_memo_id: { $eq: creditMemoId } },
       page: { page, pageSize },
       sort: [{ field: 'line_number', dir: 'asc' }],
     })

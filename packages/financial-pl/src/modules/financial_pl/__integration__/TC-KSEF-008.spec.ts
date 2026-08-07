@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
+import { apiRequestWithSelectedOrg } from '@open-mercato/core/helpers/integration/authFixtures';
+import {
+  createOrganizationInDb,
+  deleteIntegrationCredentialsInDb,
+  deleteOrganizationInDb,
+} from '@open-mercato/core/helpers/integration/dbFixtures';
 import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
 
 /**
@@ -67,16 +73,25 @@ test.describe('TC-KSEF-008: KSeF offline mode (Offline cert + issue-offline) API
 
   test('Offline enrollment without an auth credential does not live-enroll (non-2xx contract)', async ({ request }) => {
     const token = await getAuthToken(request, 'admin');
-    getTokenContext(token);
-    const res = await apiRequest(request, 'POST', '/api/financial_pl/ksef/certificates/enroll', {
-      token,
-      data: { certificateName: 'OM Offline Cert', certificateType: 'Offline' },
-    });
-    // Enrolling any certificate (incl. Offline) presupposes an existing XAdES-capable
-    // certificate credential. Without one (and no live KSeF), this is a clear non-2xx
-    // (409 certificate_auth_required_for_enrollment), never an accepted enrollment.
-    expect(res.status(), 'Offline enrollment without an auth credential is a clear non-2xx').not.toBeLessThan(400);
-    expect([400, 409, 422, 502], 'Offline enrollment without an auth credential is a clear non-2xx').toContain(res.status());
+    const { tenantId } = getTokenContext(token);
+    if (!tenantId) test.skip(true, 'token does not expose tenantId for the isolated organization fixture');
+    const organizationId = await createOrganizationInDb({ name: `KSeF no-credential QA ${randomUUID()}`, tenantId });
+
+    try {
+      const res = await apiRequestWithSelectedOrg(request, 'POST', '/api/financial_pl/ksef/certificates/enroll', {
+        token,
+        selectedOrgId: organizationId,
+        data: { certificateName: 'OM Offline Cert', certificateType: 'Offline' },
+      });
+      // Enrolling any certificate (incl. Offline) presupposes an existing XAdES-capable
+      // certificate credential. The isolated org intentionally has none, regardless of
+      // whether a developer configured live credentials on their normal sandbox org.
+      expect(res.status(), 'Offline enrollment without an auth credential is a clear non-2xx').not.toBeLessThan(400);
+      expect([400, 409, 422, 502], 'Offline enrollment without an auth credential is a clear non-2xx').toContain(res.status());
+    } finally {
+      await deleteIntegrationCredentialsInDb(organizationId);
+      await deleteOrganizationInDb(organizationId);
+    }
   });
 
   // --- submissions/issue-offline ---

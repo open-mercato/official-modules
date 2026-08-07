@@ -7,18 +7,9 @@ import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 /**
  * TC-KSEF-UI-012: correction (KOR) authoring — net/gross price-mode toggle regression.
  *
- * The Faktura detail page of a KSeF-accepted invoice renders the inline CorrectionForm section
- * (backend/financial/invoices/[id]/page.tsx:696), which reuses <InvoiceLinesField> — that component
- * always renders a net/gross ("netto"/"brutto") segmented toggle.
- *
- * Regression (user-reported + review finding): CorrectionForm renders <InvoiceLinesField> WITHOUT
- * `priceMode` / `onPriceModeChange` (components/CorrectionForm.tsx:174), so clicking the toggle is a
- * silent no-op — `aria-pressed` never moves off "net". On the create/edit form the same toggle IS
- * wired and works; only the correction form is broken.
- *
- * This asserts the DESIRED behaviour (clicking gross makes it aria-pressed) and is marked
- * `test.fail()` so it stays green while the bug is open and turns red (unexpected pass) once
- * CorrectionForm forwards the price mode — the signal to drop the annotation.
+ * The Faktura detail page of a KSeF-accepted invoice opens CorrectionForm in a dialog on demand.
+ * It reuses <InvoiceLinesField>, including the net/gross ("netto"/"brutto") segmented toggle.
+ * This guards both the on-demand UX and the controlled toggle wiring.
  *
  * The invoice + line + accepted submission are seeded directly via the test DB (a runtime fixture,
  * cleaned up in `finally`) so the test does not depend on the core `/api/sales/invoices` authoring
@@ -74,9 +65,7 @@ async function cleanup(ids: SeedIds | null): Promise<void> {
 }
 
 test.describe('TC-KSEF-UI-012: correction (KOR) net/gross price-mode toggle', () => {
-  test.fail(
-    'the net/gross toggle in the correction form switches the active price mode',
-    async ({ page, request }) => {
+  test('the net/gross toggle in the correction form switches the active price mode', async ({ page, request }) => {
       const token = await getAuthToken(request, 'admin');
       const { organizationId, tenantId } = getTokenContext(token);
       if (!organizationId || !tenantId) {
@@ -88,31 +77,21 @@ test.describe('TC-KSEF-UI-012: correction (KOR) net/gross price-mode toggle', ()
 
         await login(page, 'admin');
         await page.goto(`/backend/financial/invoices/${ids.invoiceId}`, { waitUntil: 'domcontentloaded' });
+        await page.getByRole('button', { name: /issue correction|wystaw korekt/i }).click();
 
-        // The correction section renders the price-mode segmented group (role="group").
-        const priceGroup = page.getByRole('group', { name: /prices|ceny/i }).last();
+        // The correction dialog exposes the segmented control as an accessible radio group.
+        const priceGroup = page.getByRole('radiogroup', { name: /enter prices as|wprowadzaj ceny jako/i });
         await expect(priceGroup, 'the correction form renders the net/gross toggle').toBeVisible();
 
-        // net is pressed initially; the gross button is the currently-unpressed one.
-        const grossOnly = priceGroup.locator('button[aria-pressed="false"]').first();
-        await expect(grossOnly, 'there is an inactive (gross) option to switch to').toBeVisible();
-        await grossOnly.click();
+        const grossOption = priceGroup.getByRole('radio', { name: /gross|brutto/i });
+        await expect(grossOption, 'there is an inactive gross option to switch to').not.toBeChecked();
+        await grossOption.click();
 
-        // DESIRED: clicking gross makes it the pressed option. ACTUAL today: it stays "false"
-        // (CorrectionForm never forwards priceMode), so this expectation fails → test.fail() keeps
-        // the suite green until the toggle is wired. Remove test.fail() once CorrectionForm passes
-        // priceMode/onPriceModeChange to <InvoiceLinesField>.
-        // Short timeout: a wired toggle flips aria-pressed synchronously, so a healthy build passes
-        // in well under a second — the current bug never flips, so we fail fast (not a 20s timeout,
-        // which test.fail() would not classify as the expected assertion failure).
-        await expect(grossOnly, 'the gross option becomes active after clicking it').toHaveAttribute(
-          'aria-pressed',
-          'true',
-          { timeout: 3000 },
-        );
+        // A controlled toggle flips synchronously; fail at the control rather than
+        // consuming the complete spec timeout if its wiring regresses.
+        await expect(grossOption, 'the gross option becomes active after clicking it').toBeChecked({ timeout: 3000 });
       } finally {
         await cleanup(ids);
       }
-    },
-  );
+    });
 });

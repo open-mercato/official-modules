@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
+import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 
 /**
  * TC-KSEF-004: JPK_V7 export API — filings + purchase records + generate/download
@@ -27,8 +28,18 @@ import { getTokenContext } from '@open-mercato/core/helpers/integration/generalF
  */
 const suffix = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
+function randomValidNip(): string {
+  const weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
+  while (true) {
+    const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10));
+    if (digits[0] === 0) digits[0] = 1;
+    const checksum = digits.reduce((sum, digit, index) => sum + digit * weights[index], 0) % 11;
+    if (checksum < 10) return `${digits.join('')}${checksum}`;
+  }
+}
+
 /** A schema-complete JPK_V7M primary filing header (correctionScope must be 'both' on celZlozenia=1). */
-function filingPayload() {
+function filingPayload(contextNip: string = randomValidNip()) {
   return {
     variant: 'V7M',
     year: 2026,
@@ -36,7 +47,7 @@ function filingPayload() {
     celZlozenia: 1,
     correctionScope: 'both',
     kodUrzedu: '0202',
-    contextNip: '7980332920',
+    contextNip,
   };
 }
 
@@ -56,6 +67,17 @@ function purchasePayload() {
 }
 
 test.describe('TC-KSEF-004: JPK_V7 export API', () => {
+  const createdFilingIds = new Set<string>();
+
+  test.afterEach(async () => {
+    if (createdFilingIds.size === 0) return;
+    const ids = [...createdFilingIds];
+    createdFilingIds.clear();
+    await withClient(async (client) => {
+      await client.query('delete from financial_pl_jpk_filing where id = any($1::uuid[])', [ids]);
+    }).catch(() => undefined);
+  });
+
   // --- authentication ---
 
   test('rejects unauthenticated reads (401)', async ({ request }) => {
@@ -145,11 +167,12 @@ test.describe('TC-KSEF-004: JPK_V7 export API', () => {
 
     const createRes = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
       token,
-      data: { ...filingPayload(), month: 7, contextNip: '7980332920' },
+      data: { ...filingPayload(), month: 7 },
     });
     expect(createRes.status(), 'admin creates a filing').toBe(200);
     const filingId = ((await createRes.json()) as { id?: string }).id ?? null;
     expect(filingId, 'create returns the filing id').toBeTruthy();
+    createdFilingIds.add(filingId as string);
 
     const listRes = await apiRequest(request, 'GET', '/api/financial_pl/ksef/jpk/filings?year=2026&month=7', {
       token,
@@ -199,6 +222,7 @@ test.describe('TC-KSEF-004: JPK_V7 export API', () => {
     expect(createRes.status()).toBe(200);
     const filingId = ((await createRes.json()) as { id?: string }).id ?? null;
     expect(filingId).toBeTruthy();
+    createdFilingIds.add(filingId as string);
 
     // No POST (generate) yet ⇒ the filing has no generated XML ⇒ the download is 422, never an
     // empty/partial application/xml stream.
@@ -212,19 +236,21 @@ test.describe('TC-KSEF-004: JPK_V7 export API', () => {
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
 
+    const contextNip = randomValidNip();
     // Seed at least one in-period purchase row so the JPK has evidence to emit.
     await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/purchase-records', {
       token,
-      data: { ...purchasePayload(), month: 9, contextNip: '7980332920' },
+      data: { ...purchasePayload(), month: 9, contextNip },
     });
 
     const createRes = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
       token,
-      data: { ...filingPayload(), month: 9, contextNip: '7980332920' },
+      data: { ...filingPayload(contextNip), month: 9 },
     });
     expect(createRes.status()).toBe(200);
     const filingId = ((await createRes.json()) as { id?: string }).id ?? null;
     expect(filingId).toBeTruthy();
+    createdFilingIds.add(filingId as string);
 
     const generateRes = await apiRequest(request, 'POST', `/api/financial_pl/ksef/jpk/export?filingId=${filingId}`, {
       token,

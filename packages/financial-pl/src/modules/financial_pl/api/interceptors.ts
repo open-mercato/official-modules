@@ -1,12 +1,13 @@
 import type { ApiInterceptor, InterceptorRequest, InterceptorContext } from '@open-mercato/shared/lib/crud/api-interceptor'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { KsefSubmission } from '../data/entities'
+import { enrichFinancialPlInvoices } from '../data/enrichers'
 
 /**
  * SPEC-013 — KSeF-immutability guards.
  *
- * A KSeF-accepted invoice is legally immutable (corrections only); an in-flight ('processing')
- * submission must not race a concurrent edit either. A disabled UI button is insufficient — a stale
+ * A KSeF-accepted or offline-issued invoice is legally immutable (corrections only); an in-flight
+ * (`queued`/`processing`) submission must not race a concurrent edit either. A disabled UI button is insufficient — a stale
  * tab, another client, or a raw API call can still mutate. These fail-closed `before` interceptors
  * enforce the rule at the API boundary (§11.4) on the core sales-invoice write routes and on the
  * module's own invoice-meta PUT, with NO core code change (additive, conditional 409 only for
@@ -16,9 +17,9 @@ import { KsefSubmission } from '../data/entities'
  * regardless of their feature set (a feature gate would let a more-privileged user bypass it).
  */
 
-const LOCKED_STATUSES = ['accepted', 'processing'] as const
+const LOCKED_STATUSES = ['accepted', 'offline_issued', 'processing', 'queued'] as const
 const LOCKED_MESSAGE_DEFAULT =
-  'This invoice is locked: it has an accepted or in-progress KSeF submission. Issue a correction (KOR) instead of editing it.'
+  'This invoice is locked: it has been issued offline, queued, or submitted to KSeF. Issue a correction (KOR) instead of editing it.'
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
@@ -46,7 +47,7 @@ function resolveInvoiceId(request: InterceptorRequest): string | undefined {
 }
 
 /**
- * True when the invoice has a KSeF submission in `accepted` OR `processing` state within the
+ * True when the invoice has a KSeF submission in an immutable or in-flight state within the
  * caller's tenant, independent of the caller's selected organization. Reads via `context.em.fork()`
  * (NEVER imports core entities). Only the invoice's OWN submissions (document_kind='invoice'): a
  * correction stores sales_invoice_id = the CORRECTED original, so the discriminator prevents an
@@ -87,6 +88,33 @@ async function guard(request: InterceptorRequest, context: InterceptorContext) {
 }
 
 export const interceptors: ApiInterceptor[] = [
+  {
+    // Core 0.6.8's new invoice CRUD route declares an index entity but does not opt
+    // into response enrichers. Preserve the extension contract at the public API
+    // boundary until core activates `enrichers: { entityId }` on that route.
+    id: 'financial_pl.ksef-status.sales-invoices',
+    targetRoute: 'sales/invoices',
+    methods: ['GET'],
+    features: ['financial_pl.view'],
+    priority: 10,
+    timeoutMs: 2000,
+    async after(_request, response, context) {
+      if (response.statusCode >= 400 || !Array.isArray(response.body.items)) return {}
+      const records = response.body.items.filter(
+        (item): item is Record<string, unknown> & { id: string } =>
+          typeof item === 'object' && item !== null && typeof (item as Record<string, unknown>).id === 'string',
+      )
+      if (records.length !== response.body.items.length) return {}
+      try {
+        const items = await enrichFinancialPlInvoices(records, context)
+        return { replace: { ...response.body, items } }
+      } catch {
+        // Match the registered enricher's non-critical posture: a status decoration
+        // failure must never turn an otherwise-valid core invoice read into a 500.
+        return {}
+      }
+    },
+  },
   {
     // Core sales-invoice write route: block PUT (edit) / DELETE of a KSeF-locked invoice.
     id: 'financial_pl.ksef-immutability.sales-invoices',

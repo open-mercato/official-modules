@@ -4,6 +4,7 @@ import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration
 import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
 import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
 import { buildCreditMemoPayload, type CorrectionLineInput } from '../lib/correction-payload';
+import { createRestrictedUserFixture } from './restricted-user-fixture';
 
 /**
  * TC-KSEF-UI-004: correction (KOR) authoring — credit memo create → send-from-credit-memo
@@ -12,8 +13,8 @@ import { buildCreditMemoPayload, type CorrectionLineInput } from '../lib/correct
  *         POST /api/financial_pl/ksef/submissions/from-credit-memo (gated financial_pl.submit).
  *
  * Requires the @open-mercato/financial-pl official module to be activated in the test env
- * (yarn official-modules add financial-pl). `admin` holds `financial_pl.*`; `employee` holds
- * only `financial_pl.view`.
+ * (yarn official-modules add financial-pl). `admin` holds `financial_pl.*`; permission-negative
+ * coverage uses an explicit restricted fixture because core 0.6.8 broadened employee sales ACLs.
  *
  * The KOR flow is: author a SalesCreditMemo against the corrected invoice (corrected invoiceId +
  * reason + lines) over the STABLE core credit-memos API, then dispatch the correction via
@@ -34,7 +35,7 @@ function invoicePayload() {
     issueDate: '2026-06-22',
     grandTotalNetAmount: 100,
     grandTotalGrossAmount: 123,
-    lines: [{ name: 'Usługa do korekty', quantity: 1, unitPriceNet: 100, taxRate: 23 }],
+    lines: [{ name: 'Usługa do korekty', quantity: 1, unitPriceNet: 100, taxRate: 23, currencyCode: 'PLN' }],
   };
 }
 
@@ -110,14 +111,20 @@ test.describe('TC-KSEF-UI-004: correction (KOR) — credit memo create + from-cr
   });
 
   test('credit memo create WITHOUT sales.credit_memos.manage is forbidden (403)', async ({ request }) => {
-    // `employee` lacks the core sales.credit_memos.manage feature, so it cannot author the KOR's
-    // backing credit memo (the correction action is hidden/disabled without it — SPEC-013).
-    const token = await getAuthToken(request, 'employee');
-    const res = await apiRequest(request, 'POST', '/api/sales/credit-memos', {
-      token,
-      data: { invoiceId: randomUUID(), reason: 'Korekta' },
+    test.slow();
+    const restricted = await createRestrictedUserFixture(request, {
+      features: ['financial_pl.view'],
+      label: 'Financial PL correction viewer',
     });
-    expect(res.status(), 'employee (no sales.credit_memos.manage) cannot create a credit memo').toBe(403);
+    try {
+      const res = await apiRequest(request, 'POST', '/api/sales/credit-memos', {
+        token: restricted.token,
+        data: { invoiceId: randomUUID(), reason: 'Korekta' },
+      });
+      expect(res.status(), 'viewer without sales.credit_memos.manage cannot create a credit memo').toBe(403);
+    } finally {
+      await restricted.cleanup();
+    }
   });
 
   // --- from-credit-memo (the KSeF send leg) requires financial_pl.submit ---

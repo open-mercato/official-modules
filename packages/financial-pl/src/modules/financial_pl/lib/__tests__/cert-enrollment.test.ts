@@ -28,6 +28,8 @@ const mockEnrollClientHandlers = {
   getCertificateEnrollmentData: jest.fn(async () => ({
     commonName: 'KSeF Test',
     countryName: 'PL',
+    givenName: 'Jan',
+    surname: 'Kowalski',
     organizationName: 'Open Mercato',
     serialNumber: '2481632647',
     uniqueIdentifier: undefined,
@@ -97,6 +99,8 @@ function mockClient(options: MockOptions = {}): {
     getCertificateEnrollmentData: async () => ({
       commonName: 'KSeF Test',
       countryName: 'PL',
+      givenName: 'Jan',
+      surname: 'Kowalski',
       organizationName: 'Open Mercato',
       serialNumber: '2481632647',
       uniqueIdentifier: undefined,

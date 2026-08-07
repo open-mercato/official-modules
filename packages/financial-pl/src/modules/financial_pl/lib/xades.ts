@@ -49,6 +49,9 @@ export type KsefCsrSubject = {
   /** X.500 attributes, in the order returned by GET /certificates/enrollments/data. */
   commonName?: string
   countryName?: string
+  /** OID 2.5.4.42 / 2.5.4.4 — personal subject attributes returned for qualified-style auth. */
+  givenName?: string
+  surname?: string
   organizationName?: string
   /** OID 2.5.4.5 — the taxpayer NIP/PESEL serial KSeF embeds in the cert subject. */
   serialNumber?: string
@@ -235,18 +238,18 @@ export async function buildCsr(params: { keyPairPem: KsefKeyPairPem; subject: Ks
   const publicKey = await webcrypto.subtle.importKey('spki', pemBodyToDer(keyPairPem.publicKeyPem), keyAlg as never, true, ['verify'])
 
   // DN attribute VALUES are taken verbatim from GET /certificates/enrollments/data
-  // (never invented). The RDN order below follows the KSeF cert subject convention
-  // (CN, O, organizationIdentifier 2.5.4.97, serialNumber 2.5.4.5, uniqueIdentifier
-  // 2.5.4.45, C); the exact accepted order is confirmed in the live enrollment
-  // round-trip (handoff) — KSeF validates the CSR before issuing. Only present fields
-  // are emitted, so a field KSeF did not return is never fabricated.
+  // (never invented). Personal enrollment responses include givenName + surname;
+  // omitting either makes TEST reject the CSR with exception 25003. Only present
+  // fields are emitted, so a field KSeF did not return is never fabricated.
   const attrs: Array<Record<string, string[]>> = []
   if (subject.commonName) attrs.push({ CN: [subject.commonName] })
+  if (subject.countryName) attrs.push({ C: [subject.countryName] })
+  if (subject.givenName) attrs.push({ '2.5.4.42': [subject.givenName] })
+  if (subject.surname) attrs.push({ '2.5.4.4': [subject.surname] })
   if (subject.organizationName) attrs.push({ O: [subject.organizationName] })
   if (subject.organizationIdentifier) attrs.push({ '2.5.4.97': [subject.organizationIdentifier] })
   if (subject.serialNumber) attrs.push({ '2.5.4.5': [subject.serialNumber] })
   if (subject.uniqueIdentifier) attrs.push({ '2.5.4.45': [subject.uniqueIdentifier] })
-  if (subject.countryName) attrs.push({ C: [subject.countryName] })
 
   const csr = await x509.Pkcs10CertificateRequestGenerator.create({
     name: new x509.Name(attrs as never).toString(),

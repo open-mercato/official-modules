@@ -122,7 +122,7 @@ describe('KsefClient', () => {
       formCode: { systemCode: 'FA (3)', schemaVersion: '1-0E', value: 'FA' },
       encryption: { encryptedSymmetricKey: 'WRAPPED', initializationVector: 'IV' },
       batchFile: { fileSize: 100, fileHash: 'ZIP-HASH' },
-      fileParts: [{ ordinalNumber: 1, fileName: 'part-1.zip.enc', fileSize: 100, fileHash: 'PART-HASH' }],
+      fileParts: [{ ordinalNumber: 1, fileSize: 100, fileHash: 'PART-HASH' }],
     })
 
     expect(result).toEqual({
@@ -142,8 +142,12 @@ describe('KsefClient', () => {
     expect(JSON.parse(calls[0].body as string)).toEqual({
       formCode: { systemCode: 'FA (3)', schemaVersion: '1-0E', value: 'FA' },
       encryption: { encryptedSymmetricKey: 'WRAPPED', initializationVector: 'IV' },
-      batchFile: { fileSize: 100, fileHash: 'ZIP-HASH' },
-      fileParts: [{ ordinalNumber: 1, fileName: 'part-1.zip.enc', fileSize: 100, fileHash: 'PART-HASH' }],
+      batchFile: {
+        fileSize: 100,
+        fileHash: 'ZIP-HASH',
+        fileParts: [{ ordinalNumber: 1, fileSize: 100, fileHash: 'PART-HASH' }],
+      },
+      offlineMode: false,
     })
   })
 
@@ -352,6 +356,37 @@ describe('KsefClient', () => {
     const client = new KsefClient(env, transport)
     const certs = await client.getPublicKeyCertificates()
     expect(certs[0].usage).toEqual(['KsefTokenEncryption'])
+  })
+
+  it('preserves personal subject attributes from certificate enrollment data', async () => {
+    const body = {
+      commonName: 'Jan Kowalski',
+      countryName: 'PL',
+      givenName: 'Jan',
+      surname: 'Kowalski',
+      serialNumber: 'TINPL-8976111986',
+    }
+    const { transport, calls } = recordingTransport(() => ({ body }))
+    const client = new KsefClient(env, transport)
+
+    await expect(client.getCertificateEnrollmentData('ACCESS')).resolves.toMatchObject(body)
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/certificates/enrollments/data')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+  })
+
+  it('uses the KSeF revocation-reason enum contract', async () => {
+    const { transport, calls } = recordingTransport(() => ({ status: 204 }))
+    const client = new KsefClient(env, transport)
+
+    await client.revokeCertificate({
+      accessToken: 'ACCESS',
+      serialNumber: '015859D13439EA63',
+      reason: 'Superseded',
+    })
+
+    expect(calls[0].url).toBe('https://api-test.ksef.mf.gov.pl/v2/certificates/015859D13439EA63/revoke')
+    expect(calls[0].headers.Authorization).toBe('Bearer ACCESS')
+    expect(JSON.parse(calls[0].body as string)).toEqual({ revocationReason: 'Superseded' })
   })
 
   it('refuses test-data onboarding outside the TEST environment', async () => {

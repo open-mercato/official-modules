@@ -1,10 +1,20 @@
 import 'reflect-metadata'
 
 import { webcrypto } from 'node:crypto'
+import { inflateRawSync } from 'node:zlib'
 
 import * as x509 from '@peculiar/x509'
 
-import { submitJpk } from '../jpk-submission-client'
+import { defaultZip, submitJpk } from '../jpk-submission-client'
+
+const JPK_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<JPK xmlns="http://crd.gov.pl/wzor/2025/12/19/14090/">
+  <Naglowek>
+    <KodFormularza kodSystemowy="JPK_V7M (3)" wersjaSchemy="1-0E">JPK_VAT</KodFormularza>
+    <Rok>2026</Rok>
+    <Miesiac>7</Miesiac>
+  </Naglowek>
+</JPK>`
 
 type TestCert = { certificatePem: string; privateKeyPem: string }
 
@@ -41,6 +51,16 @@ function responseJson(body: unknown, status = 200): Response {
 }
 
 describe('submitJpk', () => {
+  it('creates the single-entry ZIP with the required DEFLATE compression method', () => {
+    const zip = defaultZip(JPK_XML)
+    const compressedSize = zip.readUInt32LE(18)
+    const fileNameLength = zip.readUInt16LE(26)
+    const dataStart = 30 + fileNameLength
+
+    expect(zip.readUInt16LE(8)).toBe(8)
+    expect(inflateRawSync(zip.subarray(dataStart, dataStart + compressedSize)).toString('utf8')).toBe(JPK_XML)
+  })
+
   it('runs InitUpload, blob PUT, FinishUpload and Status to return the UPO', async () => {
     const signer = await selfSignedCert('JPK signer')
     const mf = await selfSignedCert('MF gateway')
@@ -82,7 +102,7 @@ describe('submitJpk', () => {
       return responseJson({ message: 'not found' }, 404)
     }
 
-    const result = await submitJpk('<JPK>payload</JPK>', {
+    const result = await submitJpk(JPK_XML, {
       environment: 'test',
       signer,
       mfPublicCertPem: mf.certificatePem,
@@ -100,6 +120,35 @@ describe('submitJpk', () => {
     expect(Buffer.isBuffer(uploadedBody)).toBe(true)
     expect((uploadedBody as Buffer).length).toBeGreaterThan(0)
     expect(calls[1].headers).toEqual({ 'Content-MD5': 'part-md5==', 'x-ms-blob-type': 'BlockBlob' })
+    expect(JSON.parse(String(calls[2].body))).toEqual({
+      ReferenceNumber: 'JPK-REF-1',
+      AzureBlobNameList: ['jpk-part-1'],
+    })
+  })
+
+  it('enables qualified-signature validation only when explicitly requested on TEST', async () => {
+    const signer = await selfSignedCert('JPK signer')
+    const mf = await selfSignedCert('MF gateway')
+    const fetchImpl: typeof fetch = async (input) => {
+      expect(String(input)).toBe(
+        'https://test-e-dokumenty.mf.gov.pl/api/Storage/InitUploadSigned?enableValidateQualifiedSignature=true',
+      )
+      return responseJson({ Message: 'unknown trust provider', Code: 131 }, 400)
+    }
+
+    await expect(
+      submitJpk(JPK_XML, {
+        environment: 'test',
+        signer,
+        mfPublicCertPem: mf.certificatePem,
+        validateQualifiedSignature: true,
+        fetchImpl,
+        zip: (xml) => Buffer.from(`zipped:${xml}`),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: 'JPK InitUploadSigned failed with HTTP 400: 131 — unknown trust provider',
+    })
   })
 
   it('returns ok false when Status is terminal failure', async () => {
@@ -125,7 +174,7 @@ describe('submitJpk', () => {
       return responseJson({}, 404)
     }
 
-    const result = await submitJpk('<JPK>payload</JPK>', {
+    const result = await submitJpk(JPK_XML, {
       environment: 'test',
       signer,
       mfPublicCertPem: mf.certificatePem,
@@ -144,7 +193,7 @@ describe('submitJpk', () => {
     }
 
     await expect(
-      submitJpk('<JPK>payload</JPK>', {
+      submitJpk(JPK_XML, {
         environment: 'test',
         signer,
         mfPublicCertPem: mf.certificatePem,

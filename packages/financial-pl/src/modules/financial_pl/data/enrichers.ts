@@ -48,7 +48,7 @@ const EMPTY: FinancialPlEnrichment['_financial_pl'] = {
   jpkVatMarking: null,
 }
 
-async function enrichInvoices(
+export async function enrichFinancialPlInvoices(
   records: InvoiceRecord[],
   context: EnricherScope,
 ): Promise<(InvoiceRecord & FinancialPlEnrichment)[]> {
@@ -146,12 +146,12 @@ const ksefInvoiceStatusEnricher: ResponseEnricher<InvoiceRecord, FinancialPlEnri
   fallback: { _financial_pl: EMPTY },
 
   async enrichOne(record, context) {
-    const enriched = await enrichInvoices([record], context as EnricherScope)
+    const enriched = await enrichFinancialPlInvoices([record], context as EnricherScope)
     return enriched[0]
   },
 
   async enrichMany(records, context) {
-    return enrichInvoices(records, context as EnricherScope)
+    return enrichFinancialPlInvoices(records, context as EnricherScope)
   },
 }
 

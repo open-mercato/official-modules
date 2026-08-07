@@ -121,7 +121,7 @@ describe('retryCommand — recovery routing (H6: offline submissions retry throu
   })
 })
 
-describe('sendFromInvoiceCommand — H1 immutability gate via core status', () => {
+describe('sendFromInvoiceCommand — issuance eligibility via core status', () => {
   function ctxWithInvoice(invoice: Record<string, unknown>) {
     const em = makeEm(null)
     return makeCtx(em, {
@@ -129,21 +129,30 @@ describe('sendFromInvoiceCommand — H1 immutability gate via core status', () =
     })
   }
 
-  it('rejects a draft invoice with 409 invoice_not_issued', async () => {
+  it('allows the explicit KSeF action to issue a draft invoice', async () => {
     await expect(
       sendFromInvoiceCommand.execute(
         { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV },
         ctxWithInvoice({ id: INV, status: 'draft', document_type: 'vat' }),
       ),
-    ).rejects.toMatchObject({ status: 409 })
+    ).rejects.toMatchObject({ status: 409, body: expect.objectContaining({ error: expect.stringContaining('credentials') }) })
   })
 
-  it('a missing status is treated as not-issued (409)', async () => {
+  it('allows a missing legacy status to reach the credential gate', async () => {
     await expect(
       sendFromInvoiceCommand.execute(
         { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV },
         ctxWithInvoice({ id: INV, document_type: 'vat' }),
       ),
-    ).rejects.toMatchObject({ status: 409 })
+    ).rejects.toMatchObject({ status: 409, body: expect.objectContaining({ error: expect.stringContaining('credentials') }) })
+  })
+
+  it('rejects a canceled invoice before reading credentials', async () => {
+    await expect(
+      sendFromInvoiceCommand.execute(
+        { organizationId: ORG, tenantId: TEN, salesInvoiceId: INV },
+        ctxWithInvoice({ id: INV, status: 'canceled', document_type: 'vat' }),
+      ),
+    ).rejects.toMatchObject({ status: 409, body: expect.objectContaining({ error: expect.stringContaining('canceled') }) })
   })
 })

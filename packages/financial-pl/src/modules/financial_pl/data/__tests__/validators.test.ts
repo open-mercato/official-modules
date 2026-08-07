@@ -351,6 +351,10 @@ describe('JPK validators (SPEC-012)', () => {
     it('accepts an optional contextNip (H4)', () => {
       expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '7980332920' }).success).toBe(true)
     })
+    it('rejects a checksum-valid context NIP that violates the JPK_V7 XSD lexical pattern', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '1000000041' }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '1010000031' }).success).toBe(true)
+    })
     it('rejects out-of-range month/year/quarter', () => {
       expect(jpkFilingUpsertSchema.safeParse({ ...base, month: 0 }).success).toBe(false)
       expect(jpkFilingUpsertSchema.safeParse({ ...base, year: 2025 }).success).toBe(false)

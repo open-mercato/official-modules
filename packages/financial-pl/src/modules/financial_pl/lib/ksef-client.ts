@@ -6,7 +6,7 @@
  * and the same code drives the TEST / DEMO / PROD environments by base URL.
  *
  * Endpoint paths and request/response shapes are pinned against the live TEST
- * OpenAPI (https://api-test.ksef.mf.gov.pl/docs/v2/openapi.json, KSeF API v2.6.1):
+ * OpenAPI (https://api-test.ksef.mf.gov.pl/docs/v2/openapi.json, KSeF API v2.7.0):
  * `contextIdentifier.type` is the `Nip` enum value; the auth/access/refresh tokens
  * are `TokenInfo` objects (`{ token, validUntil }`); and `usage` on a public-key
  * certificate is an array of usage enum values. The client tolerates both the
@@ -77,6 +77,8 @@ export type KsefCertificateEnrollmentData = {
   /** X.500 DN attributes the CSR must mirror (verbatim), as returned by KSeF. */
   commonName?: string
   countryName?: string
+  givenName?: string
+  surname?: string
   organizationName?: string
   serialNumber?: string
   uniqueIdentifier?: string
@@ -104,6 +106,9 @@ export type KsefCertificateInfo = {
 }
 
 export type KsefCertificateType = 'Authentication' | 'Offline'
+
+/** Values accepted by KSeF's `CertificateRevocationReason` OpenAPI enum. */
+export type KsefCertificateRevocationReason = 'Unspecified' | 'Superseded' | 'KeyCompromise'
 
 export type KsefPublicKeyCertificate = {
   publicKeyId: string
@@ -587,16 +592,18 @@ export class KsefClient {
     accessToken: string
     formCode: { systemCode: string; schemaVersion: string; value: string }
     encryption: { encryptedSymmetricKey: string; initializationVector: string }
-    batchFile: { fileSize: number; fileHash: string }
-    fileParts: Array<{ ordinalNumber: number; fileName: string; fileSize: number; fileHash: string }>
+    batchFile: { fileSize: number; fileHash: string; compressionType?: 'Zip' | 'TarGz' }
+    fileParts: Array<{ ordinalNumber: number; fileSize: number; fileHash: string }>
   }): Promise<OpenBatchSessionResult> {
     const { json } = await this.request('POST', '/sessions/batch', {
       token: params.accessToken,
       json: {
         formCode: params.formCode,
         encryption: params.encryption,
-        batchFile: params.batchFile,
-        fileParts: params.fileParts,
+        // KSeF API 2.7 nests the declared encrypted parts under batchFile. The legacy top-level
+        // fileParts shape (and its removed fileName property) is rejected by MF TEST with 400.
+        batchFile: { ...params.batchFile, fileParts: params.fileParts },
+        offlineMode: false,
       },
     })
     const record = asRecord(json)
@@ -765,6 +772,8 @@ export class KsefClient {
     return {
       commonName: pickString(r, 'commonName'),
       countryName: pickString(r, 'countryName'),
+      givenName: pickString(r, 'givenName'),
+      surname: pickString(r, 'surname'),
       organizationName: pickString(r, 'organizationName'),
       serialNumber: pickString(r, 'serialNumber'),
       uniqueIdentifier: pickString(r, 'uniqueIdentifier'),
@@ -841,7 +850,11 @@ export class KsefClient {
     })
   }
 
-  async revokeCertificate(params: { accessToken: string; serialNumber: string; reason?: string }): Promise<void> {
+  async revokeCertificate(params: {
+    accessToken: string
+    serialNumber: string
+    reason?: KsefCertificateRevocationReason
+  }): Promise<void> {
     await this.request('POST', `/certificates/${encodeURIComponent(params.serialNumber)}/revoke`, {
       token: params.accessToken,
       json: params.reason ? { revocationReason: params.reason } : {},

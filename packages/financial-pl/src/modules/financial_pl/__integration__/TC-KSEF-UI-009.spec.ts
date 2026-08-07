@@ -13,9 +13,9 @@ import { login } from '@open-mercato/core/helpers/integration/auth';
  *
  * Covers the live create-page behavior behind /backend/financial/invoices/create:
  *   - the default Invoice tab keeps the everyday buyer/lines/payment surface visible;
- *   - the PL-VAT/KSeF controls live in an unmounted Taxes & KSeF panel until selected;
+ *   - the PL-VAT/KSeF controls live in an always-mounted, hidden Taxes & KSeF panel;
  *   - non-default tab data indicators, cross-tab error routing, and always-mounted date
- *     derivation keep working while panels mount/unmount.
+ *     derivation keep working while panels are shown and hidden.
  *
  * The setup/auth/cleanup style mirrors TC-KSEF-UI-008. If a required module route or local
  * ACL is unavailable, the affected test self-skips instead of silently passing.
@@ -23,12 +23,6 @@ import { login } from '@open-mercato/core/helpers/integration/auth';
 const suffix = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
 const CREATE_PAGE = '/backend/financial/invoices/create';
-// Must satisfy the module's own isValidPolishNip (lib/nip.ts) — the whole suite depends on this
-// invariant. 7980332920 is checksum-valid (matches every sibling TC); a checksum-INVALID value here
-// would make handleSubmit throw the taxpayer-NIP error before the buyer check, inverting TC-4.
-const VALID_NIP = '7980332920';
-const INVALID_NIP = '1234567890';
-
 type ApiRequestContextParam = Parameters<typeof apiRequest>[0];
 type ApiResponseParam = Parameters<typeof readJsonSafe>[0];
 
@@ -36,6 +30,8 @@ async function openCreateInvoicePage(page: Page) {
   await login(page, 'admin');
   await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-settings-ready="1"]')).toBeVisible();
 }
 
 async function readCreatedId(responseLabel: string, response: ApiResponseParam) {
@@ -78,15 +74,15 @@ async function fillBuyerAndLine(page: Page, stamp: string) {
   await page.locator('#financial_pl-buyer-line1').fill(`Spec018 Street ${stamp}`);
   await page.locator('#financial_pl-buyer-postal').fill('00-018');
   await page.locator('#financial_pl-buyer-city').fill('Warszawa');
-  await page.locator('#financial_pl-buyer-country').fill('PL');
+  await expect(page.locator('#financial_pl-buyer-country'), 'buyer country defaults to PL').toContainText('PL');
 
-  await page.locator('#financial_pl-line-name-0').fill(`QA SPEC018 Line ${stamp}`);
+  await page.getByPlaceholder('Search products or type a name').first().fill(`QA SPEC018 Line ${stamp}`);
   await page.locator('#financial_pl-line-qty-0').fill('1');
   await page.locator('#financial_pl-line-price-0').fill('100');
 }
 
 async function fillLineOnly(page: Page, stamp: string) {
-  await page.locator('#financial_pl-line-name-0').fill(`QA SPEC018 Line ${stamp}`);
+  await page.getByPlaceholder('Search products or type a name').first().fill(`QA SPEC018 Line ${stamp}`);
   await page.locator('#financial_pl-line-qty-0').fill('1');
   await page.locator('#financial_pl-line-price-0').fill('100');
 }
@@ -100,22 +96,10 @@ function invoiceIdFromEditUrl(page: Page): string | null {
 async function expectTaxesTabHasDataIndicator(page: Page) {
   const taxesTab = page.getByRole('tab', { name: /Taxes & KSeF/i });
   await expect(taxesTab, 'Taxes & KSeF tab remains visible while Invoice is active').toBeVisible();
-
-  await expect
-    .poll(
-      async () => {
-        const countSlot = taxesTab.locator('[data-slot="tabs-trigger-count"]').first();
-        if ((await countSlot.count()) > 0) {
-          const labelled = countSlot.locator('[aria-label]').first();
-          const label = (await labelled.count()) > 0 ? await labelled.getAttribute('aria-label') : '';
-          const text = (await countSlot.textContent()) ?? '';
-          return `${label ?? ''} ${text}`.trim();
-        }
-        return (await taxesTab.textContent()) ?? '';
-      },
-      { message: 'Taxes & KSeF tab trigger shows that the unmounted panel has data' },
-    )
-    .toMatch(/\u2022|has data|zawiera dane/i);
+  await expect(
+    taxesTab.getByRole('img', { name: /contains data/i }),
+    'Taxes & KSeF tab trigger shows that the hidden panel has data',
+  ).toBeVisible();
 }
 
 test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
@@ -133,10 +117,10 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
     // control no aria-label, so getByLabel() cannot resolve these controls. Assert the always-visible
     // strip via its (unique) label text instead, and target the invoice-number input by its placeholder.
     await expect(
-      page.getByPlaceholder('Auto-assigned if left blank'),
+      page.getByPlaceholder(/^Auto:/),
       'invoice number input stays in the coordinate strip',
     ).toBeVisible();
-    await expect(page.getByText('Issue date', { exact: true }).first(), 'issue date label in the strip').toBeVisible();
+    await expect(page.getByText(/^Issue date/).first(), 'issue date label in the strip').toBeVisible();
     await expect(page.getByText('Due date', { exact: true }).first(), 'due date label in the strip').toBeVisible();
     await expect(page.getByText(/Sale date/i).first(), 'sale date label in the strip').toBeVisible();
     await expect(page.getByText(/^Currency/).first(), 'currency label in the strip').toBeVisible();
@@ -145,12 +129,10 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
       page.getByPlaceholder('Search customers or type a name'),
       'buyer combobox is visible on the default Invoice tab',
     ).toBeVisible();
-    await expect(page.locator('#financial_pl-line-name-0'), 'line editor is visible on the default Invoice tab').toBeVisible();
+    await expect(page.getByPlaceholder('Search products or type a name').first(), 'line editor is visible on the default Invoice tab').toBeVisible();
     await expect(page.getByText(/Payment \/ settlement|Płatność/i), 'payment section is visible').toBeVisible();
-    await expect(
-      page.locator('#financial_pl-context-nip'),
-      'PL-VAT-only taxpayer NIP is hidden by default (panel mounted but not visible)',
-    ).toBeHidden();
+    await expect(page.locator('#financial_pl-invoice-kind'), 'invoice kind is an everyday invoice field').toBeVisible();
+    await expect(page.locator('#financial_pl-context-nip'), 'seller NIP is sourced from the KSeF credential, not duplicated on invoices').toHaveCount(0);
   });
 
   test('TC-2 Taxes & KSeF tab reveals PL-VAT controls and preserves values across unmounts', async ({
@@ -161,19 +143,17 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
     await openCreateInvoicePage(page);
 
     await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-    await expect(page.locator('#financial_pl-context-nip'), 'taxpayer NIP control appears on Taxes & KSeF').toBeVisible();
-    await expect(page.locator('#financial_pl-invoice-kind'), 'invoice-kind select appears on Taxes & KSeF').toBeVisible();
-
-    await page.locator('#financial_pl-context-nip').fill(VALID_NIP);
+    const mpp = page.getByRole('switch', { name: /Split payment.*required/i });
+    await expect(mpp, 'MPP control appears on Taxes & KSeF').toBeVisible();
+    await mpp.click();
+    await expect(mpp, 'MPP value can be enabled').toBeChecked();
 
     await page.getByRole('tab', { name: /^Invoice$/i }).click();
-    await expect(page.locator('#financial_pl-context-nip'), 'PL-VAT panel is hidden when Invoice is active').toBeHidden();
+    await expect(mpp, 'PL-VAT panel is hidden when Invoice is active').toBeHidden();
     await expect(page.getByPlaceholder('Search customers or type a name'), 'buyer combobox returns on Invoice').toBeVisible();
 
     await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-    await expect(page.locator('#financial_pl-context-nip'), 'taxpayer NIP survives the tab round-trip').toHaveValue(
-      VALID_NIP,
-    );
+    await expect(mpp, 'MPP value survives the tab round-trip').toBeChecked();
   });
 
   test('TC-3 Taxes & KSeF tab trigger indicates hidden data while Invoice is active', async ({ page, request }) => {
@@ -181,7 +161,7 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
     await openCreateInvoicePage(page);
 
     await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-    await page.locator('#financial_pl-context-nip').fill(VALID_NIP);
+    await page.getByRole('switch', { name: /Split payment.*required/i }).click();
     await page.getByRole('tab', { name: /^Invoice$/i }).click();
 
     await expect(page.getByRole('tab', { name: /^Invoice$/i }), 'Invoice tab is active after returning').toHaveAttribute(
@@ -191,7 +171,7 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
     await expectTaxesTabHasDataIndicator(page);
   });
 
-  test('TC-4 mandatory tab-error routing focuses the tab that owns the invalid field', async ({ page, request }) => {
+  test('TC-4 mandatory validation routes to and focuses the Invoice tab', async ({ page, request }) => {
     const token = await prepareCreateInvoiceTest(request);
     const stamp = suffix();
     let invoiceId: string | null = null;
@@ -200,37 +180,19 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
       await openCreateInvoicePage(page);
 
       await fillLineOnly(page, stamp);
-      await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-      await page.locator('#financial_pl-context-nip').fill(VALID_NIP);
       await page.getByRole('button', { name: /^Create invoice$/i }).click();
 
       await expect(page, 'missing buyer submission remains on the create page').toHaveURL(
         /\/backend\/financial\/invoices\/create(?:\?.*)?$/i,
       );
-      await expect(page.locator('#financial_pl-context-nip'), 'missing buyer routes back to the Invoice tab').toBeHidden();
+      await expect(page.getByRole('tab', { name: /^Invoice$/i }), 'missing buyer routes to the Invoice tab').toHaveAttribute('aria-selected', 'true');
       await expect(page.getByPlaceholder('Search customers or type a name'), 'buyer field is visible after buyer error').toBeVisible();
       await expect(
-        page.getByText(/buyer needs a name and an address/i),
+        page.getByText(/buyer needs a name and an address/i).first(),
         'buyer error banner is visible (matches the error text, not the section heading)',
       ).toBeVisible();
 
-      await fillBuyerAndLine(page, stamp);
-      await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-      await page.locator('#financial_pl-context-nip').fill(INVALID_NIP);
-      await page.getByRole('button', { name: /^Create invoice$/i }).click();
-
-      await expect(page, 'invalid taxpayer NIP submission remains on the create page').toHaveURL(
-        /\/backend\/financial\/invoices\/create(?:\?.*)?$/i,
-      );
-      await expect(
-        page.locator('#financial_pl-context-nip'),
-        'taxpayer NIP control stays visible on the offending Taxes & KSeF tab',
-      ).toBeVisible();
-      await expect(page.locator('#financial_pl-context-nip'), 'PL-VAT panel is mounted exactly once').toHaveCount(1);
-      await expect(
-        page.getByText(/taxpayer NIP is invalid|NIP.*checksum/i),
-        'taxpayer NIP checksum error is visible',
-      ).toBeVisible();
+      await expect(page.getByPlaceholder('Search customers or type a name').first(), 'first invalid buyer field receives focus').toBeFocused();
     } finally {
       invoiceId = invoiceId ?? invoiceIdFromEditUrl(page);
       await deleteGeneralEntityIfExists(request, token, '/api/sales/invoices', invoiceId);
@@ -252,7 +214,7 @@ test.describe('TC-KSEF-UI-009: SPEC-018 tabbed invoice editor', () => {
 
     // Switch away (this blurs the combobox) and back, WITHOUT first selecting a suggestion.
     await page.getByRole('tab', { name: /Taxes & KSeF/i }).click();
-    await expect(page.locator('#financial_pl-context-nip'), 'Taxes & KSeF panel is now visible').toBeVisible();
+    await expect(page.getByRole('switch', { name: /Split payment.*required/i }), 'Taxes & KSeF panel is now visible').toBeVisible();
     await expect(buyerInput, 'buyer combobox is hidden (not unmounted) while Taxes is active').toBeHidden();
 
     await page.getByRole('tab', { name: /^Invoice$/i }).click();

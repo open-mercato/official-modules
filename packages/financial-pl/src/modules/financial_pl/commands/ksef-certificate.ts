@@ -19,7 +19,11 @@ import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared
 import { ensureTenantScope, ensureOrganizationScope } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { z } from 'zod'
-import { KsefClient, type KsefCertificateInfo } from '../lib/ksef-client'
+import {
+  KsefClient,
+  type KsefCertificateInfo,
+  type KsefCertificateRevocationReason,
+} from '../lib/ksef-client'
 import { authenticate, type KsefAuthConfig } from '../lib/ksef-auth'
 import { normalizePem } from '../lib/pem'
 import { runCertificateEnrollment } from '../lib/cert-enrollment'
@@ -43,9 +47,11 @@ export type KsefCertificateListInput = z.infer<typeof listInputSchema>
 
 const revokeInputSchema = z.object({
   serialNumber: z.string().min(1),
-  reason: z.string().min(1).optional(),
+  reason: z.enum(['Unspecified', 'Superseded', 'KeyCompromise']).optional(),
 })
-export type KsefCertificateRevokeInput = z.infer<typeof revokeInputSchema>
+export type KsefCertificateRevokeInput = z.infer<typeof revokeInputSchema> & {
+  reason?: KsefCertificateRevocationReason
+}
 
 type CredentialsService = {
   getRaw: (

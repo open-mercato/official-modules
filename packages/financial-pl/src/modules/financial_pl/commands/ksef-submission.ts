@@ -46,7 +46,7 @@ import { buildKodIUrl } from '../lib/ksef-qr'
 import { chooseRecovery, isOfflineSubmissionMode } from '../lib/recovery'
 import { buildKodIIUrl, type KsefKodIIAlgorithm } from '../lib/ksef-qr-cert'
 import { computeOfflineSendDeadline } from '../lib/offline-deadline'
-import { isInvoiceIssued } from '../lib/invoice-status'
+import { canIssueInvoiceToKsef } from '../lib/invoice-status'
 import { buildBatchPackage } from '../lib/batch-package'
 import { FINANCIAL_PL_QUEUES, getFinancialPlQueue, type KsefBatchSendJobPayload } from '../lib/queue'
 
@@ -409,11 +409,12 @@ export const sendFromInvoiceCommand: CommandHandler<SendFromInvoiceInput, { subm
         error: translate('financial_pl.errors.proforma_not_supported', 'A proforma invoice cannot be submitted to KSeF.'),
       })
     }
-    // Core has no `is_immutable` column — an invoice is immutable once its lifecycle status leaves
-    // the editable set (draft/void/canceled/…). Mirrors the JPK resolver + credit-memo draft gate.
-    if (!isInvoiceIssued(invoice.status)) {
+    // The confirmed KSeF action is the issuance transition for a blank/draft core invoice. Creating
+    // the queued submission immediately activates the module's server-side immutability guard.
+    // Only terminal void/cancel states are ineligible.
+    if (!canIssueInvoiceToKsef(invoice.status)) {
       throw new CrudHttpError(409, {
-        error: translate('financial_pl.errors.invoice_not_issued', 'Only an issued (immutable) invoice can be submitted to KSeF.'),
+        error: translate('financial_pl.errors.invoice_not_issued', 'A canceled or void invoice cannot be submitted to KSeF.'),
       })
     }
 

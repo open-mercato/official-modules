@@ -176,8 +176,8 @@ beforeEach(() => {
   mockBuildBatchPackage.mockReturnValue({
     encryptedZip: Buffer.from('encrypted zip'),
     encryption: { encryptedSymmetricKey: 'wrapped-key', initializationVector: 'iv' },
-    batchFile: { fileSize: 123, fileHash: 'zip-hash' },
-    fileParts: [{ ordinalNumber: 1, fileName: 'batch.zip.enc', fileSize: 13, fileHash: 'part-hash' }],
+    batchFile: { fileSize: 123, fileHash: 'zip-hash', compressionType: 'Zip' },
+    fileParts: [{ ordinalNumber: 1, fileSize: 13, fileHash: 'part-hash' }],
     invoiceHashes: [],
   })
   mockPutToAbsoluteUrl.mockResolvedValue({ ok: true, status: 200 })

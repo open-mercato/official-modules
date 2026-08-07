@@ -16,8 +16,8 @@ export type JpkCorrectionScope = 'both' | 'declaration' | 'evidence'
 
 /** XSD targetNamespace per variant (from the raw schemas). */
 export const JPK_NAMESPACE: Record<JpkVariant, string> = {
-  V7M: 'http://crd.gov.pl/wzor/2025/06/18/06181/',
-  V7K: 'http://crd.gov.pl/wzor/2025/06/18/06182/',
+  V7M: 'http://crd.gov.pl/wzor/2025/12/19/14090/',
+  V7K: 'http://crd.gov.pl/wzor/2025/12/19/14089/',
 }
 
 /** Naglowek/KodFormularza fixed attributes per variant. */

@@ -21,6 +21,9 @@ describe('CorrectionForm correction payload', () => {
       ],
     })
 
-    expect(payload.metadata).toEqual({ priceMode: 'gross' })
+    expect(payload.metadata).toEqual({
+      correctedInvoiceId: 'invoice-1',
+      priceMode: 'gross',
+    })
   })
 })

@@ -492,6 +492,51 @@ describe('JPK generate — terminal/credentials guards', () => {
 })
 
 describe('JPK submit — ambiguous MF reference remains resumable', () => {
+  it('returns a terminal MF rejection to generated so the corrected filing can be regenerated', async () => {
+    process.env.OM_JPK_MF_CERT_PEM = 'MF CERT'
+    const filing: Record<string, unknown> = {
+      id: FIL,
+      organizationId: ORG,
+      tenantId: TEN,
+      status: 'generated',
+      generatedXml: '<JPK>payload</JPK>',
+      submissionReference: null,
+      submissionError: null,
+      deletedAt: null,
+      createdAt: new Date('2026-06-30T10:00:00Z'),
+      updatedAt: new Date('2026-06-30T10:00:00Z'),
+    }
+    const { em } = makeSubmitEm(filing)
+    ;(findOneWithDecryption as jest.Mock).mockResolvedValue(filing)
+    mockSubmitJpk.mockResolvedValueOnce({
+      ok: false,
+      referenceNumber: 'JPK-REF-REJECTED',
+      status: '401',
+      error: 'Weryfikacja negatywna – dokument niezgodny ze schematem xsd',
+    })
+
+    await expect(
+      submitFilingCommand.execute(
+        { filingId: FIL },
+        makeCtx({
+          em,
+          creds: {
+            environment: 'test',
+            jpkSignerCertPem: 'SIGNER CERT',
+            jpkSignerPrivateKeyPem: 'SIGNER KEY',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 502,
+      body: { code: 'jpk_submit_failed', referenceNumber: 'JPK-REF-REJECTED' },
+    })
+
+    expect(filing.status).toBe('generated')
+    expect(filing.submissionReference).toBe('JPK-REF-REJECTED')
+    expect(filing.submissionError).toMatch(/niezgodny ze schematem xsd/)
+  })
+
   it('keeps a failed submission with a reference in submitting state, then re-polls on the next submit', async () => {
     process.env.OM_JPK_MF_CERT_PEM = 'MF CERT'
     const filing: Record<string, unknown> = {

@@ -341,6 +341,14 @@ export function BuyerFields({ value, onChange, disabled, errors }: BuyerFieldsPr
         <div
           data-invalid={errorFor('companyName') ? 'true' : undefined}
           className={errorFor('companyName') ? '[&_input]:border-destructive' : undefined}
+          onBlurCapture={(event) => {
+            if (busy || !(event.target instanceof HTMLInputElement)) return
+            const next = event.target.value.trim()
+            if (next === (value.companyName ?? '').trim()) return
+            selectedCustomerIdRef.current = null
+            customerSelectionDirtiesRef.current.clear()
+            patch({ companyName: next })
+          }}
         >
         <ComboboxInput
           value={value.companyName ?? ''}

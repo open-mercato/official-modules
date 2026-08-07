@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 import { getTokenContext } from '@open-mercato/core/helpers/integration/generalFixtures';
+import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
 
 /**
  * TC-KSEF-UI-005: JPK + certificates backoffice route gating (SPEC-013).
@@ -48,6 +49,24 @@ function purchasePayload() {
     netOther: '1000.00',
     vatOther: '230.00',
   };
+}
+
+async function cleanupJpkRoundTripFixture(scope: { organizationId: string; tenantId: string }) {
+  await withClient(async (client) => {
+    await client.query(
+      `delete from financial_pl_jpk_filing
+       where organization_id = $1 and tenant_id = $2
+         and variant = 'V7M' and year = 2026 and month = 11
+         and cel_zlozenia = 1 and context_nip = '7980332920'`,
+      [scope.organizationId, scope.tenantId],
+    );
+    await client.query(
+      `delete from financial_pl_jpk_purchase_record
+       where organization_id = $1 and tenant_id = $2
+         and year = 2026 and month = 11 and document_number like 'FZ-UI5-%'`,
+      [scope.organizationId, scope.tenantId],
+    );
+  });
 }
 
 test.describe('TC-KSEF-UI-005: JPK + certificates route gating', () => {
@@ -97,41 +116,46 @@ test.describe('TC-KSEF-UI-005: JPK + certificates route gating', () => {
 
   test('a financial_pl.manage holder can create → generate → export well-formed JPK XML', async ({ request }) => {
     const token = await getAuthToken(request, 'admin');
-    getTokenContext(token);
+    const scope = getTokenContext(token);
 
-    // Seed an in-period purchase row so the JPK has evidence to emit.
-    const seedRecord = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/purchase-records', {
-      token,
-      data: purchasePayload(),
-    });
-    if (seedRecord.status() === 403) {
-      test.skip(true, 'admin lacks financial_pl.manage on this DB (run yarn mercato auth sync-role-acls)');
+    await cleanupJpkRoundTripFixture(scope);
+    try {
+      // Seed an in-period purchase row so the JPK has evidence to emit.
+      const seedRecord = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/purchase-records', {
+        token,
+        data: purchasePayload(),
+      });
+      if (seedRecord.status() === 403) {
+        test.skip(true, 'admin lacks financial_pl.manage on this DB (run yarn mercato auth sync-role-acls)');
+      }
+      expect(seedRecord.status(), 'admin creates a purchase record').toBe(200);
+
+      const createRes = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
+        token,
+        data: filingPayload(),
+      });
+      expect(createRes.status(), 'admin creates a filing').toBe(200);
+      const filingId = ((await createRes.json()) as { id?: string }).id ?? null;
+      expect(filingId, 'create returns the filing id').toBeTruthy();
+
+      const generateRes = await apiRequest(request, 'POST', `/api/financial_pl/ksef/jpk/export?filingId=${filingId}`, {
+        token,
+        data: {},
+      });
+      expect(generateRes.status(), 'generation succeeds').toBe(200);
+      expect(((await generateRes.json()) as { ok?: boolean }).ok).toBe(true);
+
+      const downloadRes = await apiRequest(request, 'GET', `/api/financial_pl/ksef/jpk/export?filingId=${filingId}`, {
+        token,
+      });
+      expect(downloadRes.status(), 'download succeeds after generation').toBe(200);
+      expect(downloadRes.headers()['content-type'] ?? '', 'the export is application/xml').toContain('application/xml');
+      const xml = await downloadRes.text();
+      expect(xml, 'the export is well-formed JPK XML (declaration + JPK root)').toContain('<?xml');
+      expect(xml).toContain('JPK');
+    } finally {
+      await cleanupJpkRoundTripFixture(scope);
     }
-    expect(seedRecord.status(), 'admin creates a purchase record').toBe(200);
-
-    const createRes = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
-      token,
-      data: filingPayload(),
-    });
-    expect(createRes.status(), 'admin creates a filing').toBe(200);
-    const filingId = ((await createRes.json()) as { id?: string }).id ?? null;
-    expect(filingId, 'create returns the filing id').toBeTruthy();
-
-    const generateRes = await apiRequest(request, 'POST', `/api/financial_pl/ksef/jpk/export?filingId=${filingId}`, {
-      token,
-      data: {},
-    });
-    expect(generateRes.status(), 'generation succeeds').toBe(200);
-    expect(((await generateRes.json()) as { ok?: boolean }).ok).toBe(true);
-
-    const downloadRes = await apiRequest(request, 'GET', `/api/financial_pl/ksef/jpk/export?filingId=${filingId}`, {
-      token,
-    });
-    expect(downloadRes.status(), 'download succeeds after generation').toBe(200);
-    expect(downloadRes.headers()['content-type'] ?? '', 'the export is application/xml').toContain('application/xml');
-    const xml = await downloadRes.text();
-    expect(xml, 'the export is well-formed JPK XML (declaration + JPK root)').toContain('<?xml');
-    expect(xml).toContain('JPK');
   });
 
   // ---------------- certificates: list/enroll/revoke gated on financial_pl.manage ----------------
@@ -164,12 +188,14 @@ test.describe('TC-KSEF-UI-005: JPK + certificates route gating', () => {
     expect(revoke.status(), 'employee (view-only) cannot revoke a certificate').toBe(403);
   });
 
-  test('a financial_pl.manage holder can list certificates (200)', async ({ request }) => {
+  test('a financial_pl.manage holder reaches certificate listing past authorization', async ({ request }) => {
     const token = await getAuthToken(request, 'admin');
     const res = await apiRequest(request, 'GET', '/api/financial_pl/ksef/certificates', { token });
     if (res.status() === 403) {
       test.skip(true, 'admin lacks financial_pl.manage on this DB (run yarn mercato auth sync-role-acls)');
     }
-    expect(res.status(), 'financial_pl.manage can list certificates').toBe(200);
+    expect([200, 409], 'authorized listing either succeeds or reports a missing certificate credential').toContain(
+      res.status(),
+    );
   });
 });

@@ -9,36 +9,7 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { KsefSubmission, SalesInvoicePlMeta } from '../../../../data/entities'
-
-/**
- * Seller identity (Podmiot1) for the invoice preview. Art. 106e ust. 1 pkt 3 requires the seller's
- * name and address on the invoice, but that identity lives on the `ksef_pl` integration credential,
- * not on the invoice row — so the detail payload has to fetch it. Only the three printable fields
- * are returned; no token, key or other secret from the credential is exposed.
- */
-async function readSellerIdentity(
-  container: Awaited<ReturnType<typeof createRequestContainer>>,
-  scope: { organizationId: string; tenantId: string },
-): Promise<{ name: string | null; addressLine1: string | null; addressLine2: string | null } | null> {
-  try {
-    const service = container.resolve('integrationCredentialsService') as {
-      getRaw: (key: string, scope: { organizationId: string; tenantId: string }) => Promise<Record<string, unknown> | null>
-    }
-    const creds = await service.getRaw('ksef_pl', scope)
-    if (!creds) return null
-    const str = (value: unknown) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : null)
-    const identity = {
-      name: str(creds.sellerName),
-      addressLine1: str(creds.sellerAddressLine1),
-      addressLine2: str(creds.sellerAddressLine2),
-    }
-    return identity.name || identity.addressLine1 ? identity : null
-  } catch {
-    // A missing or unreadable credential must not break the detail view — the document falls back
-    // to showing the taxpayer NIP alone.
-    return null
-  }
-}
+import { readSellerIdentity } from '../../../../lib/seller-identity'
 
 export const metadata = {
   // Composed gate (SPEC-013): this endpoint exposes core SalesInvoice business data which core

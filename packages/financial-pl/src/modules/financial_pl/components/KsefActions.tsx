@@ -33,7 +33,8 @@ const FEATURE_VIEW = 'financial_pl.view'
 
 // KSeF statuses for which the submission is terminal-success or in flight, so a
 // fresh send / retry is not eligible.
-const NON_RETRYABLE_STATUSES = new Set(['accepted', 'queued', 'processing'])
+const RETRY_BLOCKED_STATUSES = new Set(['accepted', 'queued', 'processing'])
+const FRESH_SEND_BLOCKED_STATUSES = new Set([...RETRY_BLOCKED_STATUSES, 'offline_issued'])
 
 type ActionResponse = { ok?: boolean; message?: string; error?: string }
 
@@ -65,8 +66,9 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
   })
 
   const status = submission?.status ?? null
-  const canSend = !status || !NON_RETRYABLE_STATUSES.has(status)
-  const retryTarget = submission && !NON_RETRYABLE_STATUSES.has(submission.status ?? '') ? submission : null
+  const canSend = !status || !FRESH_SEND_BLOCKED_STATUSES.has(status)
+  const retryTarget = submission && !RETRY_BLOCKED_STATUSES.has(submission.status ?? '') ? submission : null
+  const isOfflineIssued = retryTarget?.status === 'offline_issued'
   const upoTarget = submission && submission.upoAvailable ? submission : null
 
   const runAction = React.useCallback(
@@ -128,10 +130,10 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
     await runAction({
       path: '/api/financial_pl/ksef/submissions/retry',
       body: { id: retryTarget.id },
-      successFallback: 'Submission retried.',
-      errorFallback: 'Failed to retry the KSeF submission.',
+      successFallback: isOfflineIssued ? 'Offline invoice queued to send to KSeF.' : 'Submission retried.',
+      errorFallback: isOfflineIssued ? 'Failed to send the offline invoice to KSeF.' : 'Failed to retry the KSeF submission.',
     })
-  }, [runAction, retryTarget])
+  }, [isOfflineIssued, runAction, retryTarget])
 
   const handleIssueOffline = React.useCallback(async () => {
     const ok = await confirm({
@@ -175,7 +177,9 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
       {canSubmit && retryTarget ? (
         <Button type="button" variant="outline" disabled={busy} onClick={handleRetry}>
           <RefreshCw className="mr-1 size-4" />
-          {t('financial_pl.actions.retry', 'Retry')}
+          {isOfflineIssued
+            ? t('financial_pl.actions.sendOfflineNow', 'Send offline invoice now')
+            : t('financial_pl.actions.retry', 'Retry')}
         </Button>
       ) : null}
 

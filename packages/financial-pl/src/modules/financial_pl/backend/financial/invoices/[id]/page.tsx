@@ -155,7 +155,7 @@ const PAGE_FEATURES = [
 ]
 
 // A KSeF submission in one of these states locks header/meta edits (KSeF immutability — corrections only).
-const EDIT_LOCK_STATUSES = new Set(['accepted', 'processing'])
+const EDIT_LOCK_STATUSES = new Set(['accepted', 'offline_issued', 'processing', 'queued'])
 
 // Map the GET payload's flat JPK procedure flags onto the form's procedure-markings map.
 const PROCEDURE_FLAG_MAP: ReadonlyArray<[keyof InvoiceMetaDetail, JpkProcedureMarking]> = [

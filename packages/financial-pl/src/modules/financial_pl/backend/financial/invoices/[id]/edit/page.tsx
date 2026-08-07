@@ -21,8 +21,8 @@ import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../
 const DEFAULT_CURRENCY = 'PLN'
 
 // KSeF statuses that make an invoice immutable (corrections only). Editing/saving is locked when
-// the latest submission is accepted (legally on file) or processing (in flight).
-const LOCKED_KSEF_STATUSES = new Set(['accepted', 'processing'])
+// the latest submission is accepted/offline-issued (legally issued) or queued/processing (in flight).
+const LOCKED_KSEF_STATUSES = new Set(['accepted', 'offline_issued', 'processing', 'queued'])
 
 /** Wire shape of GET /api/financial_pl/ksef/invoices/<id> ({ invoice, lines, meta, submission }). */
 type InvoiceDetailResponse = {
@@ -40,6 +40,9 @@ type InvoiceDetailResponse = {
     quantity?: string | number | null
     quantityUnit?: string | null
     unitPriceNet?: string | number | null
+    unitPriceGross?: string | number | null
+    discountAmount?: string | number | null
+    discountPercent?: string | number | null
     taxRate?: string | number | null
     totalNetAmount?: string | number | null
     taxAmount?: string | number | null
@@ -174,14 +177,36 @@ function toLineKind(value: string | null | undefined): InvoiceLineInput['kind'] 
 function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
   const currencyCode = toStr(data.invoice?.currencyCode, DEFAULT_CURRENCY) || DEFAULT_CURRENCY
   const invoiceMetadata = data.invoice?.metadata ?? null
+  const priceMode = invoiceMetadata?.priceMode === 'gross' ? 'gross' : 'net'
+  const marginScheme =
+    data.meta?.marginScheme && MARGIN_SCHEMES.has(data.meta.marginScheme)
+      ? (data.meta.marginScheme as MarginScheme)
+      : null
   const lines: InvoiceLineInput[] = (data.lines ?? []).map((line, index) => {
     const productId = typeof line.metadata?.productId === 'string' ? line.metadata.productId : undefined
+    const metadataDiscountAmount = line.metadata?.discountAmount
+    const metadataDiscountPercent = line.metadata?.discountPercent
     return withComputedTotals(
       {
         name: toStr(line.name),
         quantity: toStr(line.quantity, '1'),
         quantityUnit: line.quantityUnit ?? '',
         unitPriceNet: toStr(line.unitPriceNet, '0'),
+        unitPriceGross: toStr(line.unitPriceGross, ''),
+        discountAmount: toStr(
+          line.discountAmount ??
+            (typeof metadataDiscountAmount === 'string' || typeof metadataDiscountAmount === 'number'
+              ? metadataDiscountAmount
+              : undefined),
+          '',
+        ),
+        discountPercent: toStr(
+          line.discountPercent ??
+            (typeof metadataDiscountPercent === 'string' || typeof metadataDiscountPercent === 'number'
+              ? metadataDiscountPercent
+              : undefined),
+          '',
+        ),
         taxRate: line.taxRate != null ? toStr(line.taxRate) : '',
         currencyCode,
         kind: toLineKind(line.kind),
@@ -191,6 +216,8 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       },
       currencyCode,
       index + 1,
+      priceMode,
+      marginScheme,
     )
   })
   const { updatedAt, ...wireMeta } = data.meta ?? {}
@@ -205,6 +232,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
     buyer: buyerFromMetadata(invoiceMetadata),
     lines: lines.length ? lines : [],
     meta: data.meta ? toFormMeta(wireMeta) : {},
+    priceMode,
     notes: typeof invoiceMetadata?.notes === 'string' ? invoiceMetadata.notes : '',
     metadata: invoiceMetadata,
     metaUpdatedAt: updatedAt ?? null,
@@ -216,7 +244,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
  * core, lines via the QueryEngine, plus PL-VAT meta + the latest KSeF submission), then renders the
  * shared {@link InvoiceForm} in edit mode.
  *
- * If the latest KSeF submission is `accepted` or `processing` the invoice is immutable: the form is
+ * If the latest KSeF submission is accepted/offline-issued or queued/processing the invoice is immutable: the form is
  * rendered READ-ONLY with a lock Alert and an "Issue a correction" link to the detail page. The
  * server-side interceptor enforces the same rule regardless of this UI guard.
  */
@@ -275,7 +303,7 @@ export default function EditInvoicePage(props: { params?: { id?: string } }) {
       <AlertDescription>
         {t(
           'financial_pl.invoice.lockedKsef',
-          'This invoice has an accepted or in-progress KSeF submission and cannot be edited. Issue a correction (KOR) instead.',
+          'This invoice has been issued offline, queued, or submitted to KSeF and cannot be edited. Issue a correction (KOR) instead.',
         )}
       </AlertDescription>
       <div className="mt-2">

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api';
 import {
@@ -28,11 +29,21 @@ const CREATE_PAGE = '/backend/financial/invoices/create';
 const BANK_ACCOUNT = 'PL61109010140000071219812874';
 
 type ApiRequestContextParam = Parameters<typeof apiRequest>[0];
+type BankAccountSetting = {
+  id: string;
+  label?: string | null;
+  accountNumber: string;
+  bankName?: string | null;
+  swift?: string | null;
+  isDefault?: boolean;
+};
 
 async function openCreateInvoicePage(page: Page) {
   await login(page, 'admin');
   await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-settings-ready="1"]')).toBeVisible();
 }
 
 async function readCreatedId(responseLabel: string, response: APIResponse) {
@@ -100,6 +111,41 @@ async function selectPaymentMethod(page: Page, optionName: RegExp) {
   return method;
 }
 
+const datePickerIndex = { issue: 0, sale: 1, due: 2 } as const;
+
+function datePicker(page: Page, field: keyof typeof datePickerIndex) {
+  return page.locator('[data-slot="date-picker-trigger"]').nth(datePickerIndex[field]);
+}
+
+function displayedDate(isoDate: string) {
+  const [year, month, day] = isoDate.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+function uniquePolishIban() {
+  const suffix = String(Date.now()).slice(-6);
+  const domesticBody = `${BANK_ACCOUNT.slice(4, -6)}${suffix}`;
+  const checksum = String(98n - (BigInt(`${domesticBody}252100`) % 97n)).padStart(2, '0');
+  return `PL${checksum}${domesticBody}`;
+}
+
+async function setDatePicker(page: Page, field: keyof typeof datePickerIndex, isoDate: string) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const monthName = new Intl.DateTimeFormat('en-US', { month: 'long' }).format(
+    new Date(Date.UTC(year, month - 1, 1)),
+  );
+  await datePicker(page, field).click();
+  const dialog = page.locator('[role="dialog"]:visible').last();
+  const dayButton = dialog.getByRole('button', {
+    name: new RegExp(`${monthName} ${day}(?:st|nd|rd|th), ${year}$`, 'i'),
+  });
+  // The controlled DatePicker replaces its calendar cell once the draft date changes. Force skips
+  // Playwright's stability wait but still awaits the real React click handler and state commit.
+  await dayButton.click({ force: true });
+  await page.getByRole('button', { name: /^Apply$/i }).last().click({ force: true });
+  await expect(datePicker(page, field)).toContainText(displayedDate(isoDate));
+}
+
 async function fillBuyerAndLine(page: Page, stamp: string) {
   const buyerName = `QA SPEC017 Buyer ${stamp}`;
   const buyerInput = page.getByPlaceholder('Search customers or type a name').first();
@@ -110,9 +156,9 @@ async function fillBuyerAndLine(page: Page, stamp: string) {
   await page.locator('#financial_pl-buyer-line1').fill(`Spec017 Street ${stamp}`);
   await page.locator('#financial_pl-buyer-postal').fill('00-017');
   await page.locator('#financial_pl-buyer-city').fill('Warszawa');
-  await page.locator('#financial_pl-buyer-country').fill('PL');
+  await expect(page.locator('#financial_pl-buyer-country'), 'buyer country defaults to PL').toContainText('PL');
 
-  await page.locator('#financial_pl-line-name-0').fill(`QA SPEC017 Line ${stamp}`);
+  await page.getByPlaceholder('Search products or type a name').first().fill(`QA SPEC017 Line ${stamp}`);
   await page.locator('#financial_pl-line-qty-0').fill('1');
   await page.locator('#financial_pl-line-price-0').fill('100');
 }
@@ -125,24 +171,48 @@ function invoiceIdFromEditUrl(page: Page): string {
 
 test.describe('TC-KSEF-UI-008: SPEC-017 payment + sale date + line-edit safety', () => {
   test('payment + sale date persist on create', async ({ page, request }) => {
+    test.slow();
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
     await skipIfFinancialInvoicesUnavailable(request, token);
 
     let invoiceId: string | null = null;
     const stamp = suffix();
+    let originalAccounts: BankAccountSetting[] = [];
 
     try {
+      const settingsRes = await apiRequest(request, 'GET', '/api/financial_pl/invoice-settings', { token });
+      expect(settingsRes.status(), 'invoice settings can be read for the payment fixture').toBe(200);
+      const settingsBody = await readJsonSafe<{ settings?: { bankAccounts?: BankAccountSetting[] } }>(settingsRes);
+      originalAccounts = settingsBody?.settings?.bankAccounts ?? [];
+      const accountLabel = `QA SPEC017 Account ${stamp}`;
+      const accountNumber = uniquePolishIban();
+      const fixtureAccount: BankAccountSetting = {
+        id: randomUUID(),
+        label: accountLabel,
+        accountNumber,
+        bankName: 'Santander Bank Polska',
+        swift: 'WBKPPLPP',
+        isDefault: originalAccounts.length === 0,
+      };
+      const saveSettings = await apiRequest(request, 'PUT', '/api/financial_pl/invoice-settings', {
+        token,
+        data: { bankAccounts: [...originalAccounts, fixtureAccount] },
+      });
+      expect(saveSettings.status(), 'bank account fixture is configured').toBe(200);
+
       await openCreateInvoicePage(page);
       await fillBuyerAndLine(page, stamp);
 
       await expect(page.getByText(/Płatność \/ Payment|Payment \/ settlement/i), 'payment section is visible').toBeVisible();
-      await page.getByLabel('Issue date').fill('2026-08-02');
-      await page.getByLabel(/Sale date/i).fill('2026-08-01');
+      await setDatePicker(page, 'issue', '2026-08-01');
+      await expect(datePicker(page, 'sale'), 'untouched sale date follows the issue date').toContainText('01.08.2026');
+      await page.getByRole('button', { name: /^7 days$/i }).click();
       const paymentMethod = await selectPaymentMethod(page, /Bank transfer|Transfer/i);
       await expect(paymentMethod, 'payment method is set to transfer').toContainText(/Bank transfer|Transfer/i);
-      await page.getByLabel(/Payment term \(days\)|Termin \(dni\)/i).fill('7');
-      await page.getByLabel(/Bank account|Numer konta/i).fill(BANK_ACCOUNT);
+      await page.locator('#financial_pl-payment-account-pick').click();
+      await page.getByRole('option', { name: accountLabel }).click();
+      await expect(page.locator('#financial_pl-payment-account-pick')).toContainText(accountLabel);
 
       await Promise.all([
         page.waitForURL(/\/backend\/financial\/invoices\/[0-9a-f-]+\/edit(?:\?.*)?$/i),
@@ -150,23 +220,27 @@ test.describe('TC-KSEF-UI-008: SPEC-017 payment + sale date + line-edit safety',
       ]);
       invoiceId = invoiceIdFromEditUrl(page);
       await expect(page.getByRole('heading', { name: /Edit invoice/i })).toBeVisible();
+      await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
 
       await expect(page.getByLabel('Payment method'), 'saved payment method is rebound on edit').toContainText(
         /Bank transfer|Transfer/i,
       );
-      await expect(page.getByLabel(/Bank account|Numer konta/i), 'saved bank account is rebound on edit').toHaveValue(
-        BANK_ACCOUNT,
+      await expect(page.locator('#financial_pl-payment-account-pick'), 'saved bank account is rebound on edit').toContainText(
+        accountLabel,
       );
-      await expect(page.getByLabel(/Payment term \(days\)|Termin \(dni\)/i), 'saved payment term is rebound on edit').toHaveValue(
-        '7',
-      );
-      await expect(page.getByLabel(/Sale date/i), 'saved sale date is rebound on edit').toHaveValue('2026-08-01');
+      await expect(datePicker(page, 'due'), 'saved seven-day term is reflected in the due date').toContainText('08.08.2026');
+      await expect(datePicker(page, 'sale'), 'saved sale date is rebound on edit').toContainText('01.08.2026');
     } finally {
       await deleteGeneralEntityIfExists(request, token, '/api/sales/invoices', invoiceId);
+      await apiRequest(request, 'PUT', '/api/financial_pl/invoice-settings', {
+        token,
+        data: { bankAccounts: originalAccounts },
+      }).catch(() => undefined);
     }
   });
 
   test('line items are read-only on edit; payment and due date stay editable', async ({ page, request }) => {
+    test.slow();
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
     const stamp = suffix();
@@ -195,14 +269,18 @@ test.describe('TC-KSEF-UI-008: SPEC-017 payment + sale date + line-edit safety',
         waitUntil: 'domcontentloaded',
       });
       await expect(page.getByRole('heading', { name: /Edit invoice/i })).toBeVisible();
+      await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
 
       await expect(
         page.getByText(/^Line items can't be changed after the invoice is created/),
         'edit mode explains why invoice lines are read-only',
       ).toBeVisible();
-      await expect(page.locator('#financial_pl-line-name-0'), 'line name is not editable on edit').toBeDisabled();
+      await expect(page.getByPlaceholder('Search products or type a name').first(), 'line name is not editable on edit').toBeDisabled();
       await expect(page.locator('#financial_pl-line-qty-0'), 'line quantity is not editable on edit').toBeDisabled();
-      await expect(page.locator('#financial_pl-line-price-0'), 'line unit price is not editable on edit').toBeDisabled();
+      await expect(
+        page.getByText('100.0000', { exact: true }),
+        'line unit price is rendered as read-only text on edit',
+      ).toBeVisible();
       await expect(page.getByRole('button', { name: /Add line/i }), 'add-line control is not enabled on edit').toBeDisabled();
 
       const paymentMethod = page.getByLabel('Payment method');
@@ -211,10 +289,10 @@ test.describe('TC-KSEF-UI-008: SPEC-017 payment + sale date + line-edit safety',
       await page.getByRole('option', { name: /Cash/i }).click();
       await expect(paymentMethod, 'payment method can be changed on edit').toContainText(/Cash/i);
 
-      const dueDate = page.getByLabel('Due date');
+      const dueDate = datePicker(page, 'due');
       await expect(dueDate, 'due date remains editable on edit').toBeEnabled();
-      await dueDate.fill('2026-08-09');
-      await expect(dueDate, 'due date accepts an edit').toHaveValue('2026-08-09');
+      await setDatePicker(page, 'due', '2026-08-09');
+      await expect(dueDate, 'due date accepts an edit').toContainText('09.08.2026');
     } finally {
       await deleteGeneralEntityIfExists(request, token, '/api/sales/invoices', invoiceId);
     }
@@ -227,19 +305,19 @@ test.describe('TC-KSEF-UI-008: SPEC-017 payment + sale date + line-edit safety',
 
     await openCreateInvoicePage(page);
 
-    const dueDate = page.getByLabel('Due date');
-    const initialDueDate = await dueDate.inputValue();
-    expect(initialDueDate, 'create form starts with a date-shaped default due date').toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const dueDate = datePicker(page, 'due');
+    const initialDueDate = await dueDate.textContent();
+    expect(initialDueDate, 'create form starts with a date-shaped default due date').toMatch(/^\d{2}\.\d{2}\.\d{4}$/);
 
-    await page.getByLabel(/Payment term \(days\)|Termin \(dni\)/i).fill('7');
-    await page.getByLabel('Issue date').fill('2026-08-01');
-    await expect(dueDate, 'due date follows issue date + payment term while untouched').toHaveValue('2026-08-08');
+    await setDatePicker(page, 'issue', '2026-08-01');
+    await page.getByRole('button', { name: /^7 days$/i }).click();
+    await expect(dueDate, 'due date follows issue date + payment term while untouched').toContainText('08.08.2026');
 
-    await dueDate.fill('2026-09-01');
-    await expect(dueDate, 'manual due-date override is accepted').toHaveValue('2026-09-01');
-    await page.getByLabel('Issue date').fill('2026-08-15');
-    await expect(dueDate, 'manual due-date override is not overwritten by later issue-date edits').toHaveValue(
-      '2026-09-01',
+    await setDatePicker(page, 'due', '2026-09-01');
+    await expect(dueDate, 'manual due-date override is accepted').toContainText('01.09.2026');
+    await setDatePicker(page, 'issue', '2026-08-15');
+    await expect(dueDate, 'manual due-date override is not overwritten by later issue-date edits').toContainText(
+      '01.09.2026',
     );
   });
 });

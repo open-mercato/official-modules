@@ -52,12 +52,17 @@ describe('financial_pl ksef-immutability interceptor — tenant scope guard', ()
   })
 
   it('blocks a scoped caller when a locking submission exists', async () => {
-    const em = { fork: () => ({ count: jest.fn().mockResolvedValue(1) }) }
+    const count = jest.fn().mockResolvedValue(1)
+    const em = { fork: () => ({ count }) }
     const result = await salesGuard.before!(
       makeRequest({ id: invoiceId }),
       makeContext({ organizationId: selectedOrganizationId, tenantId }, em),
     )
     expect(result).toMatchObject({ ok: false, statusCode: 409 })
+    expect(count.mock.calls[0]?.[1]).toMatchObject({
+      status: { $in: expect.arrayContaining(['queued', 'processing', 'accepted', 'offline_issued']) },
+      documentKind: 'invoice',
+    })
   })
 
   it('blocks a tenant-scoped caller when a locking submission belongs to a different selected organization', async () => {

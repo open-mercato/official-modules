@@ -12,21 +12,24 @@ import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures';
  *   POST /api/financial_pl/ksef/jpk/export?filingId=<id>  (generate → status 'generated', writes XML)
  *   GET  /api/financial_pl/ksef/jpk/filings        (the filing appears in the Deklaracje list)
  *
- * Regression (review finding): upsertFilingCommand's update branch has NO status guard, so the
- * period-defining header (year/month/variant/celZlozenia/contextNip) of an ALREADY-SUBMITTED filing
- * can be rewritten while its generated_xml / UPO / submissionReference still describe the old
- * period — a falsified compliance record. generateCommand does block regenerating a submitted
- * filing, so the asymmetry is the bug. This test asserts the DESIRED behaviour (409) and is marked
- * `test.fail()` so it stays green while the bug is open and turns red (unexpected pass) the moment
- * the guard is added — the signal to drop the annotation. See commands/jpk.ts:326 vs :428.
+ * Regression guard: a submitted filing's period-defining header is immutable and an attempted
+ * rewrite must return 409, matching the generation lock.
  *
  * `admin` holds `financial_pl.*`. Requires the @open-mercato/financial-pl module active.
  */
-const CTX_NIP = '7980332920'; // valid test NIP (used across the module's suite)
+function randomValidNip(): string {
+  const weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
+  while (true) {
+    const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10));
+    if (digits[0] === 0) digits[0] = 1;
+    const checksum = digits.reduce((sum, digit, index) => sum + digit * weights[index], 0) % 11;
+    if (checksum < 10) return `${digits.join('')}${checksum}`;
+  }
+}
 
-function filingHeader(overrides: Record<string, unknown> = {}) {
+function filingHeader(contextNip: string, overrides: Record<string, unknown> = {}) {
   return {
-    contextNip: CTX_NIP,
+    contextNip,
     variant: 'V7M' as const,
     year: 2026,
     month: 6,
@@ -59,11 +62,12 @@ test.describe('TC-KSEF-JPK-003: JPK_V7 filing stage → generate → list + subm
   test('stages a V7M filing, generates it, and lists it', async ({ request }) => {
     const token = await getAuthToken(request, 'admin');
     getTokenContext(token);
+    const contextNip = randomValidNip();
     let filingId: string | null = null;
     try {
       const upsert = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
         token,
-        data: filingHeader(),
+        data: filingHeader(contextNip),
       });
       if (upsert.status() === 403) {
         test.skip(true, 'admin lacks financial_pl.manage on this DB (run yarn mercato auth sync-role-acls)');
@@ -105,18 +109,15 @@ test.describe('TC-KSEF-JPK-003: JPK_V7 filing stage → generate → list + subm
     }
   });
 
-  // REGRESSION GUARD (currently failing → test.fail keeps the suite green until the bug is fixed).
-  // Editing the period of a SUBMITTED filing must be rejected; today upsertFilingCommand allows it.
-  test.fail(
-    'rejects a period change on an already-submitted filing (finding: no status guard on upsert update)',
-    async ({ request }) => {
+  test('rejects a period change on an already-submitted filing', async ({ request }) => {
       const token = await getAuthToken(request, 'admin');
       getTokenContext(token);
+      const contextNip = randomValidNip();
       let filingId: string | null = null;
       try {
         const upsert = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
           token,
-          data: filingHeader({ month: 3 }),
+          data: filingHeader(contextNip, { month: 3 }),
         });
         if (upsert.status() === 403) {
           test.skip(true, 'admin lacks financial_pl.manage on this DB');
@@ -131,15 +132,11 @@ test.describe('TC-KSEF-JPK-003: JPK_V7 filing stage → generate → list + subm
         // Attempt to rewrite the period (month 3 → 4) of the submitted filing via the SAME id.
         const edit = await apiRequest(request, 'POST', '/api/financial_pl/ksef/jpk/filings', {
           token,
-          data: filingHeader({ id: filingId, month: 4 }),
+          data: filingHeader(contextNip, { id: filingId, month: 4 }),
         });
-        // DESIRED: a submitted filing's period is immutable → 409 (mirrors generateCommand's guard).
-        // ACTUAL today: 200 (the update branch has no status check) → this expectation fails →
-        // test.fail() marks the whole test as an expected failure (green). Remove test.fail once fixed.
         expect(edit.status(), 'editing a submitted filing period should be locked (409)').toBe(409);
       } finally {
         await deleteFilingRow(filingId);
       }
-    },
-  );
+    });
 });

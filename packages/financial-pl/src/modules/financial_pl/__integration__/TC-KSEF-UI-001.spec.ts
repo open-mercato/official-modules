@@ -8,6 +8,7 @@ import {
   deleteOrganizationIfExists,
 } from '@open-mercato/core/helpers/integration/authFixtures';
 import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integration/salesFixtures';
+import { createRestrictedUserFixture } from './restricted-user-fixture';
 
 /**
  * TC-KSEF-UI-001: invoices-with-KSeF-status list endpoint (SPEC-013) — auth, the
@@ -16,9 +17,8 @@ import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integratio
  *
  * Requires the @open-mercato/financial-pl official module to be activated in the test env
  * (yarn official-modules add financial-pl). `admin` holds `financial_pl.*` + core
- * `sales.invoices.manage`; `employee` holds only `financial_pl.view` (see setup.ts) —
- * used for the composed-gate 403 below (it has neither the OTHER half of the composed gate
- * nor the core sales feature).
+ * `sales.invoices.manage`. The composed-gate assertion creates an explicit view-only fixture,
+ * because core 0.6.8 now grants invoice management to the default employee role.
  *
  * Asserts the self-contained HTTP contract: 401 unauthenticated; 403 when the caller is
  * missing EITHER half of the composed `['financial_pl.view','sales.invoices.manage']` gate;
@@ -47,7 +47,7 @@ function invoicePayload() {
     grandTotalNetAmount: 100,
     grandTotalGrossAmount: 123,
     lines: [
-      { name: 'Usługa testowa', quantity: 1, unitPriceNet: 100, taxRate: 23 },
+      { name: 'Usługa testowa', quantity: 1, unitPriceNet: 100, taxRate: 23, currencyCode: 'PLN' },
     ],
   };
 }
@@ -63,12 +63,19 @@ test.describe('TC-KSEF-UI-001: invoices list (KSeF status) API', () => {
   // --- composed feature gate (financial_pl.view AND sales.invoices.manage) ---
 
   test('forbids a caller missing a half of the composed gate (403)', async ({ request }) => {
-    // `employee` has only `financial_pl.view` — it lacks the core `sales.invoices.manage`
-    // half of the composed gate, so the list endpoint must 403 (gating on financial_pl.view
-    // alone would be a permission bypass — SPEC-013).
-    const token = await getAuthToken(request, 'employee');
-    const res = await apiRequest(request, 'GET', '/api/financial_pl/ksef/invoices', { token });
-    expect(res.status(), 'employee (view-only, no sales.invoices.manage) is forbidden').toBe(403);
+    test.slow();
+    const restricted = await createRestrictedUserFixture(request, {
+      features: ['financial_pl.view'],
+      label: 'Financial PL invoice list viewer',
+    });
+    try {
+      const res = await apiRequest(request, 'GET', '/api/financial_pl/ksef/invoices', {
+        token: restricted.token,
+      });
+      expect(res.status(), 'view-only user without sales.invoices.manage is forbidden').toBe(403);
+    } finally {
+      await restricted.cleanup();
+    }
   });
 
   // --- the KSeF status column is projected on every row ---

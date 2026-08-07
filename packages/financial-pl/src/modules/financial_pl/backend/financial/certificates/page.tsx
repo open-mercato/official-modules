@@ -249,6 +249,15 @@ export default function FinancialPlCertificatesPage() {
     }
   }, [enrollName, enrollType, mutationContext, refresh, runMutation, t])
 
+  const handleEnrollKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey) || busy) return
+      event.preventDefault()
+      void handleEnroll()
+    },
+    [busy, handleEnroll],
+  )
+
   const handleRevoke = React.useCallback(
     async (row: CertificateRow) => {
       const ok = await confirm({
@@ -498,7 +507,7 @@ export default function FinancialPlCertificatesPage() {
       </PageBody>
 
       <Dialog open={enrollOpen} onOpenChange={setEnrollOpen}>
-        <DialogContent>
+        <DialogContent onKeyDown={handleEnrollKeyDown}>
           <DialogHeader>
             <DialogTitle>{t('financial_pl.certificates.enroll.title', 'Enroll KSeF certificate')}</DialogTitle>
           </DialogHeader>
@@ -524,10 +533,10 @@ export default function FinancialPlCertificatesPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setEnrollOpen(false)} disabled={busy}>
+            <Button type="button" variant="ghost" onClick={() => setEnrollOpen(false)} disabled={busy}>
               {t('financial_pl.certificates.enroll.cancel', 'Cancel')}
             </Button>
-            <Button onClick={handleEnroll} disabled={busy}>
+            <Button type="button" onClick={handleEnroll} disabled={busy}>
               {t('financial_pl.certificates.enroll.submit', 'Enroll')}
             </Button>
           </DialogFooter>

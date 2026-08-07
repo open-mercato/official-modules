@@ -24,6 +24,8 @@ async function openCreateInvoicePage(page: Page) {
   await login(page, 'admin');
   await page.goto(CREATE_PAGE, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Create invoice/i })).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-form-ready="1"]')).toBeVisible();
+  await expect(page.locator('[data-financial-pl-invoice-settings-ready="1"]')).toBeVisible();
 }
 
 async function skipIfFinancialInvoicesUnavailable(request: ApiRequestContextParam, token: string) {
@@ -54,7 +56,7 @@ async function fillBuyer(page: Page, stamp: string) {
   await page.locator('#financial_pl-buyer-line1').fill(`Spec009 Margin Street ${stamp}`);
   await page.locator('#financial_pl-buyer-postal').fill('00-011');
   await page.locator('#financial_pl-buyer-city').fill('Warszawa');
-  await page.locator('#financial_pl-buyer-country').fill('PL');
+  await expect(page.locator('#financial_pl-buyer-country'), 'buyer country defaults to PL').toContainText('PL');
 }
 
 async function fillCommittedProductLine(page: Page, stamp: string) {
@@ -62,7 +64,7 @@ async function fillCommittedProductLine(page: Page, stamp: string) {
   const productInput = page.getByPlaceholder('Search products or type a name').first();
   await productInput.fill(lineName);
   await productInput.press('Enter');
-  await expect(page.locator('#financial_pl-line-name-0'), 'product combobox commits custom line name').toHaveValue(
+  await expect(productInput, 'product combobox commits custom line name').toHaveValue(
     lineName,
   );
   await page.locator('#financial_pl-line-qty-0').fill('1');
@@ -101,22 +103,16 @@ test.describe('TC-KSEF-UI-011: gross-mode and VAT marża lock', () => {
       await fillBuyer(page, stamp);
       await fillCommittedProductLine(page, stamp);
 
-      await page.getByRole('button', { name: /^gross$/i }).click();
-      await expect(page.getByRole('button', { name: /^gross$/i }), 'gross mode is selected').toHaveAttribute(
-        'aria-pressed',
-        'true',
-      );
+      await page.getByRole('radio', { name: /^gross$/i }).click();
+      await expect(page.getByRole('radio', { name: /^gross$/i }), 'gross mode is selected').toBeChecked();
       await page.locator('#financial_pl-line-price-0').fill('123.00');
-      await expect(page.getByText(/Net:\s*100\.00\s+PLN/i), 'gross 123 at 23% derives net 100').toBeVisible();
+      await expect(page.getByText('100.00 PLN', { exact: true }), 'gross 123 at 23% derives net 100').toBeVisible();
 
       await selectUsedGoodsMargin(page);
       await page.getByRole('tab', { name: /^Invoice$/i }).click();
-      await expect(page.getByRole('button', { name: /^gross$/i }), 'gross mode remains selected under margin').toHaveAttribute(
-        'aria-pressed',
-        'true',
-      );
-      await expect(page.getByRole('button', { name: /^net$/i }), 'margin mode locks the net toggle').toBeDisabled();
-      await expect(page.getByText(/VAT:\s*margin/i), 'VAT display switches to margin label').toBeVisible();
+      await expect(page.getByRole('radio', { name: /^gross$/i }), 'gross mode remains selected under margin').toBeChecked();
+      await expect(page.getByRole('radio', { name: /^net$/i }), 'margin mode locks the net toggle').toBeDisabled();
+      await expect(page.getByText('margin', { exact: true }).first(), 'VAT display switches to margin label').toBeVisible();
 
       await page.getByRole('button', { name: /^Create invoice$/i }).click();
       await expect(page, 'create redirects to edit page').toHaveURL(

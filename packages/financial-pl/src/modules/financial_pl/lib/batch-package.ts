@@ -12,8 +12,8 @@ export type BatchInvoiceInput = { fileName: string; xml: string }
 export type BatchPackage = {
   encryptedZip: Buffer
   encryption: { encryptedSymmetricKey: string; initializationVector: string }
-  batchFile: { fileSize: number; fileHash: string }
-  fileParts: { ordinalNumber: number; fileName: string; fileSize: number; fileHash: string }[]
+  batchFile: { fileSize: number; fileHash: string; compressionType: 'Zip' }
+  fileParts: { ordinalNumber: number; fileSize: number; fileHash: string }[]
   invoiceHashes: { fileName: string; sha256: string }[]
 }
 
@@ -35,7 +35,6 @@ const DOS_TIME_MIDNIGHT = 0
 const DOS_DATE_1980_01_01 = 0x0021
 const ZIP64_LIMIT = 0xffffffff
 const ZIP16_LIMIT = 0xffff
-const SINGLE_PART_FILE_NAME = 'batch-part-1.zip.enc'
 
 /** Build a single-part encrypted batch package from FA(3) invoice XMLs (SPEC-015 F6). */
 export function buildBatchPackage(invoices: BatchInvoiceInput[], mfPublicKeyPem: string): BatchPackage {
@@ -54,11 +53,11 @@ export function buildBatchPackage(invoices: BatchInvoiceInput[], mfPublicKeyPem:
     batchFile: {
       fileSize: zipBytes.length,
       fileHash: sha256Base64(zipBytes),
+      compressionType: 'Zip',
     },
     fileParts: [
       {
         ordinalNumber: 1,
-        fileName: SINGLE_PART_FILE_NAME,
         fileSize: encryptedZip.length,
         fileHash: sha256Base64(encryptedZip),
       },

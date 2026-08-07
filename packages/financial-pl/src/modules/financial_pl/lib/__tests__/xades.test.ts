@@ -108,7 +108,14 @@ describe('generateKsefKeyPair + buildCsr', () => {
     expect(() => createPublicKey(keyPairPem.publicKeyPem)).not.toThrow()
     const csrB64 = await buildCsr({
       keyPairPem,
-      subject: { commonName: 'KSeF Cert', organizationName: 'Acme', serialNumber: '2481632647', countryName: 'PL' },
+      subject: {
+        commonName: 'KSeF Cert',
+        countryName: 'PL',
+        givenName: 'Jan',
+        surname: 'Kowalski',
+        organizationName: 'Acme',
+        serialNumber: '2481632647',
+      },
     })
     const csr = new x509.Pkcs10CertificateRequest(Buffer.from(csrB64, 'base64'))
     expect(csr.subject).toContain('2481632647')
