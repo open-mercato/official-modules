@@ -7509,6 +7509,7 @@ __metadata:
   dependencies:
     "@open-mercato/shared": "npm:0.6.4"
     "@open-mercato/ui": "npm:0.6.4"
+    "@playwright/test": "npm:^1.58.2"
     "@react-pdf/renderer": "npm:4.3.0"
     "@types/jest": "npm:^30.0.0"
     "@types/react": "npm:^19.0.0"

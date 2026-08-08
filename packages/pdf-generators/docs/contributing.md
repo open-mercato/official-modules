@@ -73,6 +73,45 @@ src/
 
 ---
 
+## Testing
+
+The package has two independent test layers.
+
+### Unit tests (Jest)
+
+Fast, isolated tests with mocked dependencies. They live in domain-colocated `__tests__/` directories (`lib/__tests__`, `services/__tests__`, `utils/__tests__`) and need no running app.
+
+```bash
+# from the monorepo root
+yarn workspace @open-mercato/pdf-generators test
+```
+
+### Integration tests (Playwright)
+
+End-to-end tests that hit the real HTTP endpoints of a running app. They live in `src/modules/pdf_generators/__integration__/` as `TC-PDF-*.spec.ts` files and are auto-discovered by the shared Playwright config at `.ai/qa/tests/playwright.config.ts` — no per-package config is needed.
+
+They require a **running sandbox** with the `sales` module, a database, and an `admin` account. The base URL comes from `BASE_URL` (default `http://localhost:3000`).
+
+```bash
+# from the monorepo root — start the sandbox first (see "Local setup" above)
+
+# run every module's integration suite
+yarn test:integration
+
+# run only this module's tests (positional path filter)
+npx playwright test --config .ai/qa/tests/playwright.config.ts packages/pdf-generators
+
+# run a single test file, fail-fast while iterating
+npx playwright test --config .ai/qa/tests/playwright.config.ts \
+  packages/pdf-generators/src/modules/pdf_generators/__integration__/TC-PDF-001.spec.ts --retries=0
+```
+
+> Note: `yarn test` (Jest) never runs the `.spec.ts` files, and `yarn test:integration` (Playwright) never runs the `.test.ts` files — the two toolchains are fully separate.
+
+Run artifacts (HTML report, JSON, traces) are written to `.ai/qa/test-results/` and are git-ignored.
+
+---
+
 ## How to add a new built-in template
 
 1. Create a new service in `src/modules/pdf_generators/services/` extending `BaseDocumentService`

@@ -33,6 +33,7 @@ yarn-error.log*
 /coverage
 /test-results
 /playwright-report
+.ai/qa/test-results/
 published-app/
 
 .vscode/
