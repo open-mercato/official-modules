@@ -1,0 +1,118 @@
+import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
+
+jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
+  findOneWithDecryption: jest.fn(),
+}))
+
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { OrdersDocumentService, type OrderRecord } from '../orders-document-service'
+
+const mockedFind = findOneWithDecryption as jest.Mock
+
+const auth = { tenantId: 't-1', orgId: 'o-1' } as unknown as AuthContext
+const container = { resolve: jest.fn(() => ({})) } as unknown as AppContainer
+
+function makeOrderRecord(overrides: Partial<OrderRecord> = {}): OrderRecord {
+  return {
+    id: 'ord-1',
+    orderNumber: 'ORD-2026-0007',
+    currencyCode: 'EUR',
+    placedAt: new Date('2026-05-09T00:00:00.000Z'),
+    expectedDeliveryAt: new Date('2026-05-16T00:00:00.000Z'),
+    comments: null,
+    grandTotalNetAmount: '200.00',
+    grandTotalGrossAmount: '246.00',
+    taxTotalAmount: '46.00',
+    customerSnapshot: { customer: { displayName: 'Beta GmbH', primaryEmail: 'buyer@beta.test' } },
+    billingAddressSnapshot: { addressLine1: 'Hauptstr. 5', city: 'Berlin', postalCode: '10115', country: 'DE' },
+    lines: [
+      {
+        id: 'l-1', name: 'Gadget', description: null, quantity: '4',
+        unitPriceNet: '50.00', unitPriceGross: '61.50', totalNetAmount: '200.00',
+        totalGrossAmount: '246.00', taxRate: '23', currencyCode: 'EUR',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  jest.clearAllMocks()
+})
+
+describe('OrdersDocumentService.fetchData', () => {
+  it('throws when auth context is missing but an id is present (tenant-isolation guard)', async () => {
+    const service = new OrdersDocumentService()
+    await expect(
+      service.fetchData({ data: { id: 'ord-1' } }, { container, auth: null }),
+    ).rejects.toThrow('Missing auth context')
+    expect(mockedFind).not.toHaveBeenCalled()
+  })
+
+  it('returns the raw data untouched when no id is supplied', async () => {
+    const service = new OrdersDocumentService()
+    const data = { foo: 'bar' }
+    await expect(service.fetchData({ data }, { container, auth })).resolves.toBe(data)
+    expect(mockedFind).not.toHaveBeenCalled()
+  })
+
+  it('scopes the query by id, tenantId and organizationId (C2)', async () => {
+    const service = new OrdersDocumentService()
+    mockedFind.mockResolvedValueOnce({
+      id: 'ord-1', orderNumber: 'ORD-1', currencyCode: 'EUR',
+      placedAt: null, expectedDeliveryAt: null, comments: null,
+      grandTotalNetAmount: '0', grandTotalGrossAmount: '0', taxTotalAmount: '0',
+      customerSnapshot: null, billingAddressSnapshot: { addressLine1: 'x' },
+      customerEntityId: null, lines: { getItems: () => [] },
+    })
+
+    await service.fetchData({ data: { id: 'ord-1' } }, { container, auth })
+
+    expect(mockedFind).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { id: 'ord-1', tenantId: 't-1', organizationId: 'o-1' },
+      { populate: ['lines'] },
+    )
+  })
+})
+
+describe('OrdersDocumentService.toTemplateData', () => {
+  it('normalizes a record with object snapshots', () => {
+    const service = new OrdersDocumentService()
+    const out = service.toTemplateData({ data: makeOrderRecord() })
+
+    expect(out.document).toMatchObject({ number: 'ORD-2026-0007' })
+    expect((out.document as Record<string, string>).date).toMatch(/^\d{2}\.\d{2}\.\d{4}$/)
+    expect(out.client).toMatchObject({ name: 'Beta GmbH', email: 'buyer@beta.test' })
+    expect(out.totals).toEqual({ subtotal: 200, tax: 46, total: 246, currency: 'EUR' })
+    expect((out.lines as unknown[])).toHaveLength(1)
+    expect((out.client as Record<string, string>).address).toContain('Hauptstr. 5')
+  })
+
+  it('parses snapshots that arrive as JSON strings (string branch)', () => {
+    const service = new OrdersDocumentService()
+    const record = makeOrderRecord({
+      customerSnapshot: JSON.stringify({ customer: { displayName: 'Beta GmbH', primaryEmail: 'buyer@beta.test' } }) as unknown as OrderRecord['customerSnapshot'],
+      billingAddressSnapshot: JSON.stringify({ addressLine1: 'Hauptstr. 5', city: 'Berlin', postalCode: '10115', country: 'DE' }) as unknown as OrderRecord['billingAddressSnapshot'],
+    })
+
+    const out = service.toTemplateData({ data: record })
+
+    expect(out.client).toMatchObject({ name: 'Beta GmbH', email: 'buyer@beta.test' })
+    expect((out.client as Record<string, string>).address).toContain('Berlin')
+  })
+})
+
+describe('OrdersDocumentService.filename', () => {
+  it('includes the document number when present', () => {
+    const service = new OrdersDocumentService()
+    expect(service.filename({ data: { document: { number: 'ORD-9' } } })).toBe('invoice-ORD-9.pdf')
+  })
+
+  it('falls back to invoice.pdf when the number is missing', () => {
+    const service = new OrdersDocumentService()
+    expect(service.filename({ data: {} })).toBe('invoice.pdf')
+  })
+})
