@@ -54,7 +54,7 @@ Key benefits: a single case lifecycle instead of a patient record and a calendar
 
 The planning primitives exist and are good. What is missing is the entity that consumes them, and the subject the whole cycle organises itself around.
 
-**Evidence from a live deployment.** An orthopaedic manufacturer producing paediatric orthoses (client anonymised; details available on request) migrated from a low-code platform to Open Mercato, with the migration signed off in August 2026. OM is the system of record there — patient records, measurement charts, a production board, and a workshop tablet with PIN login — at roughly 20 cases per month. Three defects logged during the internal test run before sign-off map directly onto the gaps above:
+**Evidence from a live deployment.** A manufacturer of made-to-measure devices for patients (client anonymised) migrated from a low-code platform to Open Mercato. OM is the system of record there — patient records, measurement charts, a production board, and a workshop tablet with PIN login. Three defects logged during the internal test run before launch map directly onto the gaps above:
 
 1. **The visit calendar** had to be built from scratch, including all conflict and availability handling, because core has no appointment concept.
 2. **Terminology drift between "consultation" and "visit"** — not a typo but a symptom. With nothing modelling the difference between a *case* and a *visit within it*, the vocabulary split apart in the code and in conversations with the client. A consultation is in fact one visit type within a case, not a synonym for the case.
