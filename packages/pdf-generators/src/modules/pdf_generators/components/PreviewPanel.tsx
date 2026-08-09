@@ -22,7 +22,6 @@ import { resolveErrorMessage } from '../utils/resolveErrorMessage'
 export interface PdfResource {
   kind: string
   id: string
-  label?: string
 }
 
 interface PreviewPanelProps {
@@ -88,7 +87,6 @@ export function PreviewPanel({ open, onClose, record, template, resource }: Prev
         data: record,
         resource_kind: resource?.kind,
         resource_id: resource?.id,
-        resource_label: resource?.label,
       }),
     }, {
       parse: (res) => res.blob(),

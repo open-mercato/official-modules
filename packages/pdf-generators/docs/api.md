@@ -60,7 +60,7 @@ Content-Type: application/pdf
 
 Renders a PDF and streams it to the browser as a file download. Called automatically by `PreviewPanel` when the user clicks **Download PDF**.
 
-**Has side effects** — intended for production use. Future phases will add logging, event emission (`pdf_generators.document.generated`), and PDF history persistence.
+**Has side effects** — when `resource_kind` and `resource_id` are supplied, a generation-history row is persisted. The human-readable resource label is derived from normalized document data on the server and falls back to `resource_id`.
 
 ```jsonc
 // Request body
@@ -68,8 +68,7 @@ Renders a PDF and streams it to the browser as a file download. Called automatic
   "template_id": "order-invoice",
   "data": { "id": "order_01JXYZ..." },
   "resource_kind": "sales.order",
-  "resource_id": "order_01JXYZ...",
-  "resource_label": "Order #1042"
+  "resource_id": "order_01JXYZ..."
 }
 ```
 
@@ -96,7 +95,6 @@ const { result, error } = await apiCall(
       data: record,
       resource_kind: resource?.kind,
       resource_id: resource?.id,
-      resource_label: resource?.label,
     }),
   },
   { parse: (res) => res.blob() },

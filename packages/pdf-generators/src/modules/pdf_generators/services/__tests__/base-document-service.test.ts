@@ -35,6 +35,10 @@ class TestDocumentService extends BaseDocumentService {
     const num = (data.document as { number?: string } | undefined)?.number
     return num ? `offer-${num}.pdf` : 'offer.pdf'
   }
+
+  override resourceLabel({ data }: { data: Record<string, unknown> }): string | undefined {
+    return (data.document as { number?: string } | undefined)?.number
+  }
 }
 
 const ctx = { container: {} as AppContainer, auth: null as AuthContext | null }
@@ -56,6 +60,7 @@ describe('BaseDocumentService.getEntries', () => {
     })
     expect(typeof entry.fromRecord).toBe('function')
     expect(typeof entry.filename).toBe('function')
+    expect(typeof entry.resourceLabel).toBe('function')
     expect(typeof entry.fetchData).toBe('function')
     expect(entry.load).toBe(service['templates_'].get('sales-offer')!.load)
   })
@@ -87,6 +92,15 @@ describe('BaseDocumentService.getEntries', () => {
     const [entry] = service.getEntries()
 
     expect(entry.filename({ data: {} })).toBe('offer.pdf')
+  })
+
+  it('binds resourceLabel so the override receives the unwrapped normalized data', () => {
+    const service = new TestDocumentService()
+    service.registerTemplate(makeTemplate())
+
+    const [entry] = service.getEntries()
+
+    expect(entry.resourceLabel?.({ data: { document: { number: '42' } } })).toBe('42')
   })
 
   it('binds fromRecord to the service toTemplateData', () => {
@@ -124,6 +138,11 @@ describe('BaseDocumentService defaults', () => {
   it('returns document.pdf as the default filename when not overridden', () => {
     const service = new MinimalService()
     expect(service.filename({ data: {} })).toBe('document.pdf')
+  })
+
+  it('returns no resource label by default', () => {
+    const service = new MinimalService()
+    expect(service.resourceLabel({ data: {} })).toBeUndefined()
   })
 
   it('returns the raw data unchanged from the default fetchData', async () => {

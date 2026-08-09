@@ -11,6 +11,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'modules/index',
         'modules/carrier-inpost',
+        'modules/pdf-generators',
       ],
     },
   ],

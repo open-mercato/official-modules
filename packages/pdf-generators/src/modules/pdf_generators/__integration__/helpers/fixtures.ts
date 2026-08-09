@@ -52,7 +52,35 @@ export async function previewDocument(
 export async function generateDocument(
   request: APIRequestContext,
   token: string,
-  body: { template_id?: string; data?: unknown; resource_kind?: string; resource_id?: string; resource_label?: string },
+  body: { template_id?: string; data?: unknown; resource_kind?: string; resource_id?: string },
 ): Promise<APIResponse> {
   return apiRequest(request, 'POST', '/api/pdf-generators/generate', { token, data: body })
+}
+
+export interface HistoryItem {
+  id: string
+  resourceKind: string
+  resourceId: string
+  resourceLabel: string
+  templateId: string
+  templateLabel: string
+  format: string
+  generatedBy: string
+  generatedAt: string
+}
+
+export async function listDocuments(
+  request: APIRequestContext,
+  token: string,
+  query: { resource_kind?: string; resource_id?: string; page?: number; pageSize?: number } = {},
+): Promise<{ items: HistoryItem[]; total: number; page: number; pageSize: number }> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(query)) if (v !== undefined) qs.set(k, String(v))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await apiRequest(request, 'GET', `/api/pdf-generators/documents${suffix}`, { token })
+  if (!response.ok()) {
+    const body = await response.text()
+    throw new Error(`Failed to list documents: ${response.status()} ${body}`)
+  }
+  return response.json()
 }

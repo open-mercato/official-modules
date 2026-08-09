@@ -4,7 +4,8 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { NextResponse } from 'next/server'
 import '../../../config/registry'
 import { renderPdf } from '../../../lib/render-pdf'
-import type { TemplateId } from '../../../lib/types'
+import { previewSchema } from '../../../data/validators'
+import { parseJsonBody, requireOrganization } from '../../_shared/http'
 
 export const metadata = {
   path: '/pdf-generators/preview',
@@ -22,26 +23,17 @@ export async function POST(request: Request) {
   const container = await createRequestContainer()
   const auth = await getAuthFromRequest(request)
 
-  let body: { template_id: TemplateId; data: unknown }
+  const body = await parseJsonBody(request)
+  if (!body.ok) return body.response
 
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-  }
-
-  const { template_id, data } = body
-
-  if (!template_id || !data) {
+  const parsed = previewSchema.safeParse(body.value)
+  if (!parsed.success) {
     return NextResponse.json({ error: 'Missing template_id or data' }, { status: 400 })
   }
+  const { template_id, data } = parsed.data
 
-  if (!auth?.tenantId || !auth?.orgId) {
-    return NextResponse.json(
-      { error: 'organization_required', message: 'Select an organization to generate this document.' },
-      { status: 409 },
-    )
-  }
+  const org = requireOrganization(auth)
+  if (!org.ok) return org.response
 
   return renderPdf({ template_id, data }, { container, auth }, 'preview')
 }

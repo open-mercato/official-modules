@@ -91,7 +91,8 @@ class TemplateRegistry implements TemplateRegistryInterface {
     const component = await entry.load()
     const data = entry.fromRecord(enriched)
     const filename = entry.filename({ data })
-    return { component, data, filename }
+    const resourceLabel = entry.resourceLabel?.({ data })
+    return { component, data, filename, resourceLabel }
   }
 }
 

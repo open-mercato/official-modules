@@ -53,6 +53,7 @@ To register your own templates from another module, create a `pdf-generators.ts`
 - [Installation](docs/installation.md)
 - [Usage & Integration](docs/usage.md)
 - [API Reference](docs/api.md)
+- [Service Conventions](docs/service-conventions.md)
 - [Contributing](docs/contributing.md)
 
 ---

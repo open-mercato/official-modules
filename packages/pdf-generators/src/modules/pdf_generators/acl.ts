@@ -4,5 +4,10 @@ export const features = [
     title: 'View PDF Generators',
     module: 'pdf_generators',
   },
+  {
+    id: 'pdf_generators.generate',
+    title: 'Generate PDF documents',
+    module: 'pdf_generators',
+  },
 ]
 export default features

@@ -55,7 +55,7 @@ An external community module (`packages/pdf-generators/`) extending OpenMercato 
 3. **Three API routes**:
    - `GET /api/pdf-generators/templates` — returns `{ internal: TemplateMeta[], external: TemplateMeta[] }`
    - `POST /api/pdf-generators/preview` — accepts `{ template_id, data }`, renders PDF, returns stream; **zero side effects** — used by `PreviewPanel` iframe
-   - `POST /api/pdf-generators/generate` — accepts `{ template_id, data, resource_kind?, resource_id?, resource_label? }`, renders PDF + triggers side effects (logging, events, Phase 5 persistence); used by download button
+   - `POST /api/pdf-generators/generate` — accepts `{ template_id, data, resource_kind?, resource_id? }`, renders PDF + triggers side effects (logging, events, Phase 5 persistence); the history label is derived server-side; used by download button
 4. **Live preview** — `PreviewPanel` dialog renders a blob URL from `POST /preview` in a native `<iframe>` (`Preview` component); download button calls `POST /generate` separately — no client-side `PDFViewer`.
 5. **Generator plugin** (`generators.ts`) — `pdf-generators.templates` plugin enables other modules to register external templates via `mercato generate registry`.
 
@@ -362,12 +362,11 @@ Generates a PDF with full side effects — logging, event emission, future persi
   "template_id": "sales-offer",
   "data": { /* raw context.record — at minimum { id } when fetchData is defined */ },
   "resource_kind": "quote",
-  "resource_id": "quote_01ABC",
-  "resource_label": "Quote #123"
+  "resource_id": "quote_01ABC"
 }
 ```
 
-> `resource_kind`, `resource_id`, `resource_label` are optional now — required by Phase 5 for persistence.
+> `resource_kind` and `resource_id` are optional. When both are present, Phase 5 persists history. `resource_label` is not accepted from the client: the selected document service derives it from normalized server-side data (for example, an order number), with `resource_id` as the fallback.
 
 **Response:** `Content-Type: application/pdf` — binary PDF stream with `Content-Disposition: attachment; filename="<derived>"`.
 
@@ -538,7 +537,7 @@ No changes to existing services or templates required.
 7. `examples/` folder added at package root — complete working invoice example for external template authors (`pdf-generators.ts`, service, template, widget, injection-table)
 8. `scaffold-pdf-templates` Claude Code skill added — guides generation of the full integration layer for external modules
 
-### Phase 5 — History & Backend Page (Planned)
+### Phase 5 — History & Backend Page ✅
 
 #### Files to create
 
@@ -547,14 +546,14 @@ No changes to existing services or templates required.
 | `data/entities.ts` | `GeneratedDocument` entity — `id`, `organization_id`, `tenant_id`, `resource_kind`, `resource_id`, `resource_label`, `template_id`, `template_label`, `format` (default `'pdf'`), `mime_type` (default `'application/pdf'`), `generated_by`, `generated_at`, `attachment_id` (nullable — populated in Phase 6). Table `pdf_generators_generated_documents` |
 
 > **Format-agnostic by design.** The entity is named `GeneratedDocument` (not `PdfGeneratedDocument`) and carries a `format` + `mime_type` discriminator so the persistence/history/storage layers work unchanged when non-PDF outputs (e.g. `.docx`, `.md`) are added later. **Only the data layer is generalized now** — the rendering pipeline (`render-pdf.ts`, `BaseDocumentService`, `@react-pdf/renderer`) stays PDF-only; adding a format means adding a renderer, not changing this schema. The module, package, API paths, and ACL features remain `pdf_generators`-named (renaming them is out of scope).
-| `data/validators.ts` | Zod schemas: extended `generateSchema` (adds `resource_kind`, `resource_id`, `resource_label`) + `listDocumentsSchema` (query params) |
+| `data/validators.ts` | Zod schemas: extended `generateSchema` (adds `resource_kind`, `resource_id`) + `listDocumentsSchema` (query params) |
 | `api/GET/pdf-generators/documents.ts` | Paginated history endpoint, filterable by `resource_kind` and `resource_id`; exports `openApi` + `metadata` |
 
 #### Files to modify
 
 | File | Change |
 |------|--------|
-| `api/pdf-generators/generate/route.ts` | Accept `resource_kind`, `resource_id`, `resource_label` alongside `template_id` + `record`; persist `GeneratedDocument` (with `format: 'pdf'`, `mime_type: 'application/pdf'`) via `createRequestContainer()` + `em` after successful render; get `generated_by` from `getAuthFromRequest()` |
+| `api/pdf-generators/generate/route.ts` | Accept `resource_kind` and `resource_id` alongside `template_id` + `data`; derive `resource_label` server-side from the normalized document (falling back to `resource_id`); persist `GeneratedDocument` (with `format: 'pdf'`, `mime_type: 'application/pdf'`) via `createRequestContainer()` + `em` after successful render; get `generated_by` from `getAuthFromRequest()` |
 | `acl.ts` | Add `pdf_generators.generate` feature |
 | `setup.ts` | Add `pdf_generators.generate` to `superadmin` + `admin` role features |
 | `backend/pdf-generators/page.tsx` | Add history section below templates: `DataTable` with columns Resource, Template, Generated By, Date — fetched from `GET /api/pdf-generators/documents` |
@@ -563,9 +562,10 @@ No changes to existing services or templates required.
 #### Data flow
 
 ```
-Widget → POST /generate { template_id, record, resource_kind, resource_id, resource_label }
+Widget → POST /generate { template_id, data, resource_kind, resource_id }
          ├── renderToBuffer() → success
-         │   └── em.persist(GeneratedDocument { ..., format: 'pdf', generated_by: auth.userId })
+         │   ├── documentService.resourceLabel(normalizedData) → label ?? resource_id
+         │   └── em.persist(GeneratedDocument { ..., resource_label: label, format: 'pdf', generated_by: auth.userId })
          └── returns PDF stream
 
 GET /api/pdf-generators/documents?resource_kind=X&resource_id=Y&page=1&pageSize=20
@@ -576,7 +576,8 @@ GET /api/pdf-generators/documents?resource_kind=X&resource_id=Y&page=1&pageSize=
 
 - Use `createRequestContainer()` from `@open-mercato/shared/lib/di/container` to get `em` in the generate route
 - Use `getAuthFromRequest(request)` from `@open-mercato/shared/lib/auth/server` to get `auth.userId` for `generated_by`
-- `resource_kind`, `resource_id`, `resource_label` are optional in `POST /generate` — PDF still renders without them; history record is only saved when all three are present
+- `resource_kind` and `resource_id` are optional in `POST /generate` — PDF still renders without them; a history record is saved only when both are present
+- `resource_label` is derived server-side through the template registry after normalization; callers cannot spoof it, and an unavailable label falls back to `resource_id`
 - `GET /documents` must always filter by `organization_id` — use `getAuthFromRequest` for tenant scoping
 - DB migration: run `yarn mercato db:generate` after adding entity — never hand-write migration SQL
 
@@ -598,7 +599,7 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 
 - The generated PDF contains customer data and amounts; it must never be retrievable from another tenant/organization.
 - If the upload omits the scope, the record is either unreachable for regular users (fail-closed 403) or, worse, over-exposed — both are defects. Verify the core `POST /api/attachments` contract actually stamps `organization_id`/`tenant_id` from auth; if it does not, pass them explicitly.
-- A history record (`GeneratedDocument`) is only written when `resource_kind`, `resource_id`, and `resource_label` are all present (see Phase 5); the same auth scope used there must match the attachment scope so history and file stay consistent.
+- A history record (`GeneratedDocument`) is only written when `resource_kind` and `resource_id` are both present (see Phase 5); its label is derived server-side. The same auth scope used there must match the attachment scope so history and file stay consistent.
 - This mirrors the Phase 1 render-path mitigation (see **Tenant & Data Isolation** above): the same `auth`-derived scope now extends from data fetch → render → stored file → download.
 
 ### Phase 7 — Email & Sharing (Planned)
@@ -642,7 +643,15 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 
 ### Verdict
 
-**Compliant for Phases 1–4 and 4.5.** Phase 5 requires DB entity + migration review before implementation.
+**Compliant for Phases 1–5.** Phase 5 includes the generated entity migration, organization + tenant scoped history service, validated API contracts, ACL separation, backend history table, and regression coverage.
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 1–4.6 | Done | 2026-05-17 | Registry, render pipeline, preview/download UI, code generation, quote and order templates |
+| Phase 5 — History & Backend Page | Done | 2026-08-09 | GeneratedDocument persistence, scoped history endpoint, server-derived resource labels, ACL, backend DataTable, unit and integration coverage |
+| Phase 6 — Attachment Storage | Not Started | — | Planned |
 
 ---
 
@@ -665,3 +674,4 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 | 2026-08-08 | Krzysztof Polak | Marked the "Raw SQL in QuotesDocumentService" pending item as resolved — `SalesQuote`/`SalesQuoteLine` are now in DI and loaded via `findOneWithDecryption` (2026-06-11); the raw-SQL workaround was removed, so the ORM layer is no longer bypassed. Pending list is now empty. |
 | 2026-08-09 | Krzysztof Polak | Phase 6 — added a mandatory **Tenant & data isolation** subsection: the `private` partition flag alone does not isolate stored PDFs across organizations; the upload must persist `organization_id`/`tenant_id` (from `getAuthFromRequest`) onto the `Attachment` record, since the core download route enforces scope via `isSameScope` (fail-closed, superadmin exempt). Extends the Phase 1 render-path isolation through storage and download. |
 | 2026-08-09 | Krzysztof Polak | Phase 5 — renamed the history entity `PdfGeneratedDocument` → `GeneratedDocument` and added `format` (default `'pdf'`) + `mime_type` discriminator columns, so the persistence/history/storage layers are format-agnostic (future `.docx`/`.md` support needs a renderer, not a schema change). Only the data layer is generalized — the render pipeline stays PDF-only; module/package/API/ACL names stay `pdf_generators`. Table: `pdf_generators_generated_documents`. |
+| 2026-08-09 | Codex | Completed Phase 5 and synchronized the API contract: clients send only `resource_kind` + `resource_id`; `resource_label` is derived from normalized data by the document service and falls back to `resource_id`. Added scoped history persistence/listing, backend history UI, ACL, validators, and regression/integration coverage. |

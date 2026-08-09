@@ -44,6 +44,7 @@ describe('templateRegistry.listTemplates', () => {
     // Runtime handlers must not leak into the UI-facing metadata.
     expect(internal[0]).not.toHaveProperty('fromRecord')
     expect(internal[0]).not.toHaveProperty('filename')
+    expect(internal[0]).not.toHaveProperty('resourceLabel')
     expect(internal[0]).not.toHaveProperty('load')
     expect(internal[0]).not.toHaveProperty('fetchData')
     expect(internal[0]).toMatchObject({
@@ -68,7 +69,7 @@ describe('templateRegistry.listTemplates', () => {
 })
 
 describe('templateRegistry.load', () => {
-  it('runs fetchData → fromRecord → filename → load and returns the resolved template', async () => {
+  it('runs fetchData, normalization and derived metadata and returns the resolved template', async () => {
     const calls: string[] = []
     const fetchData = jest.fn(async ({ data }: { data: unknown }) => {
       calls.push('fetchData')
@@ -82,18 +83,23 @@ describe('templateRegistry.load', () => {
       calls.push('filename')
       return 'invoice-42.pdf'
     })
+    const resourceLabel = jest.fn(() => {
+      calls.push('resourceLabel')
+      return 'ORD-42'
+    })
     const load = jest.fn(async () => {
       calls.push('load')
       return FakeComponent
     })
-    templateRegistry.registerInternal([makeEntry({ fetchData, fromRecord, filename, load })])
+    templateRegistry.registerInternal([makeEntry({ fetchData, fromRecord, filename, resourceLabel, load })])
 
     const result = await templateRegistry.load({ id: 'order-invoice', data: { id: 'abc' } }, ctx)
 
-    expect(calls).toEqual(['fetchData', 'load', 'fromRecord', 'filename'])
+    expect(calls).toEqual(['fetchData', 'load', 'fromRecord', 'filename', 'resourceLabel'])
     expect(result.component).toBe(FakeComponent)
     expect(result.data).toMatchObject({ normalized: true, id: 'abc', enriched: true })
     expect(result.filename).toBe('invoice-42.pdf')
+    expect(result.resourceLabel).toBe('ORD-42')
   })
 
   it('passes the request-scoped container and auth context to fetchData', async () => {

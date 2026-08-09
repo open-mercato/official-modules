@@ -116,3 +116,15 @@ describe('OrdersDocumentService.filename', () => {
     expect(service.filename({ data: {} })).toBe('invoice.pdf')
   })
 })
+
+describe('OrdersDocumentService.resourceLabel', () => {
+  it('returns the document number as the history label', () => {
+    const service = new OrdersDocumentService()
+    expect(service.resourceLabel({ data: { document: { number: 'ORD-9' } } })).toBe('ORD-9')
+  })
+
+  it('returns undefined when the number is missing', () => {
+    const service = new OrdersDocumentService()
+    expect(service.resourceLabel({ data: {} })).toBeUndefined()
+  })
+})

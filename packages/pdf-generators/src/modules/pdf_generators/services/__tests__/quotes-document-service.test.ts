@@ -118,3 +118,15 @@ describe('QuotesDocumentService.filename', () => {
     expect(service.filename({ data: {} })).toBe('offer.pdf')
   })
 })
+
+describe('QuotesDocumentService.resourceLabel', () => {
+  it('returns the document number as the history label', () => {
+    const service = new QuotesDocumentService()
+    expect(service.resourceLabel({ data: { document: { number: 'Q-9' } } })).toBe('Q-9')
+  })
+
+  it('returns undefined when the number is missing', () => {
+    const service = new QuotesDocumentService()
+    expect(service.resourceLabel({ data: {} })).toBeUndefined()
+  })
+})

@@ -52,6 +52,18 @@ export abstract class BaseDocumentService {
   }
 
   /**
+   * Returns a human-readable label for the source resource, derived server-side
+   * from the normalized data (e.g. an order or quote number). Used for the
+   * generation-history list. Override in concrete services.
+   *
+   * @param data - Normalized data returned by toTemplateData
+   * @returns Label string, or undefined when none can be derived
+   */
+  resourceLabel(_input: { data: Record<string, unknown> }): string | undefined {
+    return undefined
+  }
+
+  /**
    * Optional hook to fetch related data before normalization.
    * Called server-side in the generate route with the request-scoped DI container.
    * Override in concrete services that need data not available in the widget context (e.g. line items).
@@ -91,6 +103,7 @@ export abstract class BaseDocumentService {
       note: template.note,
       fromRecord: (data: unknown) => this.toTemplateData({ data }),
       filename: (input: { data: Record<string, unknown> }) => this.filename(input),
+      resourceLabel: (input: { data: Record<string, unknown> }) => this.resourceLabel(input),
       fetchData: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => this.fetchData(input, ctx),
       load: template.load,
     }))

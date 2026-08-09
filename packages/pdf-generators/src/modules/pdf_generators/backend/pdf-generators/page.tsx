@@ -7,6 +7,7 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import React from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { TemplateMeta } from '../../lib/interfaces'
+import { HistoryList } from '../../components/HistoryList'
 
 type TemplatesResponse = { internal: TemplateMeta[]; external: TemplateMeta[] }
 
@@ -114,6 +115,7 @@ export default function PdfGeneratorsPage() {
               </section>
             ))
           )}
+          <HistoryList />
         </div>
       </PageBody>
     </Page>

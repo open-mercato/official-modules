@@ -189,6 +189,10 @@ export class OrdersDocumentService extends BaseDocumentService {
     return num ? `invoice-${num}.pdf` : 'invoice.pdf'
   }
 
+  override resourceLabel({ data }: { data: Record<string, unknown> }): string | undefined {
+    return (data.document as { number?: string } | undefined)?.number
+  }
+
   toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
     const r = data as OrderRecord
     const customer = typeof r.customerSnapshot === 'string' ? JSON.parse(r.customerSnapshot) : r.customerSnapshot as any

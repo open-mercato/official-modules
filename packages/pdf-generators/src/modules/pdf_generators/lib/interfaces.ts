@@ -17,6 +17,7 @@ export interface TemplateMeta {
 export interface TemplateRegistryEntry {
   fromRecord: (data: unknown) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
   filename: (input: { data: Record<string, unknown> }) => string // derives the PDF filename from normalized data
+  resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined // derives a human-readable label for history from normalized data
   load: () => Promise<React.ComponentType<{ data: Record<string, unknown> }>> // lazy-loaded React-PDF component
   fetchData?: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => Promise<unknown> // server-side hook; called before normalization to fetch related data
 }
@@ -36,6 +37,7 @@ export interface LoadedTemplate {
   component: React.ComponentType<{ data: Record<string, unknown> }>
   data: Record<string, unknown>
   filename: string
+  resourceLabel?: string // human-readable label for history, derived from normalized data
 }
 
 /** Contract for the template registry — extracted for testability. */
