@@ -310,7 +310,21 @@ Backend pages under `/backend/patient-cases`, all sharing one `pageGroup` / `pag
 
 `DataTable` hosts keep `entityId` and `extensionTableId` stable (`patient_cases.patient`, `patient_cases.case`, `patient_cases.visit`) so injection from other modules stays backward-compatible. `pageSize` ≤ 100. Every dialog supports `Cmd/Ctrl+Enter` to submit and `Escape` to cancel; icon-only buttons carry `aria-label`.
 
-Screenshots from a working reference implementation (synthetic data) can be attached to this PR on request — this repo's specs are currently text-only, so no assets directory is introduced here.
+### Illustrative mocks
+
+The three screens below are static mocks of the proposed module, rendered with synthetic data and a deliberately generic made-to-measure product. They illustrate the design described above; they are not screenshots of any customer's system.
+
+**Case timeline** — the case as the parent entity, binding the patient, the production order and the visit series into one lifecycle.
+
+![Case timeline](assets/spec-005/case-timeline.png)
+
+**Visit calendar** — visit types are per-tenant configuration, not a hardcoded enum. Nothing on this screen is domain-specific, which is the substance of Q1.
+
+![Visit calendar](assets/spec-005/visit-calendar.png)
+
+**Production board** — workshop stages run in parallel with the visit series and feed back into it: sending an item back to modelling moves the planned handover, which moves the appointment.
+
+![Production board](assets/spec-005/production-board.png)
 
 ## Configuration
 
@@ -565,6 +579,9 @@ Screenshots from a working reference implementation (synthetic data) can be atta
 - **Non-compliant (by design)**: Blocked on Q1–Q5 by the module's own Open Questions gate. The specification is complete enough to review; implementation starts only after maintainer answers, and Phase 3 in particular is gated on Q1.
 
 ## Changelog
+
+### [2026-08-09]
+- Added three illustrative mocks under `assets/spec-005/` (case timeline, visit calendar, production board), rendered with synthetic data and a generic made-to-measure product.
 
 ### [2026-08-06]
 - Initial specification.
