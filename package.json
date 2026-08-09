@@ -45,7 +45,8 @@
     "i18n:check-usage:packages": "tsx scripts/i18n-check-usage.ts --scope=packages",
     "i18n:check": "tsx scripts/i18n-check-sync.ts && tsx scripts/i18n-check-usage.ts",
     "install-skills": "./scripts/install-skills.sh",
-    "check:dep-versions": "tsx scripts/check-dep-versions.ts"
+    "check:dep-versions": "tsx scripts/check-dep-versions.ts",
+    "module:db:generate": "tsx --tsconfig tsconfig.base.json scripts/generate-module-migration.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",

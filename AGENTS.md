@@ -182,7 +182,7 @@ export class MyEntity {
 - Standard columns: `id` (UUID PK), `organization_id`, `tenant_id`, `created_at`, `updated_at`
 - Optional standard columns: `deleted_at`, `is_active`
 - Cross-module links: FK string ID only — NEVER `@ManyToOne` to an entity from another module
-- NEVER hand-write migrations — update entities and run `yarn mercato db:generate`
+- NEVER hand-write migrations. For a **package** module, `yarn mercato db:generate` is skipped in this standalone repo (it only targets `@app` modules) — instead run the repo generator from the root: `yarn module:db:generate <module-name>` (e.g. `pdf-generators`; wired to `scripts/generate-module-migration.ts`). It writes `Migration<ts>_<module_id>.ts` + `.snapshot-open-mercato.json` into `src/modules/<module_id>/migrations/` (commit both). Requires Node 24 + a running Postgres (`DATABASE_URL` from `apps/sandbox/.env`). It's a root-level dev tool — do NOT add a `db:generate` script to the module's `package.json`. See README "Step 3b — Generate entity migrations".
 
 ### Zod Validators
 

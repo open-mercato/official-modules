@@ -204,6 +204,27 @@ yarn workspace @open-mercato/<your-module> typecheck
 
 Use the `implement-spec` skill to fill in the business logic phase by phase: entities, validators, API routes, UI pages, events, widget injection. Every phase must pass the code-review compliance gate before moving to the next.
 
+### Step 3b — Generate entity migrations (modules with a database entity)
+
+If your module ships a MikroORM entity (`src/modules/<module_id>/data/entities.ts`), it needs a migration so the table is created in every app that installs it.
+
+The built-in `mercato db generate` only targets **app-level** modules (`apps/*/src/modules/`). For a **package** it is skipped, so this repo ships a root-level generator, [`scripts/generate-module-migration.ts`](scripts/generate-module-migration.ts), that runs the same MikroORM Migrator scoped to your package and writes into the package source tree.
+
+Run it from the repo root (Node 24 + a running dev database — `DATABASE_URL` is read from `apps/sandbox/.env`), passing the package folder name:
+
+```bash
+yarn module:db:generate <module-name>       # e.g. yarn module:db:generate pdf-generators
+```
+
+It's a repo-level dev tool — nothing is added to your module's `package.json`, so a copied/ejected module stays clean.
+
+This creates, under `src/modules/<module_id>/migrations/`:
+
+- `Migration<timestamp>_<module_id>.ts` — the SQL
+- `.snapshot-open-mercato.json` — schema snapshot for future incremental diffs
+
+**Commit both.** Re-run after any entity change; the snapshot makes subsequent runs emit only the delta. The migration lives in `src/`, so the package build globs it into `dist/` — and in a standalone consumer app `yarn mercato db:migrate` applies it from there. No monorepo checkout is required to author the migration.
+
 ### Step 4 — Validate in the sandbox
 
 The sandbox is a workspace sibling — no registry publish needed. Add your module to `apps/sandbox/src/modules.ts`:
