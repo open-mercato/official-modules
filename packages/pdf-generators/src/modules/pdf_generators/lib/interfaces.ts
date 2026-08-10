@@ -13,12 +13,22 @@ export interface TemplateMeta {
   note?: string           // free-text note — e.g. where the template is used or registered
 }
 
+/** React-PDF source loaded lazily by a PDF template entry. */
+export interface ReactPdfTemplateSource {
+  type: 'react-pdf'
+  component: React.ComponentType<{ data: Record<string, unknown> }>
+}
+
+/** Union of format-specific template sources supported by the registry. */
+export type DocumentTemplateSource = ReactPdfTemplateSource
+
 /** Runtime handlers for a PDF template — normalization, lazy loading, and optional server-side data fetching. */
 export interface TemplateRegistryEntry {
   fromRecord: (data: unknown) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
   filename: (input: { data: Record<string, unknown> }) => string // derives the PDF filename from normalized data
+  resourceId?: (input: { data: Record<string, unknown> }) => string | undefined // derives the canonical source record id from normalized server-side data
   resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined // derives a human-readable label for history from normalized data
-  load: () => Promise<React.ComponentType<{ data: Record<string, unknown> }>> // lazy-loaded React-PDF component
+  load: () => Promise<DocumentTemplateSource> // lazy-loaded format-specific template source
   fetchData?: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => Promise<unknown> // server-side hook; called before normalization to fetch related data
 }
 
@@ -32,12 +42,37 @@ export interface TemplateFilter {
   tags?: string[]
 }
 
-/** Resolved template ready for rendering — component is loaded, data is normalized. */
-export interface LoadedTemplate {
-  component: React.ComponentType<{ data: Record<string, unknown> }>
+/** Format-independent metadata and normalized data shared by loaded templates. */
+export interface LoadedDocumentTemplateBase {
   data: Record<string, unknown>
   filename: string
-  resourceLabel?: string // human-readable label for history, derived from normalized data
+  template: {
+    id: string
+    label: string
+  }
+  resource: {
+    kind: string
+    id?: string
+    label?: string
+  }
+}
+
+/** Loaded React-PDF template accepted by {@link PdfRenderingService}. */
+export interface LoadedPdfTemplate extends LoadedDocumentTemplateBase {
+  source: ReactPdfTemplateSource
+}
+
+/** Union of formats currently supported by the template registry. */
+export type LoadedTemplate = LoadedPdfTemplate
+
+/** Complete result of rendering a prepared template to PDF bytes. */
+export interface RenderedDocument {
+  buffer: Uint8Array
+  filename: string
+  format: string
+  mimeType: string
+  template: LoadedDocumentTemplateBase['template']
+  resource: LoadedDocumentTemplateBase['resource']
 }
 
 /** Contract for the template registry — extracted for testability. */

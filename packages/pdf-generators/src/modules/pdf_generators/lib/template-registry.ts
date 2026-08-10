@@ -2,6 +2,13 @@ import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import type { TemplateMeta, TemplateEntry, TemplateRegistry as TemplateRegistryInterface, LoadedTemplate } from './interfaces'
 
+export class UnknownTemplateError extends Error {
+  constructor(id: string) {
+    super(`Unknown template: ${id}`)
+    this.name = 'UnknownTemplateError'
+  }
+}
+
 /**
  * Holds built-in and externally registered PDF templates.
  * Orchestrates server-side data fetching, normalization, and component loading via a single load() call.
@@ -60,7 +67,7 @@ class TemplateRegistry implements TemplateRegistryInterface {
    */
   private findTemplate(id: string): TemplateEntry {
     const entry = this.getAll().find((template) => template.id === id)
-    if (!entry) throw new Error(`Unknown template: ${id}`)
+    if (!entry) throw new UnknownTemplateError(id)
     return entry
   }
 
@@ -88,11 +95,18 @@ class TemplateRegistry implements TemplateRegistryInterface {
   async load({ id, data: rawData }: { id: string; data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<LoadedTemplate> {
     const entry = this.findTemplate(id)
     const enriched = await this.enrich({ id, data: rawData }, { container, auth })
-    const component = await entry.load()
+    const source = await entry.load()
     const data = entry.fromRecord(enriched)
     const filename = entry.filename({ data })
+    const resourceId = entry.resourceId?.({ data })
     const resourceLabel = entry.resourceLabel?.({ data })
-    return { component, data, filename, resourceLabel }
+    return {
+      data,
+      filename,
+      source,
+      template: { id: entry.id, label: entry.label },
+      resource: { kind: entry.resourceKind, id: resourceId, label: resourceLabel },
+    }
   }
 }
 

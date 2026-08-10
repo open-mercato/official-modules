@@ -187,7 +187,10 @@ export class {{PascalModuleId}}{{PascalCategory}}DocumentService extends BaseDoc
       note: 'Rendered in the PDF tab on the ... detail page.',
       load: () =>
         import('../templates/{{CATEGORY}}/{{TEMPLATE_ID}}').then(
-          (m) => m.{{PascalTemplateId}}Document as unknown as React.ComponentType<{ data: Record<string, unknown> }>
+          (m) => ({
+            type: 'react-pdf' as const,
+            component: m.{{PascalTemplateId}}Document as unknown as React.ComponentType<{ data: Record<string, unknown> }>,
+          })
         ),
     })
   }
@@ -235,7 +238,7 @@ export class {{PascalModuleId}}{{PascalCategory}}DocumentService extends BaseDoc
 - `fetchData` is the server-side hook that loads all data needed for the template. The widget passes only `{ id }` — `fetchData` is responsible for fetching the full record. It always runs before `toTemplateData()`. Never pass template data through the widget context — always fetch server-side.
 - `toTemplateData` replaces the old `normalizeRecord`. It receives the enriched data from `fetchData` and maps it to the template shape.
 - `formatDate` is imported from `@open-mercato/pdf-generators` — it is **not** a method on `BaseDocumentService`.
-- `load` must be a **function returning a dynamic import** — never a static import.
+- `load` must be a **function returning a dynamic import** wrapped as a discriminated `{ type: 'react-pdf', component }` source — never a static import.
 
 ---
 
@@ -292,7 +295,7 @@ Then navigate to a record detail page (sales order, sales quote) and confirm:
 ## Critical rules
 
 - The `theme` import (`@open-mercato/pdf-generators/…/shared/theme`) **must be a bare side-effect import** — it registers fonts. Do it once, at the top of the template `index.tsx`.
-- `load` in `registerTemplate` must be a **function returning a dynamic import** — never a static import, or the whole template bundle loads eagerly.
+- `load` in `registerTemplate` must return the discriminated React-PDF source from a **dynamic import** — never a static import, or the whole template bundle loads eagerly.
 - `id` in `BaseDocumentService` must be unique globally. Convention: `{{MODULE_ID}}-{{CATEGORY}}s`.
 - `resourceKind` must match the resource kind used by the core sales module tab: `sales.order` for orders, `sales.quote` for quotes.
 - `pdf-generators.ts` must export `templates` as a named export and a default export.

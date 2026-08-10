@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import { templateRegistry } from '../template-registry'
+import { templateRegistry, UnknownTemplateError } from '../template-registry'
 import type { TemplateEntry } from '../interfaces'
 
 // Minimal React-PDF-like component stand-in — the registry only stores and returns it.
@@ -19,7 +19,7 @@ function makeEntry(overrides: Partial<TemplateEntry> = {}): TemplateEntry {
     note: undefined,
     fromRecord: (data: unknown) => data as Record<string, unknown>,
     filename: () => 'invoice.pdf',
-    load: async () => FakeComponent,
+    load: async () => ({ type: 'react-pdf', component: FakeComponent }),
     ...overrides,
   }
 }
@@ -44,6 +44,7 @@ describe('templateRegistry.listTemplates', () => {
     // Runtime handlers must not leak into the UI-facing metadata.
     expect(internal[0]).not.toHaveProperty('fromRecord')
     expect(internal[0]).not.toHaveProperty('filename')
+    expect(internal[0]).not.toHaveProperty('resourceId')
     expect(internal[0]).not.toHaveProperty('resourceLabel')
     expect(internal[0]).not.toHaveProperty('load')
     expect(internal[0]).not.toHaveProperty('fetchData')
@@ -83,23 +84,28 @@ describe('templateRegistry.load', () => {
       calls.push('filename')
       return 'invoice-42.pdf'
     })
+    const resourceId = jest.fn(() => {
+      calls.push('resourceId')
+      return 'ord-42'
+    })
     const resourceLabel = jest.fn(() => {
       calls.push('resourceLabel')
       return 'ORD-42'
     })
     const load = jest.fn(async () => {
       calls.push('load')
-      return FakeComponent
+      return { type: 'react-pdf' as const, component: FakeComponent }
     })
-    templateRegistry.registerInternal([makeEntry({ fetchData, fromRecord, filename, resourceLabel, load })])
+    templateRegistry.registerInternal([makeEntry({ fetchData, fromRecord, filename, resourceId, resourceLabel, load })])
 
     const result = await templateRegistry.load({ id: 'order-invoice', data: { id: 'abc' } }, ctx)
 
-    expect(calls).toEqual(['fetchData', 'load', 'fromRecord', 'filename', 'resourceLabel'])
-    expect(result.component).toBe(FakeComponent)
+    expect(calls).toEqual(['fetchData', 'load', 'fromRecord', 'filename', 'resourceId', 'resourceLabel'])
+    expect(result.source).toEqual({ type: 'react-pdf', component: FakeComponent })
     expect(result.data).toMatchObject({ normalized: true, id: 'abc', enriched: true })
     expect(result.filename).toBe('invoice-42.pdf')
-    expect(result.resourceLabel).toBe('ORD-42')
+    expect(result.template).toEqual({ id: 'order-invoice', label: 'Order Invoice' })
+    expect(result.resource).toEqual({ kind: 'sales.order', id: 'ord-42', label: 'ORD-42' })
   })
 
   it('passes the request-scoped container and auth context to fetchData', async () => {
@@ -127,7 +133,7 @@ describe('templateRegistry.load', () => {
 
     const result = await templateRegistry.load({ id: 'custom-doc', data: {} }, ctx)
 
-    expect(result.component).toBe(FakeComponent)
+    expect(result.source).toEqual({ type: 'react-pdf', component: FakeComponent })
   })
 
   it('throws "Unknown template" for an unregistered id', async () => {
@@ -135,6 +141,6 @@ describe('templateRegistry.load', () => {
 
     await expect(
       templateRegistry.load({ id: 'does-not-exist', data: {} }, ctx),
-    ).rejects.toThrow('Unknown template: does-not-exist')
+    ).rejects.toBeInstanceOf(UnknownTemplateError)
   })
 })

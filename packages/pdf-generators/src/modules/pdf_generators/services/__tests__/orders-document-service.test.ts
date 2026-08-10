@@ -83,7 +83,7 @@ describe('OrdersDocumentService.toTemplateData', () => {
     const service = new OrdersDocumentService()
     const out = service.toTemplateData({ data: makeOrderRecord() })
 
-    expect(out.document).toMatchObject({ number: 'ORD-2026-0007' })
+    expect(out.document).toMatchObject({ id: 'ord-1', number: 'ORD-2026-0007' })
     expect((out.document as Record<string, string>).date).toMatch(/^\d{2}\.\d{2}\.\d{4}$/)
     expect(out.client).toMatchObject({ name: 'Beta GmbH', email: 'buyer@beta.test' })
     expect(out.totals).toEqual({ subtotal: 200, tax: 46, total: 246, currency: 'EUR' })
@@ -126,5 +126,17 @@ describe('OrdersDocumentService.resourceLabel', () => {
   it('returns undefined when the number is missing', () => {
     const service = new OrdersDocumentService()
     expect(service.resourceLabel({ data: {} })).toBeUndefined()
+  })
+})
+
+describe('OrdersDocumentService.resourceId', () => {
+  it('returns the canonical order id from normalized data', () => {
+    const service = new OrdersDocumentService()
+    expect(service.resourceId({ data: { document: { id: 'ord-9' } } })).toBe('ord-9')
+  })
+
+  it('returns undefined when the id is missing', () => {
+    const service = new OrdersDocumentService()
+    expect(service.resourceId({ data: {} })).toBeUndefined()
   })
 })

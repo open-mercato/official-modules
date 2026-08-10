@@ -85,7 +85,7 @@ describe('QuotesDocumentService.toTemplateData', () => {
     const service = new QuotesDocumentService()
     const out = service.toTemplateData({ data: makeQuoteRecord() })
 
-    expect(out.document).toMatchObject({ number: 'Q-2026-0007' })
+    expect(out.document).toMatchObject({ id: 'q-1', number: 'Q-2026-0007' })
     expect((out.document as Record<string, string>).date).toMatch(/^\d{2}\.\d{2}\.\d{4}$/)
     expect(out.client).toMatchObject({ name: 'Acme Sp. z o.o.', email: 'buyer@acme.test' })
     expect(out.totals).toEqual({ subtotal: 100, tax: 23, total: 123, currency: 'PLN' })
@@ -128,5 +128,17 @@ describe('QuotesDocumentService.resourceLabel', () => {
   it('returns undefined when the number is missing', () => {
     const service = new QuotesDocumentService()
     expect(service.resourceLabel({ data: {} })).toBeUndefined()
+  })
+})
+
+describe('QuotesDocumentService.resourceId', () => {
+  it('returns the canonical quote id from normalized data', () => {
+    const service = new QuotesDocumentService()
+    expect(service.resourceId({ data: { document: { id: 'q-9' } } })).toBe('q-9')
+  })
+
+  it('returns undefined when the id is missing', () => {
+    const service = new QuotesDocumentService()
+    expect(service.resourceId({ data: {} })).toBeUndefined()
   })
 })

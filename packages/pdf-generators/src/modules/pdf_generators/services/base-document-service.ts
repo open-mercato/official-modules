@@ -1,6 +1,6 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import type { TemplateEntry } from '../lib/interfaces'
+import type { DocumentTemplateSource, TemplateEntry } from '../lib/interfaces'
 
 /**
  * Registration shape for a single template within a document service.
@@ -13,7 +13,7 @@ export interface DocumentTemplateEntry {
   documentType: string
   tags: string[]
   note?: string
-  load: () => Promise<React.ComponentType<{ data: Record<string, unknown> }>>
+  load: () => Promise<DocumentTemplateSource>
 }
 
 /**
@@ -64,6 +64,14 @@ export abstract class BaseDocumentService {
   }
 
   /**
+   * Returns the canonical source-resource id derived from normalized server-side
+   * data. The generation route uses it to verify client-supplied history metadata.
+   */
+  resourceId(_input: { data: Record<string, unknown> }): string | undefined {
+    return undefined
+  }
+
+  /**
    * Optional hook to fetch related data before normalization.
    * Called server-side in the generate route with the request-scoped DI container.
    * Override in concrete services that need data not available in the widget context (e.g. line items).
@@ -103,6 +111,7 @@ export abstract class BaseDocumentService {
       note: template.note,
       fromRecord: (data: unknown) => this.toTemplateData({ data }),
       filename: (input: { data: Record<string, unknown> }) => this.filename(input),
+      resourceId: (input: { data: Record<string, unknown> }) => this.resourceId(input),
       resourceLabel: (input: { data: Record<string, unknown> }) => this.resourceLabel(input),
       fetchData: (input: { data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }) => this.fetchData(input, ctx),
       load: template.load,

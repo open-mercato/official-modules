@@ -2,7 +2,7 @@
 
 ## REST Endpoints
 
-All endpoints require authentication (`pdf_generators.view` feature). Both rendering endpoints follow the same two-step flow internally: `fetchData` is called server-side first (to load the full record via DI), then `toTemplateData` normalizes it, and finally the React-PDF component renders the binary stream.
+All endpoints require authentication. Preview and listing require `pdf_generators.view`; generation requires `pdf_generators.generate`. Both rendering endpoints load and normalize the template through `templateRegistry`, then pass the resulting `LoadedTemplate` to `PdfRenderingService` to produce a `RenderedDocument`.
 
 ---
 
@@ -140,6 +140,16 @@ Abstract base class. Extend once per category of documents in your module.
 | `toTemplateData(input)` (abstract) | Maps the enriched server record to the flat data shape expected by template components |
 | `fetchData(input, ctx)` | Server-side hook called before `toTemplateData`. Override to load related data via DI. Default: passes data through unchanged |
 | `filename(input)` | Derives the download filename from normalized data. Default: `'document.pdf'` |
+| `resourceId(input)` | Derives the canonical source-record id from normalized server-side data |
+
+### `PdfRenderingService`
+
+Renders an already loaded and normalized `LoadedPdfTemplate` to a `RenderedDocument`. Template lookup, authentication context, HTTP responses, and history persistence remain outside the service.
+
+```ts
+const template = await templateRegistry.load({ id, data }, { container, auth })
+const document = await new PdfRenderingService().render(template)
+```
 
 ### `formatDate(isoString)`
 
@@ -169,7 +179,13 @@ Design tokens from the shared theme. Import the theme file as a side-effect firs
 |------|-------------|
 | `TemplateMeta` | UI-facing descriptor: id, label, module, resourceKind, documentType, tags |
 | `TemplateEntry` | Full descriptor — `TemplateMeta` plus runtime handlers |
-| `TemplateRegistryEntry` | Runtime handlers only: `fromRecord`, `load`, `fetchData`, `filename` |
+| `TemplateRegistryEntry` | Runtime handlers; `load()` returns a discriminated `DocumentTemplateSource` |
 | `TemplateFilter` | Filter shape: `{ resourceKind?, documentType?, tags? }` |
 | `DocumentTemplateEntry` | Shape passed to `registerTemplate()` |
+| `LoadedDocumentTemplateBase` | Format-independent normalized data, filename, template metadata, and source-resource metadata |
+| `DocumentTemplateSource` | Union of format-specific sources returned by `load()`; currently only `ReactPdfTemplateSource` |
+| `ReactPdfTemplateSource` | React-PDF component discriminated by `type: 'react-pdf'` |
+| `LoadedPdfTemplate` | Prepared PDF template carrying a `ReactPdfTemplateSource`; output metadata is assigned by `PdfRenderingService` |
+| `LoadedTemplate` | Union of loaded template variants; currently aliases `LoadedPdfTemplate` |
+| `RenderedDocument` | PDF bytes plus filename, MIME type, format, template, and source-resource metadata |
 | `templateRegistry` | Global singleton registry — use only for custom rendering pipelines outside the standard endpoints |

@@ -56,9 +56,9 @@ src/
     lib/
       interfaces.ts                     ← TemplateMeta, TemplateEntry, TemplateRegistry …
       template-registry.ts              ← global singleton registry
-      render-pdf.ts                     ← shared rendering logic for both endpoints
     services/
       base-document-service.ts          ← BaseDocumentService abstract class
+      pdf-rendering-service.ts           ← renders an already loaded template to PDF bytes
       orders-document-service.ts        ← built-in order invoice service
       quotes-document-service.ts        ← built-in sales offer service
     templates/

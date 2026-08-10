@@ -237,17 +237,42 @@ interface TemplateMeta {
 interface TemplateRegistryEntry {
   fromRecord: (data: unknown) => Record<string, unknown>  // maps enriched server data to the flat shape expected by the template
   filename: (input: { data: Record<string, unknown> }) => string  // derives the PDF filename from normalized data
-  load: () => Promise<React.ComponentType<{ data: Record<string, unknown> }>>
+  resourceId?: (input: { data: Record<string, unknown> }) => string | undefined
+  resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined
+  load: () => Promise<DocumentTemplateSource>
   fetchData?: (input: { data: unknown }, ctx: { container: AppContainer }) => Promise<unknown>  // optional; called before normalization to fetch related data
 }
 
 // TemplateEntry = TemplateMeta & TemplateRegistryEntry (full descriptor used in the registry)
 type TemplateEntry = TemplateMeta & TemplateRegistryEntry
 
-interface LoadedTemplate {
-  component: React.ComponentType<{ data: Record<string, unknown> }>
+interface LoadedDocumentTemplateBase {
   data: Record<string, unknown>
   filename: string
+  template: { id: string; label: string }
+  resource: { kind: string; id?: string; label?: string }
+}
+
+interface ReactPdfTemplateSource {
+  type: 'react-pdf'
+  component: React.ComponentType<{ data: Record<string, unknown> }>
+}
+
+type DocumentTemplateSource = ReactPdfTemplateSource
+
+interface LoadedPdfTemplate extends LoadedDocumentTemplateBase {
+  source: ReactPdfTemplateSource
+}
+
+type LoadedTemplate = LoadedPdfTemplate
+
+interface RenderedDocument {
+  buffer: Uint8Array
+  filename: string
+  format: string
+  mimeType: string
+  template: LoadedDocumentTemplateBase['template']
+  resource: LoadedDocumentTemplateBase['resource']
 }
 
 interface TemplateFilter {
@@ -472,7 +497,7 @@ No changes to existing services or templates required.
 ### Tenant & Data Isolation
 
 - **Risk exists and is mitigated.** Both built-in document services (`QuotesDocumentService`, `OrdersDocumentService`) query tenant-scoped records: `sales_quotes`, `sales_quote_lines`, `sales_orders`, `CustomerEntity`, `CustomerAddress`. A user with `pdf_generators.view` could otherwise retrieve data from a different tenant by submitting an arbitrary UUID.
-- **Mitigation:** `getAuthFromRequest` is called in both route handlers (`/generate`, `/preview`). The resulting `AuthContext` is propagated through `renderPdf → templateRegistry.load → fetchData` via `ctx.auth`. Every query filters by `tenant_id` and `organization_id` derived from that context. Both services throw explicitly if either value is missing — no silent fallback to unscoped data.
+- **Mitigation:** `getAuthFromRequest` is called in both route handlers (`/generate`, `/preview`). The resulting `AuthContext` is propagated through `templateRegistry.load → fetchData` via `ctx.auth`; the loaded template is then passed to `PdfRenderingService.render`. Every query filters by `tenant_id` and `organization_id` derived from that context. Both services throw explicitly if either value is missing — no silent fallback to unscoped data.
 - **Custom `DocumentService` contract:** any external module implementing `BaseDocumentService` **must** apply the same tenant scoping in `fetchData`. The `ctx.auth` argument is available for exactly this purpose. Implementations that ignore it are considered a security defect.
 
 ### Font Loading
@@ -545,7 +570,7 @@ No changes to existing services or templates required.
 |------|-------------|
 | `data/entities.ts` | `GeneratedDocument` entity — `id`, `organization_id`, `tenant_id`, `resource_kind`, `resource_id`, `resource_label`, `template_id`, `template_label`, `format` (default `'pdf'`), `mime_type` (default `'application/pdf'`), `generated_by`, `generated_at`, `attachment_id` (nullable — populated in Phase 6). Table `pdf_generators_generated_documents` |
 
-> **Format-agnostic by design.** The entity is named `GeneratedDocument` (not `PdfGeneratedDocument`) and carries a `format` + `mime_type` discriminator so the persistence/history/storage layers work unchanged when non-PDF outputs (e.g. `.docx`, `.md`) are added later. **Only the data layer is generalized now** — the rendering pipeline (`render-pdf.ts`, `BaseDocumentService`, `@react-pdf/renderer`) stays PDF-only; adding a format means adding a renderer, not changing this schema. The module, package, API paths, and ACL features remain `pdf_generators`-named (renaming them is out of scope).
+> **Format-agnostic by design.** The entity is named `GeneratedDocument` (not `PdfGeneratedDocument`) and carries a `format` + `mime_type` discriminator so the persistence/history/storage layers work unchanged when non-PDF outputs (e.g. `.docx`, `.md`) are added later. **Only the result and data layers are generalized now** — `RenderedDocument` is neutral, while `PdfRenderingService`, `BaseDocumentService`, and `@react-pdf/renderer` stay PDF-only. The module, package, API paths, and ACL features remain `pdf_generators`-named (renaming them is out of scope).
 | `data/validators.ts` | Zod schemas: extended `generateSchema` (adds `resource_kind`, `resource_id`) + `listDocumentsSchema` (query params) |
 | `api/GET/pdf-generators/documents.ts` | Paginated history endpoint, filterable by `resource_kind` and `resource_id`; exports `openApi` + `metadata` |
 
@@ -563,7 +588,8 @@ No changes to existing services or templates required.
 
 ```
 Widget → POST /generate { template_id, data, resource_kind, resource_id }
-         ├── renderToBuffer() → success
+         ├── templateRegistry.load() → LoadedPdfTemplate
+         ├── PdfRenderingService.render() → RenderedDocument
          │   ├── documentService.resourceLabel(normalizedData) → label ?? resource_id
          │   └── em.persist(GeneratedDocument { ..., resource_label: label, format: 'pdf', generated_by: auth.userId })
          └── returns PDF stream
@@ -651,6 +677,7 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 |-------|--------|------|-------|
 | Phase 1–4.6 | Done | 2026-05-17 | Registry, render pipeline, preview/download UI, code generation, quote and order templates |
 | Phase 5 — History & Backend Page | Done | 2026-08-09 | GeneratedDocument persistence, scoped history endpoint, server-derived resource labels, ACL, backend DataTable, unit and integration coverage |
+| Rendering service refactor | Done | 2026-08-09 | `load()` returns a discriminated template source; registry prepares `LoadedPdfTemplate`; `PdfRenderingService` owns PDF format/MIME and renders neutral `RenderedDocument` |
 | Phase 6 — Attachment Storage | Not Started | — | Planned |
 
 ---
@@ -675,3 +702,4 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 | 2026-08-09 | Krzysztof Polak | Phase 6 — added a mandatory **Tenant & data isolation** subsection: the `private` partition flag alone does not isolate stored PDFs across organizations; the upload must persist `organization_id`/`tenant_id` (from `getAuthFromRequest`) onto the `Attachment` record, since the core download route enforces scope via `isSameScope` (fail-closed, superadmin exempt). Extends the Phase 1 render-path isolation through storage and download. |
 | 2026-08-09 | Krzysztof Polak | Phase 5 — renamed the history entity `PdfGeneratedDocument` → `GeneratedDocument` and added `format` (default `'pdf'`) + `mime_type` discriminator columns, so the persistence/history/storage layers are format-agnostic (future `.docx`/`.md` support needs a renderer, not a schema change). Only the data layer is generalized — the render pipeline stays PDF-only; module/package/API/ACL names stay `pdf_generators`. Table: `pdf_generators_generated_documents`. |
 | 2026-08-09 | Codex | Completed Phase 5 and synchronized the API contract: clients send only `resource_kind` + `resource_id`; `resource_label` is derived from normalized data by the document service and falls back to `resource_id`. Added scoped history persistence/listing, backend history UI, ACL, validators, and regression/integration coverage. |
+| 2026-08-09 | Codex | Replaced the mixed `lib/render-pdf.ts` helper with a focused `PdfRenderingService`: routes load templates explicitly, `load()` returns a discriminated `DocumentTemplateSource`, and the service renders an already prepared `LoadedPdfTemplate` into a neutral `RenderedDocument`. Format and MIME remain renderer-owned; `LoadedDocumentTemplateBase` provides the shared seam for a future DOCX variant without a placeholder implementation. Added canonical resource-id derivation and mismatch rejection for history integrity. |

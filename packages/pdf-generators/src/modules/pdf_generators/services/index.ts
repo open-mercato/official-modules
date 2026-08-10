@@ -5,6 +5,7 @@ export type { QuoteLineItem } from './quotes-document-service'
 export { OrdersDocumentService, ORDERS_TEMPLATE_IDS } from './orders-document-service'
 export type { OrderLineItem } from './orders-document-service'
 export { GenerationHistoryService } from './generation-history-service'
+export { PdfRenderingService } from './pdf-rendering-service'
 export type {
   HistoryScope,
   CreateGeneratedDocumentInput,

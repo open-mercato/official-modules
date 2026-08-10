@@ -104,7 +104,10 @@ export class QuotesDocumentService extends BaseDocumentService {
       note: 'Rendered in the PDF tab on the Quote detail page (sales.document.detail.quote:tabs).',
       load: () =>
         import('../templates/sales/quotes/templates/sales-offer').then(
-          (m) => m.SalesOfferDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>
+          (m) => ({
+            type: 'react-pdf' as const,
+            component: m.SalesOfferDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>,
+          })
         ),
     })
   }
@@ -193,6 +196,10 @@ export class QuotesDocumentService extends BaseDocumentService {
     return (data.document as { number?: string } | undefined)?.number
   }
 
+  override resourceId({ data }: { data: Record<string, unknown> }): string | undefined {
+    return (data.document as { id?: string } | undefined)?.id
+  }
+
   toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
     const r = data as QuoteRecord
     const customer = typeof r.customerSnapshot === 'string' ? JSON.parse(r.customerSnapshot) : r.customerSnapshot as any
@@ -217,6 +224,7 @@ export class QuotesDocumentService extends BaseDocumentService {
 
     return {
       document: {
+        id: r.id,
         number: r.quoteNumber,
         date: r.validFrom ? formatDate(r.validFrom.toISOString()) : formatDate(new Date().toISOString()),
         validUntil: r.validUntil ? formatDate(r.validUntil.toISOString()) : undefined,

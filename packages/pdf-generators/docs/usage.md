@@ -57,7 +57,10 @@ export class MyModuleInvoiceDocumentService extends BaseDocumentService {
       tags: ['invoice', 'my_module'],
       load: () =>
         import('../templates/invoice/my-module-invoice').then(
-          (m) => m.MyModuleInvoiceDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>
+          (m) => ({
+            type: 'react-pdf' as const,
+            component: m.MyModuleInvoiceDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>,
+          })
         ),
     })
   }
@@ -146,4 +149,3 @@ yarn generate
 ```
 
 The template now appears in the **PDF** tab on all sales order detail pages.
-

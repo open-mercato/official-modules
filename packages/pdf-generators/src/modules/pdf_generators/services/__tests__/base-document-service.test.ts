@@ -13,7 +13,7 @@ function makeTemplate(overrides: Partial<DocumentTemplateEntry> = {}): DocumentT
     documentType: 'offer',
     tags: ['sales', 'offer'],
     note: undefined,
-    load: async () => FakeComponent,
+    load: async () => ({ type: 'react-pdf', component: FakeComponent }),
     ...overrides,
   }
 }
@@ -39,6 +39,10 @@ class TestDocumentService extends BaseDocumentService {
   override resourceLabel({ data }: { data: Record<string, unknown> }): string | undefined {
     return (data.document as { number?: string } | undefined)?.number
   }
+
+  override resourceId({ data }: { data: Record<string, unknown> }): string | undefined {
+    return (data.document as { id?: string } | undefined)?.id
+  }
 }
 
 const ctx = { container: {} as AppContainer, auth: null as AuthContext | null }
@@ -60,6 +64,7 @@ describe('BaseDocumentService.getEntries', () => {
     })
     expect(typeof entry.fromRecord).toBe('function')
     expect(typeof entry.filename).toBe('function')
+    expect(typeof entry.resourceId).toBe('function')
     expect(typeof entry.resourceLabel).toBe('function')
     expect(typeof entry.fetchData).toBe('function')
     expect(entry.load).toBe(service['templates_'].get('sales-offer')!.load)
@@ -103,6 +108,15 @@ describe('BaseDocumentService.getEntries', () => {
     expect(entry.resourceLabel?.({ data: { document: { number: '42' } } })).toBe('42')
   })
 
+  it('binds resourceId so the override receives the unwrapped normalized data', () => {
+    const service = new TestDocumentService()
+    service.registerTemplate(makeTemplate())
+
+    const [entry] = service.getEntries()
+
+    expect(entry.resourceId?.({ data: { document: { id: 'quote-42' } } })).toBe('quote-42')
+  })
+
   it('binds fromRecord to the service toTemplateData', () => {
     const service = new TestDocumentService()
     service.registerTemplate(makeTemplate())
@@ -143,6 +157,11 @@ describe('BaseDocumentService defaults', () => {
   it('returns no resource label by default', () => {
     const service = new MinimalService()
     expect(service.resourceLabel({ data: {} })).toBeUndefined()
+  })
+
+  it('returns no resource id by default', () => {
+    const service = new MinimalService()
+    expect(service.resourceId({ data: {} })).toBeUndefined()
   })
 
   it('returns the raw data unchanged from the default fetchData', async () => {

@@ -3,9 +3,11 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { NextResponse } from 'next/server'
 import '../../../config/registry'
-import { renderPdf } from '../../../lib/render-pdf'
+import { templateRegistry, UnknownTemplateError } from '../../../lib/template-registry'
+import { PdfRenderingService } from '../../../services'
 import { previewSchema } from '../../../data/validators'
 import { parseJsonBody, requireOrganization } from '../../_shared/http'
+import { documentResponse } from '../../_shared/document-response'
 
 export const metadata = {
   path: '/pdf-generators/preview',
@@ -35,7 +37,17 @@ export async function POST(request: Request) {
   const org = requireOrganization(auth)
   if (!org.ok) return org.response
 
-  return renderPdf({ template_id, data }, { container, auth }, 'preview')
+  try {
+    const template = await templateRegistry.load({ id: template_id, data }, { container, auth })
+    const rendered = await new PdfRenderingService().render(template)
+    return documentResponse(rendered)
+  } catch (err) {
+    if (err instanceof UnknownTemplateError) {
+      return NextResponse.json({ error: err.message }, { status: 400 })
+    }
+    console.error('[preview] render failed:', err)
+    return NextResponse.json({ error: 'Failed to render PDF document' }, { status: 500 })
+  }
 }
 
 export const openApi: OpenApiRouteDoc = {
@@ -46,6 +58,7 @@ export const openApi: OpenApiRouteDoc = {
         { status: 200, description: 'PDF file stream' },
         { status: 400, description: 'Missing or invalid template_id / data' },
         { status: 401, description: 'Unauthorized' },
+        { status: 500, description: 'PDF rendering failed' },
       ],
     },
   },

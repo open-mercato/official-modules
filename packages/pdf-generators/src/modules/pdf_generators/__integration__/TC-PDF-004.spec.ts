@@ -10,9 +10,9 @@ import { generateDocument, listDocuments } from './helpers/fixtures'
  * persists a GeneratedDocument row, which then appears in
  * GET /api/pdf-generators/documents scoped to the active organization.
  *
- * The human label is derived server-side from the rendered document (e.g. the
- * order number). Here the record is a random UUID that resolves to no order, so
- * the derived number is absent and the stored label falls back to resource_id.
+ * The resource identity and human label are derived server-side from the
+ * rendered document when available. Here the record is a random UUID that
+ * resolves to no order, so the label falls back to that canonical id.
  *
  * Uses random UUIDs so it needs no seeded data (an unmatched record still
  * renders and still records history). A 409 organization_required (no active
@@ -27,7 +27,7 @@ test.describe('TC-PDF-004: generation history', () => {
 
     const gen = await generateDocument(request, token, {
       template_id: 'order-invoice',
-      data: { id: randomUUID() },
+      data: { id: resourceId },
       resource_kind: 'sales.order',
       resource_id: resourceId,
     })
@@ -50,6 +50,27 @@ test.describe('TC-PDF-004: generation history', () => {
     expect(typeof row?.templateLabel).toBe('string')
     expect(row?.templateLabel.length).toBeGreaterThan(0)
     expect(row?.generatedAt).toBeTruthy()
+  })
+
+  test('rejects history metadata that does not match the rendered resource', async ({ request }) => {
+    const token = await getAuthToken(request)
+
+    const response = await generateDocument(request, token, {
+      template_id: 'order-invoice',
+      data: { id: randomUUID() },
+      resource_kind: 'sales.order',
+      resource_id: randomUUID(),
+    })
+
+    if (response.status() === 409 || response.status() === 403) {
+      expect([403, 409]).toContain(response.status())
+      return
+    }
+
+    expect(response.status()).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Resource does not match the rendered document',
+    })
   })
 
   test('history requires authentication', async ({ request }) => {

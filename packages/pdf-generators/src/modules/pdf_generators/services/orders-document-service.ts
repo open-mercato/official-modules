@@ -104,7 +104,10 @@ export class OrdersDocumentService extends BaseDocumentService {
       note: 'Rendered in the PDF tab on the Order detail page (sales.document.detail.order:tabs).',
       load: () =>
         import('../templates/sales/orders/templates/order-invoice').then(
-          (m) => m.OrderInvoiceDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>
+          (m) => ({
+            type: 'react-pdf' as const,
+            component: m.OrderInvoiceDocument as unknown as React.ComponentType<{ data: Record<string, unknown> }>,
+          })
         ),
     })
   }
@@ -193,6 +196,10 @@ export class OrdersDocumentService extends BaseDocumentService {
     return (data.document as { number?: string } | undefined)?.number
   }
 
+  override resourceId({ data }: { data: Record<string, unknown> }): string | undefined {
+    return (data.document as { id?: string } | undefined)?.id
+  }
+
   toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
     const r = data as OrderRecord
     const customer = typeof r.customerSnapshot === 'string' ? JSON.parse(r.customerSnapshot) : r.customerSnapshot as any
@@ -217,6 +224,7 @@ export class OrdersDocumentService extends BaseDocumentService {
 
     return {
       document: {
+        id: r.id,
         number: r.orderNumber,
         date: r.placedAt ? formatDate(r.placedAt.toISOString()) : formatDate(new Date().toISOString()),
         dueDate: r.expectedDeliveryAt ? formatDate(r.expectedDeliveryAt.toISOString()) : undefined,

@@ -63,7 +63,9 @@ Examples of valid domain methods include:
 documentService.fetchData(input, context)
 documentService.toTemplateData(input)
 documentService.filename(input)
+documentService.resourceId(input)
 documentService.resourceLabel(input)
+pdfRenderingService.render(loadedTemplate)
 templateRegistry.listTemplates()
 templateRegistry.load(input, context)
 ```
