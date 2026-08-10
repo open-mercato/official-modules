@@ -4,8 +4,7 @@ Check `.ai/specs/`before modifying any module. Create or update specs when the c
 
 ## Detailed Guidance
 
-For detailed spec writing and review, use the spec-writing skill:
-- `.ai/skills/spec-writing/SKILL.md`
+For detailed spec writing and review, use the separately installed `om-spec-writing` skill.
 
 ## Create/Update Triggers
 

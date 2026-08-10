@@ -161,12 +161,12 @@ Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmerca
 Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. Before starting module work, first complete the [Getting Started](#-getting-started) setup above. Once your local environment is ready, the recommended workflow is:
 
 ```
-spec-writing  →  scaffold-module  →  implement-spec
+om-spec-writing  →  scaffold-module  →  om-auto-implement-spec
 ```
 
 ### AI Skills setup
 
-This repo ships AI agent skills for Claude Code (and Codex) in `.ai/skills/`. Run this once after cloning to make them available in your editor:
+This repo ships project-specific scaffolding skills for Claude Code and Codex in `.ai/skills/`. Run this once after cloning to make them available in your editor:
 
 ```bash
 yarn install-skills
@@ -176,17 +176,16 @@ This creates symlinks from `.ai/skills/` into `.claude/skills/` and `.codex/skil
 
 | Skill | Trigger |
 |-------|---------|
-| `spec-writing` | `/spec-writing` — design a new module spec |
 | `scaffold-module` | `/scaffold-module` — generate package skeleton from spec |
-| `implement-spec` | `/implement-spec` — implement spec phases with tests |
 | `scaffold-pdf-templates` | `/scaffold-pdf-templates` — add PDF templates to a module |
-| `code-commenting` | `/code-commenting` — apply JSDoc comment conventions |
 
 You only need to run `yarn install-skills` once per clone. If you add a new skill to `.ai/skills/`, it is immediately available via the symlink — no re-run needed.
 
+The general workflow skills `om-spec-writing` and `om-auto-implement-spec` are installed in the agent environment separately; they are not duplicated in `.ai/skills/`.
+
 ### Step 1 — Write a spec
 
-Before writing code, document your module in `.ai/specs/SPEC-YYYY-MM-DD-<title>.md`. This is the design document that `implement-spec` reads to know what to build. You might (and probably shall) use the `spec-writing` skill - available in any of the LLM coding envs. you're using after running the `yarn install-skills`
+Before writing code, document your module in `.ai/specs/SPEC-YYYY-MM-DD-<title>.md`. This is the design document that `om-auto-implement-spec` reads to know what to build. Use the separately installed `om-spec-writing` skill to create or review it.
 
 Minimum sections: TLDR · Problem Statement · UMES extension points used · Data models · API contracts · Phases.
 
@@ -202,7 +201,7 @@ yarn workspace @open-mercato/<your-module> typecheck
 
 ### Step 3 — Implement the spec
 
-Use the `implement-spec` skill to fill in the business logic phase by phase: entities, validators, API routes, UI pages, events, widget injection. Every phase must pass the code-review compliance gate before moving to the next.
+Use the `om-auto-implement-spec` skill to fill in the business logic phase by phase: entities, validators, API routes, UI pages, events, and widget injection. Every phase must pass the code-review compliance gate before moving to the next.
 
 ### Step 3b — Generate entity migrations (modules with a database entity)
 

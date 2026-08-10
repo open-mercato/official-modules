@@ -1,17 +1,17 @@
 ---
 name: scaffold-module
-description: Scaffold a new community module package in the official-modules monorepo. Use when creating a new @open-mercato/* npm package from scratch, starting a new module, or when implement-spec needs a package skeleton before filling in business logic. Triggers on "scaffold module", "create module", "new module package", "new package", "add community module".
+description: Scaffold a new community module package in the official-modules monorepo. Use when creating a new @open-mercato/* npm package from scratch, starting a new module, or when om-auto-implement-spec needs a package skeleton before filling in business logic. Triggers on "scaffold module", "create module", "new module package", "new package", "add community module".
 ---
 
 # scaffold-module
 
-Scaffolds a complete, buildable `@open-mercato/<name>` package under `packages/<name>/` in this repo. The output matches the `test-package` reference exactly and is immediately ready for `yarn build`, sandbox testing, and `implement-spec` to fill in.
+Scaffolds a complete, buildable `@open-mercato/<name>` package under `packages/<name>/` in this repo. The output matches the `test-package` reference exactly and is immediately ready for `yarn build`, sandbox testing, and `om-auto-implement-spec` to fill in.
 
 ## Integration with Other Skills
 
-- **After `spec-writing`**: extract `PACKAGE_NAME`, `MODULE_ID`, `MODULE_TITLE`, and `DESCRIPTION` from the spec TLDR and Problem sections, then run this skill.
-- **Before `implement-spec`**: scaffold first. `implement-spec` adds entities, API routes, events, and UI pages on top of the skeleton this skill creates.
-- **Typical flow**: `spec-writing` → `scaffold-module` → `implement-spec`
+- **After `om-spec-writing`**: extract `PACKAGE_NAME`, `MODULE_ID`, `MODULE_TITLE`, and `DESCRIPTION` from the spec TLDR and Problem sections, then run this skill.
+- **Before `om-auto-implement-spec`**: scaffold first. `om-auto-implement-spec` adds entities, API routes, events, and UI pages on top of the skeleton this skill creates.
+- **Typical flow**: `om-spec-writing` → `scaffold-module` → `om-auto-implement-spec`
 
 ## Inputs
 
@@ -344,5 +344,5 @@ Add a row to the module table in `README.md`:
 - MUST copy `build.mjs` exactly from `test-package`; only change the final log line
 - MUST pin `@open-mercato/*` peer deps to the same version across all fields
 - MUST keep `passWithNoTests: true` in jest.config.cjs so CI passes on an empty package
-- Do NOT add MikroORM entities, API routes, or business logic here — that is `implement-spec`'s job
+- Do NOT add MikroORM entities, API routes, or business logic here — that is `om-auto-implement-spec`'s job
 - Do NOT hardcode user-facing strings — all text in `page.tsx` must go through `useT()`

@@ -7,27 +7,27 @@ This repo is the community module registry for [Open Mercato](https://github.com
 1. Check the Task Router below and read **all** matching guides.
 2. Check `.ai/specs/` for an existing spec before starting.
 3. Enter plan mode for non-trivial tasks (3+ steps or architectural decisions).
-4. If no scaffold exists yet, run the `scaffold-module` skill before `implement-spec`.
+4. If no scaffold exists yet, run the `scaffold-module` skill before `om-auto-implement-spec`.
 
 ## Task Router
 
 | Task | Guide |
 |------|-------|
 | Scaffold a new module package from scratch | `.ai/skills/scaffold-module/SKILL.md` |
-| Write or review a spec for a new module | `.ai/skills/spec-writing/SKILL.md` |
-| Implement a spec into a scaffolded package | `.ai/skills/implement-spec/SKILL.md` |
+| Write or review a spec for a new module | Installed `om-spec-writing` skill |
+| Implement a spec into a scaffolded package | Installed `om-auto-implement-spec` skill |
 | Test a module in the sandbox | `apps/sandbox` — use `yarn *` commands from root |
 | Publish a preview build to local Verdaccio | `yarn registry:up && yarn publish:preview` |
 
 ## Typical Agentic Workflow
 
 ```
-spec-writing  →  scaffold-module  →  implement-spec
+om-spec-writing  →  scaffold-module  →  om-auto-implement-spec
 ```
 
-1. **`spec-writing`** — design the module in `.ai/specs/`; commit to module name, feature set, and API surface before writing code.
+1. **`om-spec-writing`** — design the module in `.ai/specs/`; commit to module name, feature set, and API surface before writing code.
 2. **`scaffold-module`** — create the buildable package skeleton under `packages/<name>/`.
-3. **`implement-spec`** — fill in entities, API routes, UI pages, events, and tests on top of the skeleton.
+3. **`om-auto-implement-spec`** — fill in entities, API routes, UI pages, events, and tests on top of the skeleton.
 
 ---
 
