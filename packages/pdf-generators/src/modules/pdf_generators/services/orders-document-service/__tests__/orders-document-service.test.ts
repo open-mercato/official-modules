@@ -6,12 +6,13 @@ jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
 }))
 
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
-import { OrdersDocumentService, type OrderRecord } from '../orders-document-service'
+import { OrdersDocumentService, type OrderRecord } from '..'
 
 const mockedFind = findOneWithDecryption as jest.Mock
 
 const auth = { tenantId: 't-1', orgId: 'o-1' } as unknown as AuthContext
 const container = { resolve: jest.fn(() => ({})) } as unknown as AppContainer
+const orderId = '11111111-1111-4111-8111-111111111111'
 
 function makeOrderRecord(overrides: Partial<OrderRecord> = {}): OrderRecord {
   return {
@@ -45,36 +46,67 @@ describe('OrdersDocumentService.fetchData', () => {
   it('throws when auth context is missing but an id is present (tenant-isolation guard)', async () => {
     const service = new OrdersDocumentService()
     await expect(
-      service.fetchData({ data: { id: 'ord-1' } }, { container, auth: null }),
+      service.fetchData({ data: { id: orderId } }, { container, auth: null }),
     ).rejects.toThrow('Missing auth context')
     expect(mockedFind).not.toHaveBeenCalled()
   })
 
-  it('returns the raw data untouched when no id is supplied', async () => {
+  it('rejects input without an id before querying the database', async () => {
     const service = new OrdersDocumentService()
     const data = { foo: 'bar' }
-    await expect(service.fetchData({ data }, { container, auth })).resolves.toBe(data)
+    await expect(service.fetchData({ data }, { container, auth })).rejects.toThrow()
     expect(mockedFind).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed id before querying the database', async () => {
+    const service = new OrdersDocumentService()
+
+    await expect(
+      service.fetchData({ data: { id: 'not-a-uuid' } }, { container, auth }),
+    ).rejects.toThrow()
+    expect(mockedFind).not.toHaveBeenCalled()
+  })
+
+  it('rejects when the order does not exist or is outside the current scope', async () => {
+    const service = new OrdersDocumentService()
+    mockedFind.mockResolvedValueOnce(null)
+
+    await expect(
+      service.fetchData({ data: { id: orderId } }, { container, auth }),
+    ).rejects.toThrow('Order not found or not accessible')
+  })
+
+  it('propagates database failures instead of falling back to request data', async () => {
+    const service = new OrdersDocumentService()
+    const failure = new Error('database unavailable')
+    mockedFind.mockRejectedValueOnce(failure)
+
+    await expect(
+      service.fetchData({ data: { id: orderId, grandTotalGrossAmount: '0.01' } }, { container, auth }),
+    ).rejects.toBe(failure)
   })
 
   it('scopes the query by id, tenantId and organizationId (C2)', async () => {
     const service = new OrdersDocumentService()
     mockedFind.mockResolvedValueOnce({
-      id: 'ord-1', orderNumber: 'ORD-1', currencyCode: 'EUR',
+      id: orderId, orderNumber: 'ORD-1', currencyCode: 'EUR',
       placedAt: null, expectedDeliveryAt: null, comments: null,
       grandTotalNetAmount: '0', grandTotalGrossAmount: '0', taxTotalAmount: '0',
       customerSnapshot: null, billingAddressSnapshot: { addressLine1: 'x' },
       customerEntityId: null, lines: { getItems: () => [] },
     })
 
-    await service.fetchData({ data: { id: 'ord-1' } }, { container, auth })
+    const result = await service.fetchData({
+      data: { id: orderId, grandTotalGrossAmount: '999999.99' },
+    }, { container, auth })
 
     expect(mockedFind).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      { id: 'ord-1', tenantId: 't-1', organizationId: 'o-1' },
+      { id: orderId, tenantId: 't-1', organizationId: 'o-1' },
       { populate: ['lines'] },
     )
+    expect(result).toMatchObject({ id: orderId, grandTotalGrossAmount: '0' })
   })
 })
 

@@ -1,6 +1,6 @@
 import React from 'react'
 import { renderToBuffer, type DocumentProps } from '@react-pdf/renderer'
-import type { LoadedPdfTemplate, RenderedDocument } from '../lib/interfaces'
+import type { LoadedPdfTemplate, RenderedDocument } from '../../lib/interfaces'
 
 /** Renders an already loaded and normalized React-PDF template to PDF bytes. */
 export class PdfRenderingService {

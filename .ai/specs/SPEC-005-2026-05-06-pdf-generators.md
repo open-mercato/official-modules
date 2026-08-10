@@ -155,10 +155,24 @@ packages/pdf-generators/
     ├── services/
     │   ├── index.ts                 # Re-exports all services and their types
     │   ├── base-document-service.ts # PDF template entry construction
-    │   ├── pdf-rendering-service.ts # LoadedPdfTemplate → RenderedDocument
-    │   ├── generation-history-service.ts
-    │   ├── quotes-document-service.ts
-    │   └── orders-document-service.ts
+    │   ├── pdf-rendering-service/   # LoadedPdfTemplate → RenderedDocument
+    │   │   ├── index.ts
+    │   │   ├── pdf-rendering-service.ts
+    │   │   └── __tests__/
+    │   ├── generation-history-service/
+    │   │   ├── index.ts
+    │   │   ├── generation-history-service.ts
+    │   │   └── __tests__/
+    │   ├── quotes-document-service/
+    │   │   ├── index.ts
+    │   │   ├── quotes-document-service.ts
+    │   │   ├── validators.ts
+    │   │   └── __tests__/
+    │   └── orders-document-service/
+    │       ├── index.ts
+    │       ├── orders-document-service.ts
+    │       ├── validators.ts
+    │       └── __tests__/
     ├── components/
     │   ├── TemplatesList.tsx        # Fetches templates, filters, shows list + opens PreviewPanel
     │   ├── TemplatesListView.tsx    # Grid of TemplateListItem cards
@@ -318,7 +332,7 @@ interface PdfDocumentData {
 Each entity has a `DocumentService` class extending `BaseDocumentService`. The service owns template registration, optional server-side data fetching, and normalization for that entity:
 
 ```ts
-// services/quotes-document-service.ts
+// services/quotes-document-service/quotes-document-service.ts
 export class QuotesDocumentService extends BaseDocumentService {
   readonly id = 'quotes'          // globally unique service ID
   readonly label = 'Quotes'
@@ -488,7 +502,7 @@ No other file changes required.
 
 ### Adding PDF generation for a new entity (e.g. Shipments)
 
-1. Create `services/shipments-document-service.ts` extending `BaseDocumentService`
+1. Create `services/shipments-document-service/` with `shipments-document-service.ts`, `validators.ts`, `index.ts`, and colocated tests; extend `BaseDocumentService`
 2. Add template component in `templates/sales/shipments/templates/<template-name>/`
 3. Add the new service to the spread in `config/registry.ts`:
    ```ts
@@ -520,7 +534,7 @@ No changes to existing services or templates required.
 ### Tenant & Data Isolation
 
 - **Risk exists and is mitigated.** Both built-in document services (`QuotesDocumentService`, `OrdersDocumentService`) query tenant-scoped records: `sales_quotes`, `sales_quote_lines`, `sales_orders`, `CustomerEntity`, `CustomerAddress`. A user with `pdf_generators.view` could otherwise retrieve data from a different tenant by submitting an arbitrary UUID.
-- **Mitigation:** `getAuthFromRequest` is called in both route handlers (`/generate`, `/preview`). The resulting `AuthContext` is propagated through `templateRegistry.load → fetchData` via `ctx.auth`; the loaded template is then passed to `PdfRenderingService.render`. Every query filters by `tenant_id` and `organization_id` derived from that context. Both services throw explicitly if either value is missing — no silent fallback to unscoped data.
+- **Mitigation:** `getAuthFromRequest` is called in both route handlers (`/generate`, `/preview`). The resulting `AuthContext` is propagated through `templateRegistry.load → fetchData` via `ctx.auth`; the loaded template is then passed to `PdfRenderingService.render`. Each built-in service validates its local input as `{ id: UUID }`, ignores all other client-supplied record fields, and queries by `id`, `tenant_id`, and `organization_id`. Missing scope, invalid input, inaccessible records, and database failures all reject the render pipeline — raw request data is never used as a fallback.
 - **Custom `DocumentService` contract:** any external module implementing `BaseDocumentService` **must** apply the same tenant scoping in `fetchData`. The `ctx.auth` argument is available for exactly this purpose. Implementations that ignore it are considered a security defect.
 
 ### Font Loading
@@ -546,7 +560,7 @@ No changes to existing services or templates required.
 
 1. `lib/interfaces.ts`, `lib/types.ts`, `lib/template-registry.ts` — class-based registry with `registerInternal` / `registerExternal` / `load`
 2. `services/base-document-service.ts` — abstract base class
-3. `services/quotes-document-service.ts` — `QuotesDocumentService` with `sales-offer` template
+3. `services/quotes-document-service/` — `QuotesDocumentService`, local input validation, and `sales-offer` template registration
 4. `config/registry.ts` — single `registerInternal([...])` call
 5. `templates/shared/fonts/` + font build pipeline in `build.mjs`
 6. `templates/shared/theme.ts` + `templates/shared/components/Logo.tsx` — shared design tokens and brand components exported publicly
@@ -578,7 +592,7 @@ No changes to existing services or templates required.
 
 ### Phase 4.6 — Orders Built-in Template ✅
 
-1. `services/orders-document-service.ts` — `OrdersDocumentService` (`resourceKind: 'sales.order'`) with `order-invoice` template
+1. `services/orders-document-service/` — `OrdersDocumentService` (`resourceKind: 'sales.order'`), local input validation, and `order-invoice` template
 2. `templates/sales/orders/templates/order-invoice/` — `types.ts`, `index.tsx` (`OrderInvoiceDocument`)
 3. `services/index.ts` updated — exports built-in document and rendering/history services
 4. `config/registry.ts` updated — single `registerInternal([...quotesService, ...ordersService])` call
@@ -595,7 +609,7 @@ No changes to existing services or templates required.
 |------|-------------|
 | `data/entities.ts` | `GeneratedDocument` entity — `id`, `organization_id`, `tenant_id`, `resource_kind`, `resource_id`, `resource_label`, `template_id`, `template_label`, `format` (default `'pdf'`), `mime_type` (default `'application/pdf'`), `generated_by`, `generated_at`, `attachment_id` (nullable — populated in Phase 6). Table `pdf_generators_generated_documents` |
 | `data/validators.ts` | Zod schemas: extended `generateSchema` (adds `resource_kind`, `resource_id`) + `listDocumentsSchema` (query params) |
-| `services/generation-history-service.ts` | Scoped creation and paginated listing of generation history |
+| `services/generation-history-service/` | Scoped creation and paginated listing of generation history |
 | `api/pdf-generators/documents/route.ts` | Paginated history endpoint, filterable by `resource_kind` and `resource_id`; exports `openApi` + `metadata` |
 | `migrations/Migration20260809121904_pdf_generators.ts` | Generated migration accompanied by the module snapshot |
 
@@ -740,3 +754,4 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 | 2026-08-09 | Codex | Completed Phase 5 and synchronized the API contract: clients send only `resource_kind` + `resource_id`; `resource_label` is derived from normalized data by the document service and falls back to `resource_id`. Added scoped history persistence/listing, backend history UI, ACL, validators, and regression/integration coverage. |
 | 2026-08-09 | Codex | Replaced the mixed `lib/render-pdf.ts` helper with a focused `PdfRenderingService`: routes load templates explicitly, `load()` returns a discriminated `DocumentTemplateSource`, and the service renders an already prepared `LoadedPdfTemplate` into a neutral `RenderedDocument`. Format and MIME remain renderer-owned; `LoadedDocumentTemplateBase` provides the shared seam for a future DOCX variant without a placeholder implementation. Added canonical resource-id derivation and mismatch rejection for history integrity. |
 | 2026-08-10 | Codex | Synchronized the normative architecture, API, UI, Phase 5, compliance, and extension sections with the completed implementation. Clarified the deliberately partial format-neutral boundary and the concrete work required for a future DOCX renderer. |
+| 2026-08-10 | Codex | Reorganized concrete services into owner folders with local barrels and tests while keeping `base-document-service.ts` flat. Added service-local UUID input schemas for built-in order/quote rendering and made fetch failures fail closed so raw client records can never become PDF source data. |

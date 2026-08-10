@@ -5,8 +5,8 @@ jest.mock('@react-pdf/renderer', () => ({
 }))
 
 import { renderToBuffer } from '@react-pdf/renderer'
-import type { LoadedPdfTemplate } from '../../lib/interfaces'
-import { PdfRenderingService } from '../pdf-rendering-service'
+import type { LoadedPdfTemplate } from '../../../lib/interfaces'
+import { PdfRenderingService } from '..'
 
 const mockedRenderToBuffer = renderToBuffer as jest.Mock
 const FakeDocument: ComponentType<{ data: Record<string, unknown> }> = () => null

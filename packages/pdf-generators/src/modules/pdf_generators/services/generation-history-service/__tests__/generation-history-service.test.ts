@@ -3,10 +3,10 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 // Stub the entity module: the real one pulls in @mikro-orm/core (ESM) which the
 // unit-test transform does not handle. The service only uses the class as an
 // opaque token passed to em.create/em.findAndCount, so a plain class suffices.
-jest.mock('../../data/entities', () => ({ GeneratedDocument: class GeneratedDocument {} }))
+jest.mock('../../../data/entities', () => ({ GeneratedDocument: class GeneratedDocument {} }))
 
-import { GeneratedDocument } from '../../data/entities'
-import { GenerationHistoryService, type CreateGeneratedDocumentInput } from '../generation-history-service'
+import { GeneratedDocument } from '../../../data/entities'
+import { GenerationHistoryService, type CreateGeneratedDocumentInput } from '..'
 
 const scope = { organizationId: 'org-1', tenantId: 'tenant-1' }
 

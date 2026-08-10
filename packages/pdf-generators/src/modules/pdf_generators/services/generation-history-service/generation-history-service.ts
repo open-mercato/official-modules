@@ -1,5 +1,5 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
-import { GeneratedDocument } from '../data/entities'
+import { GeneratedDocument } from '../../data/entities'
 
 /** Organization + tenant pair every history operation is scoped to. */
 export interface HistoryScope {

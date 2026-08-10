@@ -128,6 +128,21 @@ describe('templateRegistry.load', () => {
     expect(fromRecord).toHaveBeenCalledWith({ id: 'raw' })
   })
 
+  it('stops loading and normalization when fetchData rejects', async () => {
+    const failure = new Error('record not accessible')
+    const fetchData = jest.fn(async () => Promise.reject(failure))
+    const load = jest.fn(async () => ({ type: 'react-pdf' as const, component: FakeComponent }))
+    const fromRecord = jest.fn((data: unknown) => data as Record<string, unknown>)
+    templateRegistry.registerInternal([makeEntry({ fetchData, load, fromRecord })])
+
+    await expect(
+      templateRegistry.load({ id: 'order-invoice', data: { id: 'untrusted' } }, ctx),
+    ).rejects.toBe(failure)
+
+    expect(load).not.toHaveBeenCalled()
+    expect(fromRecord).not.toHaveBeenCalled()
+  })
+
   it('resolves templates registered by external modules', async () => {
     templateRegistry.registerExternal([makeEntry({ id: 'custom-doc', module: 'my_module' })])
 

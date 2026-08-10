@@ -1,6 +1,6 @@
 import { templateRegistry } from '../lib/template-registry'
-import { QuotesDocumentService, QUOTES_TEMPLATE_IDS } from '../services'
-import { OrdersDocumentService, ORDERS_TEMPLATE_IDS } from '../services'
+import { QuotesDocumentService, QUOTES_TEMPLATE_IDS } from '../services/quotes-document-service'
+import { OrdersDocumentService, ORDERS_TEMPLATE_IDS } from '../services/orders-document-service'
 
 const quotesService = new QuotesDocumentService()
 const ordersService = new OrdersDocumentService()

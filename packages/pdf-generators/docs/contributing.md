@@ -114,7 +114,7 @@ Run artifacts (HTML report, JSON, traces) are written to `.ai/qa/test-results/` 
 
 ## How to add a new built-in template
 
-1. Create a new service in `src/modules/pdf_generators/services/` extending `BaseDocumentService`
+1. Create `src/modules/pdf_generators/services/<name>-document-service/` with `<name>-document-service.ts`, `validators.ts`, `index.ts`, and colocated tests; extend `BaseDocumentService`
 2. Create the React-PDF component under `src/modules/pdf_generators/templates/<resource>/<name>/`
 3. Register the service in `src/modules/pdf_generators/config/registry.ts`
 4. Add an example to `examples/` following the existing invoice layout

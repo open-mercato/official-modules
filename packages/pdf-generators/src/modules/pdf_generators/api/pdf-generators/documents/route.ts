@@ -3,7 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { NextResponse } from 'next/server'
-import { GenerationHistoryService } from '../../../services'
+import { GenerationHistoryService } from '../../../services/generation-history-service'
 import { listDocumentsSchema } from '../../../data/validators'
 
 export const metadata = {
