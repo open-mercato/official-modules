@@ -4,82 +4,16 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from '../base-document-service'
 import { formatDate } from '../../utils/formatDate'
 import { quoteDocumentInputSchema } from './validators'
+import type {
+  CustomerAddressRow,
+  EntityCtor,
+  QuoteLineItem,
+  QuoteRecord,
+  SalesQuoteRow,
+} from './types'
 
 /** Template IDs registered by this service — exported for TemplateId type derivation. */
 export const QUOTES_TEMPLATE_IDS = ['sales-offer'] as const
-
-/** Fully loaded quote data fetched from the database by fetchData. */
-export interface QuoteRecord {
-  id: string
-  quoteNumber: string
-  currencyCode: string
-  validFrom: Date | null
-  validUntil: Date | null
-  comments: string | null
-  grandTotalNetAmount: string
-  grandTotalGrossAmount: string
-  taxTotalAmount: string
-  customerSnapshot: Record<string, unknown> | null
-  billingAddressSnapshot: Record<string, unknown> | null
-  lines: QuoteLineItem[]
-}
-
-export interface QuoteLineItem {
-  id: string
-  name: string | null
-  description: string | null
-  quantity: string
-  unitPriceNet: string
-  unitPriceGross: string
-  totalNetAmount: string
-  totalGrossAmount: string
-  taxRate: string
-  currencyCode: string
-}
-
-type EntityCtor<T extends object> = new (...args: unknown[]) => T
-
-interface SalesQuoteRow {
-  id: string
-  tenantId: string
-  organizationId: string
-  quoteNumber: string
-  currencyCode: string
-  validFrom: Date | null
-  validUntil: Date | null
-  comments: string | null
-  grandTotalNetAmount: string
-  grandTotalGrossAmount: string
-  taxTotalAmount: string
-  customerSnapshot: Record<string, unknown> | null
-  billingAddressSnapshot: Record<string, unknown> | null
-  customerEntityId: string | null
-  lines: { getItems(): SalesQuoteLineRow[] }
-}
-
-interface SalesQuoteLineRow {
-  id: string
-  name: string | null
-  description: string | null
-  quantity: string
-  unitPriceNet: string
-  unitPriceGross: string
-  totalNetAmount: string
-  totalGrossAmount: string
-  taxRate: string
-  currencyCode: string
-}
-
-interface CustomerAddressRow {
-  entity: string
-  isPrimary: boolean
-  addressLine1: string
-  addressLine2: string | null
-  city: string | null
-  region: string | null
-  postalCode: string | null
-  country: string | null
-}
 
 /**
  * Document service for the Quotes module.

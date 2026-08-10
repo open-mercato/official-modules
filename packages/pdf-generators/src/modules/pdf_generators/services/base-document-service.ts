@@ -1,20 +1,9 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import type { DocumentTemplateSource, TemplateEntry, TemplateDataContext } from '../lib/interfaces'
+import type { TemplateEntry, TemplateDataContext } from '../lib/interfaces'
+import type { DocumentTemplateEntry } from './types'
 
-/**
- * Registration shape for a single template within a document service.
- * Does not include resourceKind or fromRecord — those are supplied by the service itself.
- */
-export interface DocumentTemplateEntry {
-  id: string
-  label: string
-  description: string
-  documentType: string
-  tags: string[]
-  note?: string
-  load: () => Promise<DocumentTemplateSource>
-}
+export type { DocumentTemplateEntry } from './types'
 
 /**
  * Base class for document services.

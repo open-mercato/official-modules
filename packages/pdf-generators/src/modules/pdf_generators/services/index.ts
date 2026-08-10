@@ -1,5 +1,5 @@
 export { BaseDocumentService } from './base-document-service'
-export type { DocumentTemplateEntry } from './base-document-service'
+export type { DocumentTemplateEntry } from './types'
 export { QuotesDocumentService, QUOTES_TEMPLATE_IDS } from './quotes-document-service'
 export type { QuoteLineItem } from './quotes-document-service'
 export { OrdersDocumentService, ORDERS_TEMPLATE_IDS } from './orders-document-service'

@@ -4,82 +4,16 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { BaseDocumentService } from '../base-document-service'
 import { formatDate } from '../../utils/formatDate'
 import { orderDocumentInputSchema } from './validators'
+import type {
+  CustomerAddressRow,
+  EntityCtor,
+  OrderLineItem,
+  OrderRecord,
+  SalesOrderRow,
+} from './types'
 
 /** Template IDs registered by this service — exported for TemplateId type derivation. */
 export const ORDERS_TEMPLATE_IDS = ['order-invoice'] as const
-
-/** Fully loaded order data fetched from the database by fetchData. */
-export interface OrderRecord {
-  id: string
-  orderNumber: string
-  currencyCode: string
-  placedAt: Date | null
-  expectedDeliveryAt: Date | null
-  comments: string | null
-  grandTotalNetAmount: string
-  grandTotalGrossAmount: string
-  taxTotalAmount: string
-  customerSnapshot: Record<string, unknown> | null
-  billingAddressSnapshot: Record<string, unknown> | null
-  lines: OrderLineItem[]
-}
-
-export interface OrderLineItem {
-  id: string
-  name: string | null
-  description: string | null
-  quantity: string
-  unitPriceNet: string
-  unitPriceGross: string
-  totalNetAmount: string
-  totalGrossAmount: string
-  taxRate: string
-  currencyCode: string
-}
-
-type EntityCtor<T extends object> = new (...args: unknown[]) => T
-
-interface SalesOrderRow {
-  id: string
-  tenantId: string
-  organizationId: string
-  orderNumber: string
-  currencyCode: string
-  placedAt: Date | null
-  expectedDeliveryAt: Date | null
-  comments: string | null
-  grandTotalNetAmount: string
-  grandTotalGrossAmount: string
-  taxTotalAmount: string
-  customerSnapshot: Record<string, unknown> | null
-  billingAddressSnapshot: Record<string, unknown> | null
-  customerEntityId: string | null
-  lines: { getItems(): SalesOrderLineRow[] }
-}
-
-interface SalesOrderLineRow {
-  id: string
-  name: string | null
-  description: string | null
-  quantity: string
-  unitPriceNet: string
-  unitPriceGross: string
-  totalNetAmount: string
-  totalGrossAmount: string
-  taxRate: string
-  currencyCode: string
-}
-
-interface CustomerAddressRow {
-  entity: string
-  isPrimary: boolean
-  addressLine1: string
-  addressLine2: string | null
-  city: string | null
-  region: string | null
-  postalCode: string | null
-  country: string | null
-}
 
 /**
  * Document service for the Orders module.

@@ -4,4 +4,4 @@ export type {
   CreateGeneratedDocumentInput,
   ListGeneratedDocumentsQuery,
   GeneratedDocumentDto,
-} from './generation-history-service'
+} from './types'
