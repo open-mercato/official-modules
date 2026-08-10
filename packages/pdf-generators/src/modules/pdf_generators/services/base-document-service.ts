@@ -1,6 +1,6 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import type { DocumentTemplateSource, TemplateEntry, TemplateNormalizationContext } from '../lib/interfaces'
+import type { DocumentTemplateSource, TemplateEntry, TemplateDataContext } from '../lib/interfaces'
 
 /**
  * Registration shape for a single template within a document service.
@@ -109,7 +109,7 @@ export abstract class BaseDocumentService {
       documentType: template.documentType,
       tags: template.tags,
       note: template.note,
-      fromRecord: (data: unknown, { locale }: TemplateNormalizationContext) => this.toTemplateData({ data, locale }),
+      fromRecord: (data: unknown, { locale }: TemplateDataContext) => this.toTemplateData({ data, locale }),
       filename: (input: { data: Record<string, unknown> }) => this.filename(input),
       resourceId: (input: { data: Record<string, unknown> }) => this.resourceId(input),
       resourceLabel: (input: { data: Record<string, unknown> }) => this.resourceLabel(input),

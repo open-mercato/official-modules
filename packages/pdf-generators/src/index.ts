@@ -8,7 +8,7 @@ export type {
   TemplateMeta,
   TemplateFilter,
   TemplateLoadContext,
-  TemplateNormalizationContext,
+  TemplateDataContext,
 } from './modules/pdf_generators/lib/interfaces'
 export { BaseDocumentService, PdfRenderingService } from './modules/pdf_generators/services'
 export type { DocumentTemplateEntry } from './modules/pdf_generators/services'

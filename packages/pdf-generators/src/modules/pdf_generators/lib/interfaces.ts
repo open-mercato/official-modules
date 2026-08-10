@@ -23,7 +23,7 @@ export interface ReactPdfTemplateSource {
 export type DocumentTemplateSource = ReactPdfTemplateSource
 
 /** Request-derived context available while normalizing a record for a template. */
-export interface TemplateNormalizationContext {
+export interface TemplateDataContext {
   locale: string
 }
 
@@ -36,7 +36,7 @@ export interface TemplateLoadContext {
 
 /** Runtime handlers for a PDF template — normalization, lazy loading, and optional server-side data fetching. */
 export interface TemplateRegistryEntry {
-  fromRecord: (data: unknown, context: TemplateNormalizationContext) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
+  fromRecord: (data: unknown, context: TemplateDataContext) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
   filename: (input: { data: Record<string, unknown> }) => string // derives the PDF filename from normalized data
   resourceId?: (input: { data: Record<string, unknown> }) => string | undefined // derives the canonical source record id from normalized server-side data
   resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined // derives a human-readable label for history from normalized data

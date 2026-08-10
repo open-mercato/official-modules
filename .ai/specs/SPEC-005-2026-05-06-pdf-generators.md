@@ -261,7 +261,7 @@ interface TemplateMeta {
   tags: string[]
 }
 
-interface TemplateNormalizationContext {
+interface TemplateDataContext {
   locale: string
 }
 
@@ -272,7 +272,7 @@ interface TemplateLoadContext {
 }
 
 interface TemplateRegistryEntry {
-  fromRecord: (data: unknown, context: TemplateNormalizationContext) => Record<string, unknown>  // locale-aware mapping of enriched server data
+  fromRecord: (data: unknown, context: TemplateDataContext) => Record<string, unknown>  // locale-aware mapping of enriched server data
   filename: (input: { data: Record<string, unknown> }) => string  // derives the PDF filename from normalized data
   resourceId?: (input: { data: Record<string, unknown> }) => string | undefined
   resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined
