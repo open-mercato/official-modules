@@ -22,9 +22,21 @@ export interface ReactPdfTemplateSource {
 /** Union of format-specific template sources supported by the registry. */
 export type DocumentTemplateSource = ReactPdfTemplateSource
 
+/** Request-derived context available while normalizing a record for a template. */
+export interface TemplateNormalizationContext {
+  locale: string
+}
+
+/** Context required to fetch, normalize, and load a template. */
+export interface TemplateLoadContext {
+  container: AppContainer
+  auth: AuthContext | null
+  locale: string
+}
+
 /** Runtime handlers for a PDF template — normalization, lazy loading, and optional server-side data fetching. */
 export interface TemplateRegistryEntry {
-  fromRecord: (data: unknown) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
+  fromRecord: (data: unknown, context: TemplateNormalizationContext) => Record<string, unknown> // maps enriched server data to the flat shape expected by the template component
   filename: (input: { data: Record<string, unknown> }) => string // derives the PDF filename from normalized data
   resourceId?: (input: { data: Record<string, unknown> }) => string | undefined // derives the canonical source record id from normalized server-side data
   resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined // derives a human-readable label for history from normalized data
@@ -80,5 +92,5 @@ export interface TemplateRegistry {
   registerInternal(entries: TemplateEntry[]): void
   registerExternal(entries: TemplateEntry[]): void
   listTemplates(): { internal: TemplateMeta[]; external: TemplateMeta[] }
-  load(input: { id: string; data: unknown }, ctx: { container: AppContainer; auth: AuthContext | null }): Promise<LoadedTemplate>
+  load(input: { id: string; data: unknown }, ctx: TemplateLoadContext): Promise<LoadedTemplate>
 }

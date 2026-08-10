@@ -145,7 +145,7 @@ export class ExampleInvoicesDocumentService extends BaseDocumentService {
     return (data.document as { number?: string } | undefined)?.number
   }
 
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> {
     const r = data as OrderRecord
     const customer = typeof r.customerSnapshot === 'string' ? JSON.parse(r.customerSnapshot) : r.customerSnapshot as any
     const billing = typeof r.billingAddressSnapshot === 'string' ? JSON.parse(r.billingAddressSnapshot) : r.billingAddressSnapshot as any
@@ -171,8 +171,8 @@ export class ExampleInvoicesDocumentService extends BaseDocumentService {
       document: {
         id: r.id,
         number: r.orderNumber,
-        date: r.placedAt ? formatDate(r.placedAt.toISOString()) : formatDate(new Date().toISOString()),
-        dueDate: r.expectedDeliveryAt ? formatDate(r.expectedDeliveryAt.toISOString()) : undefined,
+        date: r.placedAt ? formatDate(r.placedAt.toISOString(), locale) : formatDate(new Date().toISOString(), locale),
+        dueDate: r.expectedDeliveryAt ? formatDate(r.expectedDeliveryAt.toISOString(), locale) : undefined,
       },
       client: {
         name: customer?.contact

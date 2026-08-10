@@ -1,6 +1,6 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import type { TemplateMeta, TemplateEntry, TemplateRegistry as TemplateRegistryInterface, LoadedTemplate } from './interfaces'
+import type { TemplateMeta, TemplateEntry, TemplateLoadContext, TemplateRegistry as TemplateRegistryInterface, LoadedTemplate } from './interfaces'
 
 export class UnknownTemplateError extends Error {
   constructor(id: string) {
@@ -76,7 +76,7 @@ class TemplateRegistry implements TemplateRegistryInterface {
    *
    * @param id - Template ID
    * @param data - Raw data from the widget context
-   * @param container - Request-scoped DI container passed to fetchData
+   * @param context - Request-scoped DI/auth context plus the required active locale
    */
   private async enrich({ id, data }: { id: string; data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<unknown> {
     const entry = this.findTemplate(id)
@@ -89,14 +89,14 @@ class TemplateRegistry implements TemplateRegistryInterface {
    *
    * @param id - Template ID
    * @param data - Raw data from the widget (only `id` is required when fetchData is defined)
-   * @param container - Request-scoped DI container passed to fetchData
+   * @param context - Request-scoped DI/auth context plus the required active locale
    * @throws Error if template ID is not registered
    */
-  async load({ id, data: rawData }: { id: string; data: unknown }, { container, auth }: { container: AppContainer; auth: AuthContext | null }): Promise<LoadedTemplate> {
+  async load({ id, data: rawData }: { id: string; data: unknown }, { container, auth, locale }: TemplateLoadContext): Promise<LoadedTemplate> {
     const entry = this.findTemplate(id)
     const enriched = await this.enrich({ id, data: rawData }, { container, auth })
     const source = await entry.load()
-    const data = entry.fromRecord(enriched)
+    const data = entry.fromRecord(enriched, { locale })
     const filename = entry.filename({ data })
     const resourceId = entry.resourceId?.({ data })
     const resourceLabel = entry.resourceLabel?.({ data })

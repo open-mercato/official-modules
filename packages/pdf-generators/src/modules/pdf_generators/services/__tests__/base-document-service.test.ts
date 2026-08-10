@@ -25,9 +25,9 @@ class TestDocumentService extends BaseDocumentService {
   readonly module = 'sales'
   readonly resourceKind = 'sales.quote'
 
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> {
     const { id } = data as { id: string }
-    return { document: { number: id } }
+    return { document: { number: id }, locale }
   }
 
   // Reads the *unwrapped* normalized data — this is exactly what C4 broke.
@@ -123,7 +123,10 @@ describe('BaseDocumentService.getEntries', () => {
 
     const [entry] = service.getEntries()
 
-    expect(entry.fromRecord({ id: '7' })).toEqual({ document: { number: '7' } })
+    expect(entry.fromRecord({ id: '7' }, { locale: 'de' })).toEqual({
+      document: { number: '7' },
+      locale: 'de',
+    })
   })
 
   it('binds fetchData to the service instance and forwards container + auth', async () => {
@@ -144,7 +147,7 @@ describe('BaseDocumentService defaults', () => {
     readonly label = 'Minimal'
     readonly module = 'sales'
     readonly resourceKind = 'sales.order'
-    toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+    toTemplateData({ data }: { data: unknown; locale: string }): Record<string, unknown> {
       return data as Record<string, unknown>
     }
   }

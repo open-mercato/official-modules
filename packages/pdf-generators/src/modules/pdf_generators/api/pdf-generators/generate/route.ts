@@ -2,6 +2,7 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { NextResponse } from 'next/server'
 import '../../../config/registry'
 import { templateRegistry, UnknownTemplateError } from '../../../lib/template-registry'
@@ -43,7 +44,8 @@ export async function POST(request: Request) {
   const rendering = new PdfRenderingService()
   let rendered: RenderedDocument
   try {
-    const template = await templateRegistry.load({ id: template_id, data }, { container, auth })
+    const { locale } = await resolveTranslations()
+    const template = await templateRegistry.load({ id: template_id, data }, { container, auth, locale })
     rendered = await rendering.render(template)
   } catch (err) {
     if (err instanceof UnknownTemplateError) {

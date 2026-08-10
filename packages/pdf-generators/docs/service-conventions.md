@@ -70,6 +70,11 @@ templateRegistry.listTemplates()
 templateRegistry.load(input, context)
 ```
 
+`templateRegistry.load` requires the active `locale`, and `BaseDocumentService`
+passes it to `toTemplateData({ data, locale })`. Date and number formatting must
+use this request-derived locale; document services must not define a locale
+fallback.
+
 Do not rename domain operations to CRUD verbs when they do not create, retrieve, update, or delete an entity.
 
 ## Scope and errors

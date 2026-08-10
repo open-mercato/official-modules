@@ -72,10 +72,10 @@ export class MyModuleInvoiceDocumentService extends BaseDocumentService {
     throw new Error(`fetchData not implemented (id: ${record.id})`)
   }
 
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> {
     const r = data as { id: string; number: string }
     return {
-      document: { number: r.number, date: formatDate(new Date().toISOString()) },
+      document: { number: r.number, date: formatDate(new Date().toISOString(), locale) },
       seller:   { name: '', company: '', email: '' },
       client:   { name: '' },
       lines:    [],

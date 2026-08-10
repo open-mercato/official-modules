@@ -113,7 +113,7 @@ describe('OrdersDocumentService.fetchData', () => {
 describe('OrdersDocumentService.toTemplateData', () => {
   it('normalizes a record with object snapshots', () => {
     const service = new OrdersDocumentService()
-    const out = service.toTemplateData({ data: makeOrderRecord() })
+    const out = service.toTemplateData({ data: makeOrderRecord(), locale: 'pl' })
 
     expect(out.document).toMatchObject({ id: 'ord-1', number: 'ORD-2026-0007' })
     expect((out.document as Record<string, string>).date).toMatch(/^\d{2}\.\d{2}\.\d{4}$/)
@@ -130,10 +130,18 @@ describe('OrdersDocumentService.toTemplateData', () => {
       billingAddressSnapshot: JSON.stringify({ addressLine1: 'Hauptstr. 5', city: 'Berlin', postalCode: '10115', country: 'DE' }) as unknown as OrderRecord['billingAddressSnapshot'],
     })
 
-    const out = service.toTemplateData({ data: record })
+    const out = service.toTemplateData({ data: record, locale: 'pl' })
 
     expect(out.client).toMatchObject({ name: 'Beta GmbH', email: 'buyer@beta.test' })
     expect((out.client as Record<string, string>).address).toContain('Berlin')
+  })
+
+  it('formats document dates using the required locale', () => {
+    const service = new OrdersDocumentService()
+
+    const out = service.toTemplateData({ data: makeOrderRecord(), locale: 'en' })
+
+    expect(out.document).toMatchObject({ date: '05/09/2026', dueDate: '05/16/2026' })
   })
 })
 

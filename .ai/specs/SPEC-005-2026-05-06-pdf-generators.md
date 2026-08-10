@@ -261,8 +261,18 @@ interface TemplateMeta {
   tags: string[]
 }
 
+interface TemplateNormalizationContext {
+  locale: string
+}
+
+interface TemplateLoadContext {
+  container: AppContainer
+  auth: AuthContext | null
+  locale: string
+}
+
 interface TemplateRegistryEntry {
-  fromRecord: (data: unknown) => Record<string, unknown>  // maps enriched server data to the flat shape expected by the template
+  fromRecord: (data: unknown, context: TemplateNormalizationContext) => Record<string, unknown>  // locale-aware mapping of enriched server data
   filename: (input: { data: Record<string, unknown> }) => string  // derives the PDF filename from normalized data
   resourceId?: (input: { data: Record<string, unknown> }) => string | undefined
   resourceLabel?: (input: { data: Record<string, unknown> }) => string | undefined
@@ -355,7 +365,7 @@ export class QuotesDocumentService extends BaseDocumentService {
     ...
   }
 
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> { ... }
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> { ... }
 }
 ```
 
@@ -363,10 +373,10 @@ export class QuotesDocumentService extends BaseDocumentService {
 - `registerTemplate(entry)` — registers a lazy-loaded template
 - `getEntries()` — returns entries with `module`, `resourceKind`, normalization, output metadata, and fetching bound to the service
 - `fetchData({ data }, { container, auth })` — default no-op; override to enrich data before normalization with request scope available
-- `toTemplateData({ data })` — **abstract**; override to map enriched data to the flat shape expected by templates
+- `toTemplateData({ data, locale })` — **abstract**; override to map enriched data using the required request locale
 - `filename({ data })` — returns `'document.pdf'` by default; override for document-specific names
 
-`formatDate` remains a standalone utility. The service hierarchy and built-in templates stay PDF-specific; the reusable seam begins at `LoadedDocumentTemplateBase` and `RenderedDocument`.
+`formatDate(iso, locale)` remains a standalone utility with no default locale. Both render routes resolve the active locale server-side and thread it through `TemplateRegistry.load` → `fromRecord` → `toTemplateData`. The service hierarchy and built-in templates stay PDF-specific; the reusable seam begins at `LoadedDocumentTemplateBase` and `RenderedDocument`.
 
 ---
 
@@ -629,7 +639,8 @@ No changes to existing services or templates required.
 
 ```
 Widget → POST /generate { template_id, data, resource_kind, resource_id }
-         ├── templateRegistry.load() → LoadedPdfTemplate + canonical resource identity
+         ├── resolveTranslations() → required active locale
+         ├── templateRegistry.load(..., { locale }) → LoadedPdfTemplate + canonical resource identity
          ├── PdfRenderingService.render() → RenderedDocument
          ├── verify optional client resource identity
          ├── GenerationHistoryService.create(GeneratedDocument { format, mime_type, ... }) [best effort]
@@ -755,3 +766,4 @@ Therefore the upload in step 2 **must** persist the request's `organization_id` 
 | 2026-08-09 | Codex | Replaced the mixed `lib/render-pdf.ts` helper with a focused `PdfRenderingService`: routes load templates explicitly, `load()` returns a discriminated `DocumentTemplateSource`, and the service renders an already prepared `LoadedPdfTemplate` into a neutral `RenderedDocument`. Format and MIME remain renderer-owned; `LoadedDocumentTemplateBase` provides the shared seam for a future DOCX variant without a placeholder implementation. Added canonical resource-id derivation and mismatch rejection for history integrity. |
 | 2026-08-10 | Codex | Synchronized the normative architecture, API, UI, Phase 5, compliance, and extension sections with the completed implementation. Clarified the deliberately partial format-neutral boundary and the concrete work required for a future DOCX renderer. |
 | 2026-08-10 | Codex | Reorganized concrete services into owner folders with local barrels and tests while keeping `base-document-service.ts` flat. Added service-local UUID input schemas for built-in order/quote rendering and made fetch failures fail closed so raw client records can never become PDF source data. |
+| 2026-08-10 | Codex | Made locale a required breaking contract across render routes, `TemplateRegistry.load`, `fromRecord`, `BaseDocumentService.toTemplateData`, and `formatDate`; built-in and example documents now format every date with the active request locale and cannot silently fall back to Polish formatting. |

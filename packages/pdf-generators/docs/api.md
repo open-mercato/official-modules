@@ -137,7 +137,7 @@ Abstract base class. Extend once per category of documents in your module.
 | `resourceKind` (abstract) | Framework resource kind matching the detail page (`'sales.order'`, `'sales.quote'`) |
 | `registerTemplate(entry)` | Registers a template with this service |
 | `getEntries()` | Returns all registered templates ready for the global registry |
-| `toTemplateData(input)` (abstract) | Maps the enriched server record to the flat data shape expected by template components |
+| `toTemplateData({ data, locale })` (abstract) | Maps the enriched server record to template data using the required active locale |
 | `fetchData(input, ctx)` | Server-side hook called before `toTemplateData`. Override to load related data via DI. Default: passes data through unchanged |
 | `filename(input)` | Derives the download filename from normalized data. Default: `'document.pdf'` |
 | `resourceId(input)` | Derives the canonical source-record id from normalized server-side data |
@@ -147,13 +147,14 @@ Abstract base class. Extend once per category of documents in your module.
 Renders an already loaded and normalized `LoadedPdfTemplate` to a `RenderedDocument`. Template lookup, authentication context, HTTP responses, and history persistence remain outside the service.
 
 ```ts
-const template = await templateRegistry.load({ id, data }, { container, auth })
+const { locale } = await resolveTranslations()
+const template = await templateRegistry.load({ id, data }, { container, auth, locale })
 const document = await new PdfRenderingService().render(template)
 ```
 
-### `formatDate(isoString)`
+### `formatDate(isoString, locale)`
 
-Formats an ISO 8601 string to a locale-friendly display string. Use inside `toTemplateData`.
+Formats an ISO 8601 string using the required BCP 47 locale. There is no default locale; pass the locale received by `toTemplateData`.
 
 ### `TemplatesList`
 

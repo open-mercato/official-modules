@@ -215,13 +215,13 @@ export class {{PascalModuleId}}{{PascalCategory}}DocumentService extends BaseDoc
   /**
    * Maps the enriched record (returned by fetchData) into the flat shape expected by templates.
    */
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> {
     const r = data as {{RECORD_TYPE_NAME}}
 
     return {
       document: {
         number: String(r.id ?? ''),
-        date: formatDate(new Date().toISOString()),
+        date: formatDate(new Date().toISOString(), locale),
       },
       seller: { name: '', company: '', email: '' },
       client: { name: '' },

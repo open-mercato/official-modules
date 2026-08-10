@@ -25,7 +25,7 @@ function makeEntry(overrides: Partial<TemplateEntry> = {}): TemplateEntry {
 }
 
 // The registry is a singleton — reset both lists before each test so cases don't leak.
-const ctx = { container: {} as AppContainer, auth: null as AuthContext | null }
+const ctx = { container: {} as AppContainer, auth: null as AuthContext | null, locale: 'en' }
 
 beforeEach(() => {
   templateRegistry.registerInternal([])
@@ -76,9 +76,9 @@ describe('templateRegistry.load', () => {
       calls.push('fetchData')
       return { ...(data as object), enriched: true }
     })
-    const fromRecord = jest.fn((data: unknown) => {
+    const fromRecord = jest.fn((data: unknown, { locale }: { locale: string }) => {
       calls.push('fromRecord')
-      return { normalized: true, ...(data as object) }
+      return { normalized: true, locale, ...(data as object) }
     })
     const filename = jest.fn(() => {
       calls.push('filename')
@@ -102,7 +102,8 @@ describe('templateRegistry.load', () => {
 
     expect(calls).toEqual(['fetchData', 'load', 'fromRecord', 'filename', 'resourceId', 'resourceLabel'])
     expect(result.source).toEqual({ type: 'react-pdf', component: FakeComponent })
-    expect(result.data).toMatchObject({ normalized: true, id: 'abc', enriched: true })
+    expect(result.data).toMatchObject({ normalized: true, locale: 'en', id: 'abc', enriched: true })
+    expect(fromRecord).toHaveBeenCalledWith(expect.anything(), { locale: 'en' })
     expect(result.filename).toBe('invoice-42.pdf')
     expect(result.template).toEqual({ id: 'order-invoice', label: 'Order Invoice' })
     expect(result.resource).toEqual({ kind: 'sales.order', id: 'ord-42', label: 'ORD-42' })
@@ -114,7 +115,7 @@ describe('templateRegistry.load', () => {
     const container = { resolve: () => undefined } as unknown as AppContainer
     templateRegistry.registerInternal([makeEntry({ fetchData })])
 
-    await templateRegistry.load({ id: 'order-invoice', data: { id: 'abc' } }, { container, auth })
+    await templateRegistry.load({ id: 'order-invoice', data: { id: 'abc' } }, { container, auth, locale: 'de' })
 
     expect(fetchData).toHaveBeenCalledWith({ data: { id: 'abc' } }, { container, auth })
   })
@@ -125,7 +126,7 @@ describe('templateRegistry.load', () => {
 
     await templateRegistry.load({ id: 'order-invoice', data: { id: 'raw' } }, ctx)
 
-    expect(fromRecord).toHaveBeenCalledWith({ id: 'raw' })
+    expect(fromRecord).toHaveBeenCalledWith({ id: 'raw' }, { locale: 'en' })
   })
 
   it('stops loading and normalization when fetchData rejects', async () => {

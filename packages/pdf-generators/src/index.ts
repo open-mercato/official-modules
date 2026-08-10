@@ -2,7 +2,14 @@ export { metadata } from './modules/pdf_generators/index'
 
 // Public API for external template authors
 export { templateRegistry } from './modules/pdf_generators/lib/template-registry'
-export type { TemplateEntry, TemplateRegistryEntry, TemplateMeta, TemplateFilter } from './modules/pdf_generators/lib/interfaces'
+export type {
+  TemplateEntry,
+  TemplateRegistryEntry,
+  TemplateMeta,
+  TemplateFilter,
+  TemplateLoadContext,
+  TemplateNormalizationContext,
+} from './modules/pdf_generators/lib/interfaces'
 export { BaseDocumentService, PdfRenderingService } from './modules/pdf_generators/services'
 export type { DocumentTemplateEntry } from './modules/pdf_generators/services'
 export type {

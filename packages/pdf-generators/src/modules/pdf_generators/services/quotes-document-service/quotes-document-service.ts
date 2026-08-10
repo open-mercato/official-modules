@@ -195,7 +195,7 @@ export class QuotesDocumentService extends BaseDocumentService {
     return (data.document as { id?: string } | undefined)?.id
   }
 
-  toTemplateData({ data }: { data: unknown }): Record<string, unknown> {
+  toTemplateData({ data, locale }: { data: unknown; locale: string }): Record<string, unknown> {
     const r = data as QuoteRecord
     const customer = typeof r.customerSnapshot === 'string' ? JSON.parse(r.customerSnapshot) : r.customerSnapshot as any
     const billing = typeof r.billingAddressSnapshot === 'string' ? JSON.parse(r.billingAddressSnapshot) : r.billingAddressSnapshot as any
@@ -221,8 +221,8 @@ export class QuotesDocumentService extends BaseDocumentService {
       document: {
         id: r.id,
         number: r.quoteNumber,
-        date: r.validFrom ? formatDate(r.validFrom.toISOString()) : formatDate(new Date().toISOString()),
-        validUntil: r.validUntil ? formatDate(r.validUntil.toISOString()) : undefined,
+        date: r.validFrom ? formatDate(r.validFrom.toISOString(), locale) : formatDate(new Date().toISOString(), locale),
+        validUntil: r.validUntil ? formatDate(r.validUntil.toISOString(), locale) : undefined,
       },
       client: {
         name: customer?.contact

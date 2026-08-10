@@ -1,6 +1,6 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
-import type { DocumentTemplateSource, TemplateEntry } from '../lib/interfaces'
+import type { DocumentTemplateSource, TemplateEntry, TemplateNormalizationContext } from '../lib/interfaces'
 
 /**
  * Registration shape for a single template within a document service.
@@ -36,10 +36,10 @@ export abstract class BaseDocumentService {
   /**
    * Normalizes a raw server record into the flat data shape expected by this service's templates.
    *
-   * @param record - Raw record from the widget context (already enriched if fetchData is defined)
+   * @param input - Enriched record plus the required active locale
    * @returns Normalized data object passed to the template component
    */
-  abstract toTemplateData(input: { data: unknown }): Record<string, unknown>
+  abstract toTemplateData(input: { data: unknown; locale: string }): Record<string, unknown>
 
   /**
    * Returns the filename for the generated PDF.
@@ -109,7 +109,7 @@ export abstract class BaseDocumentService {
       documentType: template.documentType,
       tags: template.tags,
       note: template.note,
-      fromRecord: (data: unknown) => this.toTemplateData({ data }),
+      fromRecord: (data: unknown, { locale }: TemplateNormalizationContext) => this.toTemplateData({ data, locale }),
       filename: (input: { data: Record<string, unknown> }) => this.filename(input),
       resourceId: (input: { data: Record<string, unknown> }) => this.resourceId(input),
       resourceLabel: (input: { data: Record<string, unknown> }) => this.resourceLabel(input),

@@ -115,7 +115,7 @@ describe('QuotesDocumentService.fetchData', () => {
 describe('QuotesDocumentService.toTemplateData', () => {
   it('normalizes a record with object snapshots', () => {
     const service = new QuotesDocumentService()
-    const out = service.toTemplateData({ data: makeQuoteRecord() })
+    const out = service.toTemplateData({ data: makeQuoteRecord(), locale: 'pl' })
 
     expect(out.document).toMatchObject({ id: 'q-1', number: 'Q-2026-0007' })
     expect((out.document as Record<string, string>).date).toMatch(/^\d{2}\.\d{2}\.\d{4}$/)
@@ -132,10 +132,18 @@ describe('QuotesDocumentService.toTemplateData', () => {
       billingAddressSnapshot: JSON.stringify({ addressLine1: 'ul. Testowa 1', city: 'Warszawa', postalCode: '00-001', country: 'PL' }) as unknown as QuoteRecord['billingAddressSnapshot'],
     })
 
-    const out = service.toTemplateData({ data: record })
+    const out = service.toTemplateData({ data: record, locale: 'pl' })
 
     expect(out.client).toMatchObject({ name: 'Acme Sp. z o.o.', email: 'buyer@acme.test' })
     expect((out.client as Record<string, string>).address).toContain('Warszawa')
+  })
+
+  it('formats document dates using the required locale', () => {
+    const service = new QuotesDocumentService()
+
+    const out = service.toTemplateData({ data: makeQuoteRecord(), locale: 'en' })
+
+    expect(out.document).toMatchObject({ date: '05/09/2026', validUntil: '06/09/2026' })
   })
 })
 
