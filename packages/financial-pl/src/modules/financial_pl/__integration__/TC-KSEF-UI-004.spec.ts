@@ -187,7 +187,10 @@ test.describe('TC-KSEF-UI-004: correction (KOR) — credit memo create + from-cr
       });
       expect(sendRes.status(), 'admin is NOT gated out of the correction send').not.toBe(403);
       expect(sendRes.status(), 'admin is authenticated for the correction send').not.toBe(401);
-      expect([202, 404, 409, 422], 'correction send either queues (202) or hits a KOR resolver guard (4xx)').toContain(
+      // A just-created credit memo whose projection lags now returns 409 `source_not_ready` (the
+      // client retries the same id), NEVER a 404 — a 404 here would mean the read-after-write race
+      // is being masked instead of retried (QA #41). 409/422 remain valid KOR-resolver guards.
+      expect([202, 409, 422], 'correction send queues (202) or hits a KOR/not-ready guard (409/422) — never a masked 404').toContain(
         sendRes.status(),
       );
       if (sendRes.status() === 202) {

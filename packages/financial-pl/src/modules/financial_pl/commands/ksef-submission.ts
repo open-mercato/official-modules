@@ -753,6 +753,66 @@ export const queueBatchCommand: CommandHandler<BatchSendInput, { progressJobId: 
   },
 }
 
+const SOURCE_NOT_READY_DEFAULT =
+  'The correction was created but is not ready to send yet — please retry in a moment.'
+
+/**
+ * Projection-lag errors a freshly-created credit memo can transiently raise (QA #41): the memo or
+ * its corrected original not yet visible in the eventually-consistent QueryEngine projection, or its
+ * `invoice_id` link not yet materialized. These are RETRYABLE; genuine validation errors are not.
+ */
+export function isCreditMemoProjectionLag(err: unknown): boolean {
+  if (!(err instanceof CrudHttpError)) return false
+  // Genuine post-existence projection LAG: the memo HEADER is visible (the existence probe in the
+  // command passed) but its LINE rows — loaded by a SEPARATE queryEngine projection query
+  // (`loadNegatedCreditMemoLines`) — have not materialized yet, so the resolver sees zero lines and
+  // raises `correction_lines_required`. That is the one resolver error a freshly-created, form-built
+  // correction can transiently hit after its header appears, so it (and only it) is retried and, on
+  // exhaustion, surfaced as a client-retryable 409 source_not_ready (QA #41).
+  //
+  // NOT retried — these are terminal, not lag:
+  //  • `credit_memo_not_linked` rides entirely on the header row (invoice_id FK OR
+  //    metadata.correctedInvoiceId, BOTH written at creation by buildCreditMemoPayload), so once the
+  //    header is visible the link always resolves. Its presence therefore means a genuinely unlinked
+  //    memo — a permanent condition that must stay a terminal, actionable 422 ("link it first"),
+  //    never a retryable 409 that would loop the operator forever.
+  //  • A 404 stays 404 (genuinely-unknown id; the existence probe owns that convergence window and
+  //    must not mask an unknown id as "retry later"). TC-KSEF-003 + the OpenAPI contract.
+  const code = (err.body as { code?: string } | undefined)?.code
+  return err.status === 422 && code === 'correction_lines_required'
+}
+
+/**
+ * Resolve a freshly-created credit memo tolerating QueryEngine projection lag with bounded retry.
+ * On exhaustion raises a PUBLIC `source_not_ready` (409) so the client can safely retry the SAME
+ * credit-memo id — the send is idempotent via the `credit_memo` active-unique index + the send
+ * command's 23505 race handling — instead of masking the read-after-write race behind a 404 or
+ * stranding the operator after an irreversible create (QA #41).
+ */
+export async function withCreditMemoProjectionRetry<T>(
+  fn: () => Promise<T>,
+  translate: (key: string, fallback: string) => string,
+): Promise<T> {
+  const MAX_ATTEMPTS = 5
+  const BASE_DELAY_MS = 150
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (!isCreditMemoProjectionLag(err) || attempt >= MAX_ATTEMPTS) {
+        if (isCreditMemoProjectionLag(err)) {
+          throw new CrudHttpError(409, {
+            code: 'source_not_ready',
+            error: translate('financial_pl.errors.source_not_ready', SOURCE_NOT_READY_DEFAULT),
+          })
+        }
+        throw err
+      }
+      await new Promise((resolve) => setTimeout(resolve, BASE_DELAY_MS * 2 ** (attempt - 1)))
+    }
+  }
+}
+
 export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, { submissionId: string }> = {
   id: 'financial_pl.ksef_submission.send_from_credit_memo',
   async execute(input, ctx) {
@@ -766,13 +826,28 @@ export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, 
 
     // Existence check BEFORE the credentials check (mirrors send_from_invoice): an unknown
     // credit memo must return 404, not a 409 credentials_missing, in an org without creds.
-    const creditMemoExists = await queryEngine.query<Record<string, unknown>>(E.sales.sales_credit_memo, {
-      tenantId: scope.tenantId,
-      organizationIds: [scope.organizationId],
-      filters: { id: { $eq: parsed.creditMemoId }, deleted_at: { $eq: null } },
-      page: { page: 1, pageSize: 1 },
-    })
-    if (!creditMemoExists.items?.[0]) {
+    // Probe the memo's existence with bounded retry: after a fresh create the memo itself can briefly
+    // lag the projection, so give it a few attempts to appear. A memo that STILL does not exist is a
+    // genuinely-unknown id and stays a 404 (never recoded to source_not_ready) — preserving both the
+    // TC-KSEF-003 / OpenAPI 404 contract AND the read-after-write tolerance (QA #41, council). The
+    // separate invoice_id-FK lag (memo present, FK null) is what resolveFa3FromCreditMemo's retry
+    // converts to a client-retryable 409 source_not_ready below.
+    let creditMemoFound = false
+    for (let attempt = 1; ; attempt += 1) {
+      const creditMemoExists = await queryEngine.query<Record<string, unknown>>(E.sales.sales_credit_memo, {
+        tenantId: scope.tenantId,
+        organizationIds: [scope.organizationId],
+        filters: { id: { $eq: parsed.creditMemoId }, deleted_at: { $eq: null } },
+        page: { page: 1, pageSize: 1 },
+      })
+      if (creditMemoExists.items?.[0]) {
+        creditMemoFound = true
+        break
+      }
+      if (attempt >= 5) break
+      await new Promise((resolve) => setTimeout(resolve, 150 * 2 ** (attempt - 1)))
+    }
+    if (!creditMemoFound) {
       throw new CrudHttpError(404, { error: '[internal] credit memo not found' })
     }
 
@@ -784,14 +859,18 @@ export const sendFromCreditMemoCommand: CommandHandler<SendFromCreditMemoInput, 
       })
     }
 
-    const { invoice, correctedInvoiceId } = await resolveFa3FromCreditMemo(
-      { queryEngine, contextNip, translate, seller: credentials.seller },
-      {
-        creditMemoId: parsed.creditMemoId,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        originalOutsideKsef: parsed.originalOutsideKsef,
-      },
+    const { invoice, correctedInvoiceId } = await withCreditMemoProjectionRetry(
+      () =>
+        resolveFa3FromCreditMemo(
+          { queryEngine, contextNip, translate, seller: credentials.seller },
+          {
+            creditMemoId: parsed.creditMemoId,
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            originalOutsideKsef: parsed.originalOutsideKsef,
+          },
+        ),
+      translate,
     )
 
     return sendCommand.execute(

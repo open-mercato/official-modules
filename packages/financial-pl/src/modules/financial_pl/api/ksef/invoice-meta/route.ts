@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
@@ -19,13 +20,14 @@ import { invoiceMetaPutSchema } from '../../../data/validators'
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['financial_pl.view'] },
   // SPEC-013 composed gating: the PUT writes statutory metadata tied to a core sales
-  // invoice, so it requires BOTH the PL-meta manage feature and core invoice-manage.
-  PUT: { requireAuth: true, requireFeatures: ['financial_pl.manage', 'sales.invoices.manage'] },
+  // invoice, so it requires BOTH module visibility and core invoice-management. The optional
+  // stricter financial_pl.invoices.manage policy remains enforced by invoiceWriteGuard.
+  PUT: { requireAuth: true, requireFeatures: ['financial_pl.view', 'sales.invoices.manage'] },
 }
 
 // SPEC-013 — KSeF-immutability statuses (mirrors api/interceptors.ts). An invoice with a
-// submission in either state must not be edited.
-const KSEF_LOCKED_STATUSES = ['accepted', 'processing'] as const
+// legally issued or in-flight submission must not be edited.
+export const KSEF_LOCKED_STATUSES = ['accepted', 'offline_issued', 'processing', 'queued'] as const
 const KSEF_LOCKED_MESSAGE_DEFAULT =
   'This invoice is locked: it has an accepted or in-progress KSeF submission. Issue a correction (KOR) instead of editing it.'
 
@@ -130,7 +132,7 @@ export async function GET(req: Request) {
     )
     return NextResponse.json({ item: record ? projectMeta(record) : null })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     console.error('[internal] financial_pl.invoice_meta read failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
@@ -297,7 +299,7 @@ export async function PUT(req: Request) {
 
     return NextResponse.json({ ok: true, item: projectMeta(record) })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.invoice_meta upsert failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

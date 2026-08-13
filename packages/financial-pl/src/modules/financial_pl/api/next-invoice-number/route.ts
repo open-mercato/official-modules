@@ -4,6 +4,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../lib/public-error'
 import { DEFAULT_INVOICE_NUMBER_FORMAT } from '@open-mercato/core/modules/sales/lib/documentNumberTokens'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { z } from 'zod'
@@ -64,7 +65,7 @@ export async function GET(req: Request) {
     const number = renderInvoiceNumberTemplate(DEFAULT_INVOICE_NUMBER_FORMAT, sequence, new Date())
     return NextResponse.json({ number, sequence, provisional: true })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     // A suggestion is not worth failing the form over — the field simply stays empty.
     console.error('[internal] financial_pl.next-invoice-number failed', err)
     return NextResponse.json({ number: null })

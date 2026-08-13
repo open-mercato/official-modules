@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../../lib/public-error'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { JpkVatFiling } from '../../../../data/entities'
@@ -51,7 +52,7 @@ export async function GET(req: Request) {
       },
     })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     }

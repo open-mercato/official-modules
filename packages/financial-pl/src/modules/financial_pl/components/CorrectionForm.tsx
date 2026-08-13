@@ -15,7 +15,7 @@ import { useT, useLocale } from '@open-mercato/shared/lib/i18n/context'
 import { de as deLocale, enUS, es as esLocale, pl as plLocale } from 'date-fns/locale'
 import { hasAllFeatures } from '@open-mercato/shared/security/features'
 import { cn } from '@open-mercato/shared/lib/utils'
-import { InvoiceLinesField, withComputedTotals, type InvoiceLineInput } from './InvoiceLinesField'
+import { InvoiceLinesField, normalizeStoredLine, withComputedTotals, type InvoiceLineInput } from './InvoiceLinesField'
 import { buildCreditMemoPayload } from '../lib/correction-payload'
 
 export { buildCreditMemoPayload } from '../lib/correction-payload'
@@ -37,34 +37,14 @@ function toIsoDate(date: Date | null): string | undefined {
 }
 
 /**
- * Trim a stored decimal to at most `maxDecimals`, dropping trailing zeros. Invoice lines come out of
- * the database at full scale ("1.0000", "0.0000"), which is both noisy to read and, for the discount
- * percent, outright INVALID: `isValidDiscountPercent` accepts at most two decimals, so a prefilled
- * "0.0000" made `computeLineTotals` bail and every correction row showed "Netto: — / VAT: — /
- * Brutto: —". Non-numeric input is passed through untouched.
- */
-function trimDecimals(value: string | undefined, maxDecimals: number): string | undefined {
-  if (value == null || value === '') return value
-  const n = Number(value)
-  if (!Number.isFinite(n)) return value
-  return String(Number(n.toFixed(maxDecimals)))
-}
-
-/**
  * Prefill a correction line from an original invoice line. Credit-memo semantics come from the
  * document type, NOT from negative quantities — core's `creditMemoCreateSchema` enforces
- * `quantity >= 0`, so the prefilled quantity is kept POSITIVE.
+ * `quantity >= 0`, so the prefilled quantity is kept POSITIVE. Decimal normalization (DB full-scale
+ * "0.0000" → "0", which the ≤2-decimal discount validator would otherwise reject and blank every
+ * total) is shared with the editor/detail via `normalizeStoredLine` (QA #36).
  */
 export function toCorrectionLine(line: InvoiceLineInput): InvoiceLineInput {
-  return {
-    ...line,
-    quantity: trimDecimals(line.quantity, 4) ?? line.quantity,
-    unitPriceNet: trimDecimals(line.unitPriceNet, 4) ?? line.unitPriceNet,
-    unitPriceGross: trimDecimals(line.unitPriceGross, 4),
-    // Two decimals max — anything longer fails the discount validator.
-    discountPercent: trimDecimals(line.discountPercent, 2),
-    discountAmount: trimDecimals(line.discountAmount, 2),
-  }
+  return normalizeStoredLine(line)
 }
 
 type CreditMemoResponse = {
@@ -74,7 +54,7 @@ type CreditMemoResponse = {
   error?: string
   message?: string
 }
-type FromCreditMemoResponse = { ok?: boolean; submissionId?: string; error?: string; message?: string }
+type FromCreditMemoResponse = { ok?: boolean; submissionId?: string; error?: string; message?: string; code?: string }
 
 export type CorrectionFormProps = {
   invoiceId: string
@@ -220,11 +200,21 @@ export function CorrectionForm({
             createdCreditMemoIdRef.current = id
             setCreatedCreditMemoId(id)
           }
-          const send = await apiCall<FromCreditMemoResponse>('/api/financial_pl/ksef/submissions/from-credit-memo', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ creditMemoId: id }),
-          })
+          // The credit memo was just created; its core projection can lag, so the KSeF send may
+          // return `source_not_ready` (409). Retry the SAME credit-memo id a few times before
+          // surfacing — the server send is idempotent (credit_memo active-unique index), so this
+          // never double-files the correction (QA #41).
+          const sendOnce = () =>
+            apiCall<FromCreditMemoResponse>('/api/financial_pl/ksef/submissions/from-credit-memo', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ creditMemoId: id }),
+            })
+          let send = await sendOnce()
+          for (let attempt = 0; attempt < 4 && !send.ok && send.result?.code === 'source_not_ready'; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+            send = await sendOnce()
+          }
           if (!send.ok) {
             throw new Error(
               (typeof send.result?.error === 'string' ? send.result.error : null) ??

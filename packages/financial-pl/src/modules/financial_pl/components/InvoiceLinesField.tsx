@@ -111,6 +111,23 @@ function isMarginMode(marginScheme?: MarginScheme | null): boolean {
   return Boolean(marginScheme)
 }
 
+/**
+ * Trim a stored decimal to at most `maxDecimals`, dropping trailing zeros; pass non-numeric
+ * input through untouched. Invoice values come out of the DB at full scale ("1.0000", "0.0000"),
+ * which is noisy to display and — for the discount percent — INVALID for the ≤2-decimal
+ * `isValidDiscountPercent`, so a prefilled "0.0000" made `computeLineTotals` bail and blanked
+ * every total (QA #36). Shared with `CorrectionForm` and the detail→form mappings.
+ */
+export function trimStoredDecimal(value: string | undefined): string | undefined {
+  if (value == null || value === '') return value
+  const text = value.trim()
+  // Strip trailing zeros WITHOUT rounding: "0.0000"→"0", "12.5000"→"12.5", but a genuinely
+  // over-precise "12.567" is preserved unchanged and therefore still REJECTED by the ≤2-decimal
+  // discount validator (rather than silently rounded to 12.57) — council F-09/10/11/33.
+  if (!/^-?\d+\.\d+$/.test(text)) return value
+  return text.replace(/0+$/, '').replace(/\.$/, '')
+}
+
 export function isValidDiscountPercent(value: string | undefined): boolean {
   const text = (value ?? '').trim()
   if (!text) return true
@@ -122,8 +139,28 @@ export function isValidDiscountPercent(value: string | undefined): boolean {
 function parseDiscountPercent(value: string | undefined): number | null {
   const text = (value ?? '').trim()
   if (!text) return 0
-  if (!isValidDiscountPercent(text)) return null
-  return Number(text)
+  // Strip DB-scale trailing zeros before validating so a persisted "0.0000"/"12.5000" parses instead
+  // of blanking the row (QA #36). Because stripping does NOT round, genuinely over-precise input
+  // ("12.567") is preserved and still rejected by the ≤2-decimal validator (returns null → blank).
+  const normalized = trimStoredDecimal(text) ?? text
+  if (!isValidDiscountPercent(normalized)) return null
+  return Number(normalized)
+}
+
+/**
+ * Normalize a stored invoice line's decimals to displayable/parseable scale (QA #36): quantity and
+ * unit prices to 4 dp, discount percent/amount to 2 dp. Applied when hydrating a saved invoice into
+ * the editor/detail so full-scale DB values ("0.0000") never blank the computed totals.
+ */
+export function normalizeStoredLine(line: InvoiceLineInput): InvoiceLineInput {
+  return {
+    ...line,
+    quantity: trimStoredDecimal(line.quantity) ?? line.quantity,
+    unitPriceNet: trimStoredDecimal(line.unitPriceNet) ?? line.unitPriceNet,
+    unitPriceGross: trimStoredDecimal(line.unitPriceGross),
+    discountPercent: trimStoredDecimal(line.discountPercent),
+    discountAmount: trimStoredDecimal(line.discountAmount),
+  }
 }
 
 function isDiscountPercentInputAllowed(value: string): boolean {
@@ -357,6 +394,12 @@ export function InvoiceLinesField({
   const marginMode = isMarginMode(marginScheme)
   const effectivePriceMode: PriceMode = marginMode ? 'gross' : priceMode
   const productByIdRef = React.useRef<Map<string, CatalogProduct>>(new Map())
+  // Cancels a superseded in-flight product search so a slow earlier response can't resolve after —
+  // and overwrite — a newer one (stale-result protection, QA #37).
+  const productSearchAbortRef = React.useRef<AbortController | null>(null)
+  // Monotonic request counter: the newest product search wins even if an older response resolves
+  // later — a sequence guard alongside the AbortController abort (QA #37).
+  const productSearchSeqRef = React.useRef(0)
 
   const emit = React.useCallback(
     (lines: InvoiceLineInput[]) => {
@@ -371,11 +414,19 @@ export function InvoiceLinesField({
 
   const loadProductSuggestions = React.useCallback(async (query?: string): Promise<ComboboxOption[]> => {
     const q = (query ?? '').trim()
+    // Supersede any in-flight search: abort it so its (possibly slower) response never overwrites
+    // this newer one, then pass the fresh signal to the request (QA #37).
+    productSearchAbortRef.current?.abort()
+    const controller = new AbortController()
+    productSearchAbortRef.current = controller
+    const seq = (productSearchSeqRef.current += 1)
     try {
       const url = q.length >= 2
         ? `/api/catalog/products?search=${encodeURIComponent(q)}&pageSize=10`
         : `/api/catalog/products?pageSize=10`
-      const res = await apiCall<CatalogProductsResponse>(url)
+      const res = await apiCall<CatalogProductsResponse>(url, { signal: controller.signal })
+      // Discard a superseded (stale) response even if it resolves after a newer search (#37).
+      if (seq !== productSearchSeqRef.current) return []
       const items = res.ok && Array.isArray(res.result?.items) ? res.result.items : []
       if (items.length === 0) return []
       const options: ComboboxOption[] = []
@@ -519,7 +570,10 @@ export function InvoiceLinesField({
       </div>
       {/* One bordered container with a header band and row separators — the fields were readable
           individually but did not read as a TABLE, which is what a line editor is. */}
-      <div className="overflow-hidden rounded-md border border-border/60">
+      {/* overflow-visible (not -hidden) so the product picker's absolutely-positioned dropdown can
+          escape the lines table instead of being clipped (QA #37); the FormSection wrapper is opened
+          up with `allowOverflow` for the same reason. */}
+      <div className="overflow-visible rounded-md border border-border/60">
       {/* Shared column header — replaces the label repeated on every line, which is what made the
           editor so tall. Hidden when the row stacks, where each field keeps its own label. */}
       {value.length > 0 ? (
@@ -646,7 +700,7 @@ export function InvoiceLinesField({
                   />
                   <ChevronDown
                     aria-hidden="true"
-                    className="pointer-events-none absolute right-3 top-[1.125rem] size-4 -translate-y-1/2 text-muted-foreground"
+                    className="pointer-events-none absolute right-3 top-4.5 size-4 -translate-y-1/2 text-muted-foreground"
                   />
                 </div>
               </div>

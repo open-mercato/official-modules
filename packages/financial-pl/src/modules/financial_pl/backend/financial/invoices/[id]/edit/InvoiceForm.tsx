@@ -30,6 +30,7 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Separator } from '@open-mercato/ui/primitives/separator'
+import { Alert, AlertDescription, AlertTitle } from '@open-mercato/ui/primitives/alert'
 import { FormSection } from '../../../../../components/FormSection'
 import { useInvoiceSettings } from '../../../../../components/useInvoiceSettings'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
@@ -44,7 +45,6 @@ import { de as deLocale, enUS, es as esLocale, pl as plLocale } from 'date-fns/l
 import {
   convertLinesPriceMode,
   InvoiceLinesField,
-  isValidDiscountPercent,
   withComputedTotals,
   type InvoiceLineInput,
   type MarginScheme,
@@ -63,17 +63,30 @@ import {
 } from '../../../../../components/PaymentFields'
 import { isValidPolishNip } from '../../../../../lib/nip'
 import { searchCurrencies, isValidCurrencyCode } from '../../../../../lib/currencies'
-import { isValidBankAccount } from '../../../../../lib/bank-account'
 import { normalizeNipDigits } from '../../../../../lib/company-lookup'
+import {
+  collectInvoiceFieldProblems,
+  hasAdvanceSettlementData,
+  invoiceDateProblems,
+  isAdvanceInvoiceKind,
+  pruneInvoiceFieldErrors,
+  todayInWarsaw,
+  type InvoiceFieldProblem,
+} from '../../../../../data/validators'
 
 /** Header fields edited directly through the core sales invoice contract. */
-type InvoiceHeaderValues = {
+export type InvoiceHeaderValues = {
   invoiceNumber: string
   issueDate: string
   dueDate: string
   saleDate?: string
   currencyCode: string
   orderId: string
+  signatureMode: string
+  issuerSignatory: string
+  recipientSignatory: string
+  contractNumber: string
+  transportTerms: string
 }
 
 /** Full controlled value of the invoice editor (header + buyer + lines + PL-VAT meta). */
@@ -96,7 +109,7 @@ export type InvoiceFormValue = {
   metaUpdatedAt?: string | null
 }
 
-type ControlledInvoiceFormValue = Omit<InvoiceFormValue, 'header' | 'payment' | 'priceMode'> & {
+export type ControlledInvoiceFormValue = Omit<InvoiceFormValue, 'header' | 'payment' | 'priceMode'> & {
   header: InvoiceHeaderValues & { saleDate: string }
   payment: PaymentValue
   priceMode: PriceMode
@@ -108,7 +121,10 @@ export type InvoicePreviewSnapshot = {
   invoiceNumber?: string | null
   invoiceNumberProvisional?: boolean
   signature?: { mode?: string; issuerSignatory?: string; recipientSignatory?: string }
-  header: InvoiceHeaderValues & { saleDate: string; notes?: string }
+  header: Pick<
+    InvoiceHeaderValues,
+    'invoiceNumber' | 'issueDate' | 'dueDate' | 'currencyCode' | 'orderId'
+  > & { saleDate: string; notes?: string }
   buyer: BuyerValue
   lines: InvoiceLineInput[]
   payment: PaymentValue
@@ -158,8 +174,6 @@ function isSignatureMode(v: unknown): v is SignatureMode {
   return typeof v === 'string' && (SIGNATURE_MODES as readonly string[]).includes(v)
 }
 const DEFAULT_TERM_DAYS = 14
-const ADVANCE_INVOICE_KINDS = new Set(['zal', 'roz', 'kor_zal', 'kor_roz'])
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 type InvoiceTab = 'faktura' | 'podatki' | 'uwagi' | 'dodatkowe'
 
@@ -175,7 +189,7 @@ type PaymentMetadata = {
 }
 
 function todayInput(): string {
-  return new Date().toISOString().slice(0, 10)
+  return todayInWarsaw()
 }
 
 function addDays(dateInput: string, days: number): string {
@@ -251,7 +265,7 @@ function normalizePaymentValue(value: Partial<PaymentValue> | undefined): Paymen
   return payment
 }
 
-function paymentFromMetadata(metadata: Record<string, unknown> | null | undefined): PaymentValue | undefined {
+export function paymentFromMetadata(metadata: Record<string, unknown> | null | undefined): PaymentValue | undefined {
   const source = metadata?.payment
   if (!isRecord(source)) return undefined
   return normalizePaymentValue({
@@ -271,7 +285,7 @@ function metadataDate(metadata: Record<string, unknown> | null | undefined, key:
   return typeof value === 'string' && value.trim() ? value.slice(0, 10) : ''
 }
 
-function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boolean): ControlledInvoiceFormValue {
+export function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boolean): ControlledInvoiceFormValue {
   const payment = normalizePaymentValue(
     initialValue.payment ?? paymentFromMetadata(initialValue.metadata) ?? defaultPayment(),
   )
@@ -289,6 +303,13 @@ function normalizeInvoiceFormValue(initialValue: InvoiceFormValue, isEdit: boole
       dueDate,
       saleDate,
       currencyCode,
+      signatureMode: isSignatureMode(initialValue.header.signatureMode)
+        ? initialValue.header.signatureMode
+        : DEFAULT_SIGNATURE_MODE,
+      issuerSignatory: initialValue.header.issuerSignatory ?? '',
+      recipientSignatory: initialValue.header.recipientSignatory ?? '',
+      contractNumber: initialValue.header.contractNumber ?? '',
+      transportTerms: initialValue.header.transportTerms ?? '',
     },
     lines: initialValue.lines.map((line, index) =>
       withComputedTotals(line, currencyCode, index + 1, priceMode, marginScheme),
@@ -585,7 +606,7 @@ function InvoiceTabs({
           aria-label={t('financial_pl.invoices.form.tabs.faktura', 'Invoice')}
           className={activeTab === 'faktura' ? 'mt-2 flex flex-col gap-4' : 'hidden'}
         >
-          <FormSection icon={<ListOrdered className="size-4" />} title={t('financial_pl.invoices.form.sections.lines', 'Lines')}>
+          <FormSection allowOverflow icon={<ListOrdered className="size-4" />} title={t('financial_pl.invoices.form.sections.lines', 'Lines')}>
             {isEdit ? (
               <p className="text-sm text-muted-foreground">
                 {t(
@@ -755,9 +776,11 @@ function InvoiceTabs({
               onChange={(event) => ctx.setValue('orderId', event.target.value)}
               disabled={readOnly}
               aria-label={t('financial_pl.invoices.form.fields.orderId', 'Order UUID (optional)')}
-              aria-invalid={Boolean(ctx.errors?.orderId)}
+              aria-invalid={Boolean(fieldErrors.orderId ?? ctx.errors?.orderId)}
             />
-            {ctx.errors?.orderId ? <p className="text-sm text-destructive">{ctx.errors.orderId}</p> : null}
+            {fieldErrors.orderId ?? ctx.errors?.orderId ? (
+              <p className="text-sm text-destructive">{fieldErrors.orderId ?? ctx.errors?.orderId}</p>
+            ) : null}
           </FormSection>
         </div>
       </Tabs>
@@ -775,6 +798,11 @@ export function emptyHeader(): InvoiceHeaderValues {
     saleDate: today,
     currencyCode: DEFAULT_CURRENCY,
     orderId: '',
+    signatureMode: DEFAULT_SIGNATURE_MODE,
+    issuerSignatory: '',
+    recipientSignatory: '',
+    contractNumber: '',
+    transportTerms: '',
   }
 }
 
@@ -925,7 +953,7 @@ function buildMetaPayload(
     if (body.marginPurchaseCost === '') body.marginPurchaseCost = null
     if (body.marginVatRate == null) body.marginVatRate = 23
   }
-  if (!ADVANCE_INVOICE_KINDS.has(normalizedInvoiceKind)) {
+  if (!isAdvanceInvoiceKind(normalizedInvoiceKind)) {
     body.advancePayments = []
     body.advanceRefs = []
     body.orderSnapshot = null
@@ -1057,6 +1085,7 @@ function InvoiceDetailFields({
   numberingSeries,
   numberingSeriesId,
   onNumberingSeriesChange,
+  fieldErrors,
 }: {
   ctx: CrudFormGroupComponentProps
   disabled?: boolean
@@ -1067,6 +1096,7 @@ function InvoiceDetailFields({
   numberingSeries?: InvoiceNumberingSeries[]
   numberingSeriesId?: string | null
   onNumberingSeriesChange?: (next: string | null) => void
+  fieldErrors: Record<string, string>
 }) {
   const t = useT()
   const locale = useLocale()
@@ -1106,7 +1136,7 @@ function InvoiceDetailFields({
       </div>
 
       {numberingSeries && numberingSeries.length > 0 ? (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-invalid={fieldErrors.issueDate ? 'true' : undefined}>
           <label className={labelClass} htmlFor="financial_pl-numbering-series">
             {t('financial_pl.invoices.form.fields.numberingSeries', 'Numbering series')}
           </label>
@@ -1171,29 +1201,43 @@ function InvoiceDetailFields({
             {required}
           </label>
           <DatePicker
+            id="financial_pl-issue-date"
             value={dateValue('issueDate')}
             onChange={(next) => ctx.setValue('issueDate', next ? toIsoDateLocal(next) : '')}
             disabled={disabled}
             displayFormat={PL_DATE_DISPLAY_FORMAT}
             locale={dateLocale}
+            aria-describedby={fieldErrors.issueDate ? 'financial_pl-issue-date-error' : undefined}
           />
+          {fieldErrors.issueDate ? (
+            <p id="financial_pl-issue-date-error" className="text-sm text-destructive">
+              {fieldErrors.issueDate}
+            </p>
+          ) : null}
         </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-invalid={fieldErrors.saleDate ? 'true' : undefined}>
           <label className={labelClass}>
             {t('financial_pl.invoices.form.fields.saleDate', 'Sale date (Data sprzedaży)')}
             {required}
           </label>
           <DatePicker
+            id="financial_pl-sale-date"
             value={dateValue('saleDate')}
             onChange={(next) => ctx.setValue('saleDate', next ? toIsoDateLocal(next) : '')}
             disabled={disabled}
             displayFormat={PL_DATE_DISPLAY_FORMAT}
             locale={dateLocale}
+            aria-describedby={fieldErrors.saleDate ? 'financial_pl-sale-date-error' : undefined}
           />
+          {fieldErrors.saleDate ? (
+            <p id="financial_pl-sale-date-error" className="text-sm text-destructive">
+              {fieldErrors.saleDate}
+            </p>
+          ) : null}
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2" data-invalid={fieldErrors.dueDate ? 'true' : undefined}>
         <label className={labelClass}>
           {t('financial_pl.invoices.form.fields.dueDate', 'Due date')}
         </label>
@@ -1203,6 +1247,7 @@ function InvoiceDetailFields({
           disabled={disabled}
           onChange={(next) => ctx.setValue('dueDate', next)}
         />
+        {fieldErrors.dueDate ? <p className="text-sm text-destructive">{fieldErrors.dueDate}</p> : null}
       </div>
     </div>
   )
@@ -1285,6 +1330,89 @@ function PreviewSync({
   return null
 }
 
+const RESET_SENSITIVE_HEADER_FIELDS = [
+  'invoiceNumber',
+  'issueDate',
+  'dueDate',
+  'saleDate',
+  'currencyCode',
+  'orderId',
+  'notes',
+  'signatureMode',
+  'issuerSignatory',
+  'recipientSignatory',
+  'contractNumber',
+  'transportTerms',
+] as const
+
+/**
+ * Resolve a settings currency only while every CrudForm-owned header value still matches its
+ * mount baseline. Returning null is load-bearing: changing `initialValues` after a header edit can
+ * reset unrelated fields, so an async default must never be applied once editing has begun.
+ */
+export function resolveUntouchedCurrencyDefault(
+  defaultCurrencyCode: string | null | undefined,
+  liveValues: Readonly<Record<string, unknown>>,
+  initialValues: Readonly<Record<string, unknown>>,
+): string | null {
+  const currencyCode = (defaultCurrencyCode ?? '').trim().toUpperCase()
+  if (!isValidCurrencyCode(currencyCode)) return null
+  const liveCurrency = String(liveValues.currencyCode ?? '').trim().toUpperCase()
+  if (liveCurrency !== DEFAULT_CURRENCY) return null
+  const untouched = RESET_SENSITIVE_HEADER_FIELDS.every(
+    (field) => String(liveValues[field] ?? '') === String(initialValues[field] ?? ''),
+  )
+  return untouched ? currencyCode : null
+}
+
+export function buildInvoiceCrudInitialValues(value: ControlledInvoiceFormValue): Record<string, string> {
+  return {
+    invoiceNumber: value.header.invoiceNumber,
+    issueDate: value.header.issueDate,
+    dueDate: value.header.dueDate,
+    saleDate: value.header.saleDate,
+    currencyCode: value.header.currencyCode,
+    orderId: value.header.orderId,
+    notes: value.notes ?? '',
+    signatureMode: value.header.signatureMode,
+    issuerSignatory: value.header.issuerSignatory,
+    recipientSignatory: value.header.recipientSignatory,
+    contractNumber: value.header.contractNumber,
+    transportTerms: value.header.transportTerms,
+  }
+}
+
+export function buildInvoicePreviewSnapshot(
+  value: ControlledInvoiceFormValue,
+  liveHeader: Readonly<Record<string, unknown>>,
+  suggestedNumber: string | null,
+): InvoicePreviewSnapshot {
+  const typedNumber = String(liveHeader.invoiceNumber ?? value.header.invoiceNumber ?? '').trim()
+  return {
+    invoiceNumber: typedNumber || suggestedNumber,
+    invoiceNumberProvisional: !typedNumber && Boolean(suggestedNumber),
+    signature: {
+      mode: String(liveHeader.signatureMode ?? value.header.signatureMode ?? '') || undefined,
+      issuerSignatory: String(liveHeader.issuerSignatory ?? value.header.issuerSignatory ?? '') || undefined,
+      recipientSignatory: String(liveHeader.recipientSignatory ?? value.header.recipientSignatory ?? '') || undefined,
+    },
+    header: {
+      invoiceNumber: String(liveHeader.invoiceNumber ?? value.header.invoiceNumber ?? ''),
+      issueDate: String(liveHeader.issueDate ?? value.header.issueDate ?? ''),
+      dueDate: String(liveHeader.dueDate ?? value.header.dueDate ?? ''),
+      saleDate: String(liveHeader.saleDate ?? value.header.saleDate ?? ''),
+      currencyCode: String(liveHeader.currencyCode ?? value.header.currencyCode ?? ''),
+      orderId: String(liveHeader.orderId ?? value.header.orderId ?? ''),
+      notes: String(liveHeader.notes ?? value.notes ?? ''),
+    },
+    buyer: value.buyer,
+    lines: value.lines,
+    payment: value.payment,
+    meta: value.meta,
+    notes: String(liveHeader.notes ?? value.notes ?? ''),
+  }
+}
+
 export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onPreviewChange, headerActions, asideContent }: InvoiceFormProps) {
   const t = useT()
   const router = useRouter()
@@ -1310,6 +1438,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
    * themselves show the error.
    */
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
+  const hasSubmittedRef = React.useRef(false)
   const { settings: invoiceSettings, refresh: refreshInvoiceSettings } = useInvoiceSettings()
   const bankAccounts: PaymentAccountOption[] = invoiceSettings?.bankAccounts ?? []
   const numberingSeriesOptions = React.useMemo(
@@ -1362,35 +1491,54 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   const [value, setValue] = React.useState<ControlledInvoiceFormValue>(() =>
     normalizeInvoiceFormValue(initialValue, isEdit),
   )
+  const initialCrudHeaderValuesRef = React.useRef(buildInvoiceCrudInitialValues(value))
+  const currencyDefaultAppliedRef = React.useRef(isEdit)
   React.useEffect(() => {
     if (!onPreviewChange) return
-    const typedNumber = String(liveHeader.invoiceNumber ?? value.header.invoiceNumber ?? '').trim()
-    onPreviewChange({
-      // Show the typed number, or the peek when the field is blank — so the document on screen is
-      // never nameless, while staying honest that an unsaved number is not yet assigned.
-      invoiceNumber: typedNumber || suggestedNumber,
-      invoiceNumberProvisional: !typedNumber && Boolean(suggestedNumber),
-      signature: {
-        mode: String(liveHeader.signatureMode ?? '') || undefined,
-        issuerSignatory: String(liveHeader.issuerSignatory ?? '') || undefined,
-        recipientSignatory: String(liveHeader.recipientSignatory ?? '') || undefined,
-      },
-      header: {
-        invoiceNumber: String(liveHeader.invoiceNumber ?? value.header.invoiceNumber ?? ''),
-        issueDate: String(liveHeader.issueDate ?? value.header.issueDate ?? ''),
-        dueDate: String(liveHeader.dueDate ?? value.header.dueDate ?? ''),
-        saleDate: String(liveHeader.saleDate ?? value.header.saleDate ?? ''),
-        currencyCode: String(liveHeader.currencyCode ?? value.header.currencyCode ?? ''),
-        orderId: String(liveHeader.orderId ?? value.header.orderId ?? ''),
-        notes: String(liveHeader.notes ?? value.notes ?? ''),
-      },
-      buyer: value.buyer,
-      lines: value.lines,
-      payment: value.payment,
-      meta: value.meta,
-      notes: String(liveHeader.notes ?? value.notes ?? ''),
-    })
+    onPreviewChange(buildInvoicePreviewSnapshot(value, liveHeader, suggestedNumber))
   }, [onPreviewChange, liveHeader, value, suggestedNumber])
+
+  const dateWarnings = React.useMemo(
+    () => invoiceDateProblems({
+      issueDate: String(liveHeader.issueDate ?? value.header.issueDate ?? ''),
+      saleDate: String(liveHeader.saleDate ?? value.header.saleDate ?? ''),
+      dueDate: String(liveHeader.dueDate ?? value.header.dueDate ?? ''),
+      today: todayInWarsaw(),
+      invoiceKind: value.meta.invoiceKind,
+    }).warnings,
+    [liveHeader, value.header.dueDate, value.header.issueDate, value.header.saleDate, value.meta.invoiceKind],
+  )
+
+  React.useEffect(() => {
+    if (!hasSubmittedRef.current) return
+    const currentProblems = collectInvoiceFieldProblems(
+      value,
+      {
+        issueDate: String(liveHeader.issueDate ?? value.header.issueDate ?? ''),
+        saleDate: String(liveHeader.saleDate ?? value.header.saleDate ?? ''),
+        dueDate: String(liveHeader.dueDate ?? value.header.dueDate ?? ''),
+        orderId: String(liveHeader.orderId ?? value.header.orderId ?? ''),
+      },
+      {
+        isEdit,
+        today: todayInWarsaw(),
+        priceMode: value.meta.marginScheme ? 'gross' : value.priceMode,
+        marginScheme: value.meta.marginScheme ?? null,
+      },
+    )
+    const failing = Object.fromEntries(
+      currentProblems.map((problem) => [problem.field, t(problem.messageKey)]),
+    )
+    setFieldErrors((current) => {
+      const next = pruneInvoiceFieldErrors(current, failing)
+      const currentEntries = Object.entries(current)
+      const nextEntries = Object.entries(next)
+      return currentEntries.length === nextEntries.length &&
+        currentEntries.every(([field, message]) => next[field] === message)
+        ? current
+        : next
+    })
+  }, [isEdit, liveHeader, t, value])
 
   const dueTouched = React.useRef(isEdit)
   const saleTouched = React.useRef(isEdit)
@@ -1399,6 +1547,10 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   React.useEffect(() => {
     const nextValue = normalizeInvoiceFormValue(initialValue, isEdit)
     setValue(nextValue)
+    initialCrudHeaderValuesRef.current = buildInvoiceCrudInitialValues(nextValue)
+    currencyDefaultAppliedRef.current = isEdit
+    hasSubmittedRef.current = false
+    setFieldErrors({})
     dueTouched.current = isEdit
     saleTouched.current = isEdit
     lastAutoDue.current = nextValue.header.dueDate
@@ -1532,6 +1684,40 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
     })
   }, [invoiceSettings, isEdit, readOnly])
 
+  React.useEffect(() => {
+    if (
+      isEdit ||
+      readOnly ||
+      !invoiceSettings ||
+      currencyDefaultAppliedRef.current ||
+      Object.keys(liveHeader).length === 0
+    ) {
+      return
+    }
+    currencyDefaultAppliedRef.current = true
+    const currencyCode = resolveUntouchedCurrencyDefault(
+      invoiceSettings.defaultCurrencyCode,
+      liveHeader,
+      initialCrudHeaderValuesRef.current,
+    )
+    if (!currencyCode || currencyCode === value.header.currencyCode) return
+    setValue((current) => {
+      const marginScheme = current.meta.marginScheme ?? null
+      const priceMode: PriceMode = marginScheme ? 'gross' : current.priceMode
+      return {
+        ...current,
+        header: { ...current.header, currencyCode },
+        lines: current.lines.map((line, index) => withComputedTotals(
+          { ...line, currencyCode },
+          currencyCode,
+          index + 1,
+          priceMode,
+          marginScheme,
+        )),
+      }
+    })
+  }, [invoiceSettings, isEdit, liveHeader, readOnly, value.header.currencyCode])
+
   const saveAsDraftRef = React.useRef(false)
 
   const setPriceMode = React.useCallback((priceMode: PriceMode) => {
@@ -1541,14 +1727,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   // --- Submit handler shared by create + edit -----------------------------------------------
   // Header values come straight from the CrudForm builtin fields (passed in by `onSubmit`) so the
   // payload reflects the latest edits without depending on async state propagation.
-  const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues & {
-    notes?: string
-    contractNumber?: string
-    transportTerms?: string
-    signatureMode?: string
-    issuerSignatory?: string
-    recipientSignatory?: string
-  }) => {
+  const handleSubmit = React.useCallback(async (header: InvoiceHeaderValues & { notes?: string }) => {
     if (readOnly) return
     setSubmitError(null)
     const asDraft = saveAsDraftRef.current
@@ -1565,35 +1744,14 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
       })
       if (!ok) return
     }
-    const problems: Array<{ tab: InvoiceTab; field: string; message: string }> = []
+    hasSubmittedRef.current = true
     const effectiveCurrency = header.currencyCode.trim().toUpperCase() || DEFAULT_CURRENCY
     if (!isValidCurrencyCode(effectiveCurrency)) {
       throw failSubmit(t('financial_pl.validation.currencyInvalid', 'Select a valid ISO currency code.'))
     }
-    const orderId = header.orderId.trim()
-    if (orderId && !UUID_RE.test(orderId)) {
-      problems.push({
-        tab: 'dodatkowe',
-        field: 'orderId',
-        message: t(
-          'financial_pl.validation.orderIdUuid',
-          'Order ID must be a valid UUID copied from an Open Mercato sales order.',
-        ),
-      })
-    }
     const marginScheme = value.meta.marginScheme ?? null
     const effectivePriceMode: PriceMode = marginScheme ? 'gross' : value.priceMode
     const linesPayload = buildLinesPayload(value.lines, effectiveCurrency, effectivePriceMode, marginScheme)
-    if (!isEdit) {
-      if (linesPayload.length < 1) {
-        problems.push({ tab: 'faktura', field: 'lines', message: t('financial_pl.invoices.form.linesRequired', 'Add at least one invoice line.') })
-      }
-      value.lines.forEach((line, i) => {
-        if (!line.name.trim()) {
-          problems.push({ tab: 'faktura', field: `line.${i}.name`, message: t('financial_pl.invoices.form.lineNameRequired', 'Every invoice line needs a name.') })
-        }
-      })
-    }
     if (marginScheme && effectiveCurrency !== DEFAULT_CURRENCY) {
       setActiveTab('podatki')
       throw failSubmit(
@@ -1607,65 +1765,22 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
       )
     }
 
-    // --- Commercial-grade validations (SPEC-014) — block save before a 422 at KSeF send --------
-    const issue = header.issueDate.trim()
-    const due = header.dueDate.trim()
-    if (issue && due && due < issue) {
-      problems.push({ tab: 'faktura', field: 'dueDate', message: t('financial_pl.validation.dueBeforeIssue', 'The due date cannot be earlier than the issue date.') })
-    }
-    if (!isEdit) {
-      value.lines.forEach((line, lineIndex) => {
-        const qty = Number(line.quantity)
-        if (!Number.isFinite(qty) || qty <= 0) {
-          problems.push({ tab: 'faktura', field: `line.${lineIndex}.quantity`, message: t('financial_pl.validation.quantityPositive', 'Every line needs a quantity greater than zero.') })
-        }
-        const price = Number(effectivePriceMode === 'gross' ? line.unitPriceGross : line.unitPriceNet)
-        if (!Number.isFinite(price) || price < 0) {
-          problems.push({ tab: 'faktura', field: `line.${lineIndex}.unitPrice`, message: t('financial_pl.validation.unitPricePositive', 'A line unit price cannot be negative.') })
-        }
-        if (!isValidDiscountPercent(line.discountPercent)) {
-          problems.push({ tab: 'faktura', field: `line.${lineIndex}.discount`, message: t('financial_pl.validation.discountInvalid', 'A line discount must be between 0 and 100 with up to 2 decimals.') })
-        }
-        // Every line needs a VAT rate — a quick-pick (23/8/5/0) or a numeric "Other…" value. A blank
-        // rate (e.g. "Other…" chosen but left empty) must NOT silently persist as 0%: a real 0% line is
-        // the explicit "0%" pick. Custom rates are numeric-only — zw/np/oo/text are rejected here;
-        // exemption / reverse-charge live in the Polish-VAT section (code-jury, Codex + Kimi).
-        const rateText = (line.taxRate ?? '').trim()
-        const rate = Number(rateText)
-        if (!marginScheme && (!rateText || !Number.isFinite(rate) || rate < 0 || rate > 100)) {
-          problems.push({ tab: 'faktura', field: `line.${lineIndex}.taxRate`, message: t('financial_pl.validation.vatRateNumeric', 'A line VAT rate must be a number between 0 and 100.') })
-        }
-      })
-    }
     const buyer = value.buyer ?? {}
-    // Any NON-EMPTY NIP field must be a valid Polish NIP — reject letters/garbage that normalise to ''
-    // (else buyerToSnapshot / buildMetaPayload would silently drop it) as well as a wrong checksum
-    // (code-jury r2, Codex). A blank field is fine (buyer NIP is optional outside UPR).
-    const buyerNipRaw = (buyer.nip ?? '').trim()
-    const buyerNip = normalizeNipDigits(buyerNipRaw)
-    if (buyerNipRaw && !isValidPolishNip(buyerNip)) {
-      problems.push({ tab: 'faktura', field: 'buyer.nip', message: t('financial_pl.validation.nipChecksumBuyer', 'The buyer NIP is invalid (checksum failed).') })
-    }
     const contextNipRaw = (typeof value.meta.contextNip === 'string' ? value.meta.contextNip : '').trim()
     const contextNip = normalizeNipDigits(contextNipRaw)
     if (contextNipRaw && !isValidPolishNip(contextNip)) {
       setActiveTab('podatki')
       throw failSubmit(t('financial_pl.validation.nipChecksumTaxpayer', 'The taxpayer NIP is invalid (checksum failed).'))
     }
-    // Buyer presence: a non-UPR invoice needs a name + address (matches `buildBuyer`'s 422 rule); a
-    // UPR (simplified) invoice may carry a NIP-only buyer.
     const kind = value.meta.invoiceKind ?? 'vat'
-    const hasBuyerName = Boolean(buyer.companyName && buyer.companyName.trim())
-    const hasBuyerAddress = Boolean(buyer.addressLine1 && buyer.addressLine1.trim())
-    if (kind === 'upr') {
-      // Mirror buildBuyer(uprNipOnly): a UPR buyer needs EITHER a full name + address OR a NIP — a
-      // name-only / address-only UPR buyer with no NIP still 422s at send (code-jury, Codex).
-      if (!(hasBuyerName && hasBuyerAddress) && !buyerNip) {
-        problems.push({ tab: 'faktura', field: 'buyer.companyName', message: t('financial_pl.validation.buyerRequiredUpr', 'A simplified-invoice (UPR) buyer needs either a full name + address or at least a NIP.') })
-      }
-    } else if (!hasBuyerName || !hasBuyerAddress) {
-      if (!hasBuyerName) problems.push({ tab: 'faktura', field: 'buyer.companyName', message: t('financial_pl.validation.buyerRequired', 'The buyer needs a name and an address (line 1).') })
-      if (!hasBuyerAddress) problems.push({ tab: 'faktura', field: 'buyer.addressLine1', message: t('financial_pl.validation.buyerRequired', 'The buyer needs a name and an address (line 1).') })
+    if (!isAdvanceInvoiceKind(kind) && hasAdvanceSettlementData(value.meta)) {
+      setActiveTab('podatki')
+      throw failSubmit(
+        t(
+          'financial_pl.invoices.form.advances.kindRequired',
+          'Advance payments and order data can be saved only on ZAL/ROZ invoices or their corrections. Switch the invoice kind or clear the advance data.',
+        ),
+      )
     }
     // Guard the payment term: metadata.payment.termDays must be a whole number in [0, 3650] to satisfy
     // invoicePaymentSchema. Otherwise resolve-fa3-from-invoice fail-opens on the parse error and
@@ -1683,24 +1798,19 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
         t('financial_pl.validation.termDaysRange', 'The payment term must be a whole number of days between 0 and 3650.'),
       )
     }
-    if (value.payment.method === 'transfer') {
-      const acct = (value.payment.bankAccount ?? '').trim()
-      if (acct && !isValidBankAccount(acct)) {
-        problems.push({ tab: 'faktura', field: 'payment.bankAccount', message: t('financial_pl.validation.bankAccount', 'Enter a valid IBAN or 26-digit Polish account number (NRB).') })
-      }
-    }
-    if (
-      (value.payment.paid && !cleanOptionalString(value.payment.paidDate)) ||
-      (value.payment.method === 'other' && !cleanOptionalString(value.payment.methodOther))
-    ) {
-      setActiveTab('faktura')
-      throw failSubmit(
-        t(
-          'financial_pl.errors.payment_invalid',
-          "Complete the payment details: a paid invoice needs a payment date, and 'Other' needs a description.",
-        ),
-      )
-    }
+    const problems = collectInvoiceFieldProblems(
+      value,
+      header,
+      {
+        isEdit,
+        today: todayInWarsaw(),
+        priceMode: effectivePriceMode,
+        marginScheme,
+      },
+    ).map((problem): InvoiceFieldProblem & { message: string } => ({
+      ...problem,
+      message: t(problem.messageKey),
+    }))
 
     // One gate for every field check: report them all, mark the fields, and land the operator on the
     // tab holding the first problem.
@@ -1723,7 +1833,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
         // it selected every input on the page — including the sidebar search, which is where focus
         // actually landed. Document order then picks the topmost offending field.
         const first = document.querySelector<HTMLElement>(
-          '[aria-invalid="true"], [data-invalid="true"] input',
+          '[aria-invalid="true"], [data-invalid="true"] input, [data-invalid="true"] button',
         )
         if (!first) return
         first.focus({ preventScroll: true })
@@ -1983,13 +2093,15 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
       column: 1 as const,
       bare: true,
       component: (ctx: CrudFormGroupComponentProps) => (
-        <div
-          className={
-            activeTab === 'faktura'
-              ? 'grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-stretch'
-              : 'hidden'
-          }
-        >
+        <>
+          <PreviewSync values={ctx.values} onValues={setLiveHeader} />
+          <div
+            className={
+              activeTab === 'faktura'
+                ? 'grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-stretch'
+                : 'hidden'
+            }
+          >
               <FormSection icon={<Building2 className="size-4" />} title={t('financial_pl.invoices.form.sections.buyer', 'Buyer (Nabywca)')}>
                 <BuyerFields value={value.buyer} onChange={setBuyer} disabled={readOnly} errors={fieldErrors} />
               </FormSection>
@@ -2002,6 +2114,7 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
                   suggestedNumber={suggestedNumber}
                   numberingSeries={isEdit ? undefined : numberingSeriesOptions}
                   numberingSeriesId={numberingSeriesId}
+                  fieldErrors={fieldErrors}
                   onNumberingSeriesChange={(next) => {
                     // Radix emits '' when CrudForm resets on mount — that is not an operator pick,
                     // so it must not mark the picker touched (it would block the default-preselect
@@ -2024,7 +2137,8 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
                   lastAutoDue={lastAutoDue}
                 />
               </FormSection>
-        </div>
+          </div>
+        </>
       ),
     },
     ...(asideContent
@@ -2087,21 +2201,18 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
   // CrudForm resets its controlled values whenever `initialValues` changes by identity. Keep the
   // object stable while buyer, line, payment, and tax state changes; otherwise interacting with
   // those sections can silently restore invoice dates and header fields to their mount defaults.
-  const crudInitialValues = React.useMemo(() => ({
-    invoiceNumber: value.header.invoiceNumber,
-    issueDate: value.header.issueDate,
-    dueDate: value.header.dueDate,
-    saleDate: value.header.saleDate,
-    currencyCode: value.header.currencyCode,
-    orderId: value.header.orderId,
-    notes: value.notes ?? '',
-  }), [
+  const crudInitialValues = React.useMemo(() => buildInvoiceCrudInitialValues(value), [
     value.header.invoiceNumber,
     value.header.issueDate,
     value.header.dueDate,
     value.header.saleDate,
     value.header.currencyCode,
     value.header.orderId,
+    value.header.signatureMode,
+    value.header.issuerSignatory,
+    value.header.recipientSignatory,
+    value.header.contractNumber,
+    value.header.transportTerms,
     value.notes,
   ])
 
@@ -2134,6 +2245,20 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
             <p>{submitError}</p>
           </div>
         </div>
+      ) : null}
+      {dateWarnings.length > 0 ? (
+        <Alert status="warning" style="light">
+          <AlertTitle>
+            {t('financial_pl.invoices.form.dateWarningsTitle', 'Check the invoice dates')}
+          </AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-5">
+              {dateWarnings.map((warning) => (
+                <li key={`${warning.field}:${warning.messageKey}`}>{t(warning.messageKey)}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       ) : null}
       {!isEdit ? (
         <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
@@ -2253,11 +2378,31 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
             placeholder: t('financial_pl.invoices.form.fields.currencyPlaceholder', 'Search currency (e.g. PLN, EUR)…'),
             loadOptions: async (query?: string) => searchCurrencies(query),
           },
-          { id: 'contractNumber', label: 'contractNumber', type: 'text' },
-          { id: 'transportTerms', label: 'transportTerms', type: 'text' },
-          { id: 'signatureMode', label: 'signatureMode', type: 'text' },
-          { id: 'issuerSignatory', label: 'issuerSignatory', type: 'text' },
-          { id: 'recipientSignatory', label: 'recipientSignatory', type: 'text' },
+          {
+            id: 'contractNumber',
+            label: t('financial_pl.invoices.form.fields.contractNumber', 'Contract number'),
+            type: 'text',
+          },
+          {
+            id: 'transportTerms',
+            label: t('financial_pl.invoices.form.fields.transportTerms', 'Transport terms'),
+            type: 'text',
+          },
+          {
+            id: 'signatureMode',
+            label: t('financial_pl.invoices.form.signature.mode', 'Signature note'),
+            type: 'text',
+          },
+          {
+            id: 'issuerSignatory',
+            label: t('financial_pl.invoices.form.signature.issuer', 'Person authorised to issue the invoice'),
+            type: 'text',
+          },
+          {
+            id: 'recipientSignatory',
+            label: t('financial_pl.invoices.form.signature.recipient', 'Person authorised to receive the invoice'),
+            type: 'text',
+          },
           {
             id: 'orderId',
             label: t('financial_pl.invoices.form.fields.orderId', 'Order UUID (optional)'),
@@ -2280,6 +2425,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
           currencyCode: z.string().trim().min(1),
           orderId: z.string().optional(),
           notes: z.string().optional(),
+          signatureMode: z.string().optional(),
+          issuerSignatory: z.string().optional(),
+          recipientSignatory: z.string().optional(),
+          contractNumber: z.string().optional(),
+          transportTerms: z.string().optional(),
         })}
         onSubmit={async (values) => {
           // CrudForm owns the header builtin fields; the lines + meta come from our controlled
@@ -2292,6 +2442,11 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
             currencyCode: String(values.currencyCode ?? DEFAULT_CURRENCY),
             orderId: String(values.orderId ?? ''),
             notes: String(values.notes ?? ''),
+            signatureMode: String(values.signatureMode ?? DEFAULT_SIGNATURE_MODE),
+            issuerSignatory: String(values.issuerSignatory ?? ''),
+            recipientSignatory: String(values.recipientSignatory ?? ''),
+            contractNumber: String(values.contractNumber ?? ''),
+            transportTerms: String(values.transportTerms ?? ''),
           })
         }}
       />

@@ -132,6 +132,9 @@ export function PaymentFields({ value, onChange, disabled, accounts, onCreateAcc
         delete next.bankName
         delete next.swift
       }
+      if (method !== 'other') {
+        delete next.methodOther
+      }
       onChange(next)
     },
     [onChange, value],
@@ -169,6 +172,25 @@ export function PaymentFields({ value, onChange, disabled, accounts, onCreateAcc
           due-date derivation) but is no longer asked for twice.
         */}
       </div>
+
+      {value.method === 'other' ? (
+        // "Other" needs a free-text description (FA(3) PlatnoscInna → OpisPlatnosci). Without this
+        // input the method was un-completable: selecting it left `methodOther` empty and blocked
+        // submit forever (QA #38). Required-ness is gated field-specifically in handleSubmit.
+        <div className="flex flex-col gap-2">
+          <label className={labelClass} htmlFor="financial_pl-payment-method-other">
+            {t('financial_pl.invoices.form.payment.methodOther', 'Other payment method')}
+            <span aria-hidden="true"> *</span>
+          </label>
+          <Input
+            id="financial_pl-payment-method-other"
+            value={value.methodOther ?? ''}
+            disabled={busy}
+            placeholder={t('financial_pl.invoices.form.payment.methodOtherPlaceholder', 'Describe the payment method')}
+            onChange={(event) => patch({ methodOther: event.target.value })}
+          />
+        </div>
+      ) : null}
 
       {value.method === 'transfer' ? (
         // Pick-only on the invoice: the account number is defined once in invoice settings and

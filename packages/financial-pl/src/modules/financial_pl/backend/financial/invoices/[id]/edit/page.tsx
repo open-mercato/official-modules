@@ -11,8 +11,13 @@ import { Alert, AlertDescription, AlertTitle } from '@open-mercato/ui/primitives
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { InvoiceForm, IssueCorrectionLink, type InvoiceFormValue } from './InvoiceForm'
-import { withComputedTotals, type InvoiceLineInput } from '../../../../../components/InvoiceLinesField'
+import {
+  InvoiceForm,
+  IssueCorrectionLink,
+  paymentFromMetadata,
+  type InvoiceFormValue,
+} from './InvoiceForm'
+import { normalizeStoredLine, withComputedTotals, type InvoiceLineInput } from '../../../../../components/InvoiceLinesField'
 import { buyerFromMetadata } from '../../../../../components/BuyerFields'
 import type { InvoiceMeta, MarginScheme, ProcedureMarkings } from '../../../../../components/PlVatMetaForm'
 import type { InvoiceKindColumn } from '../../../../../data/entities'
@@ -25,7 +30,7 @@ const DEFAULT_CURRENCY = 'PLN'
 const LOCKED_KSEF_STATUSES = new Set(['accepted', 'offline_issued', 'processing', 'queued'])
 
 /** Wire shape of GET /api/financial_pl/ksef/invoices/<id> ({ invoice, lines, meta, submission }). */
-type InvoiceDetailResponse = {
+export type InvoiceDetailResponse = {
   invoice?: {
     id?: string | null
     invoiceNumber?: string | null
@@ -167,6 +172,12 @@ function toDateInput(value: string | null | undefined): string {
   return value.length >= 10 ? value.slice(0, 10) : value
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
 const ALLOWED_LINE_KINDS = new Set(['product', 'service', 'shipping', 'discount', 'adjustment'])
 
 function toLineKind(value: string | null | undefined): InvoiceLineInput['kind'] {
@@ -174,9 +185,10 @@ function toLineKind(value: string | null | undefined): InvoiceLineInput['kind'] 
 }
 
 /** Map the detail response into the controlled InvoiceForm value (header + lines + meta). */
-function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
+export function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
   const currencyCode = toStr(data.invoice?.currencyCode, DEFAULT_CURRENCY) || DEFAULT_CURRENCY
   const invoiceMetadata = data.invoice?.metadata ?? null
+  const signature = asRecord(invoiceMetadata?.signature)
   const priceMode = invoiceMetadata?.priceMode === 'gross' ? 'gross' : 'net'
   const marginScheme =
     data.meta?.marginScheme && MARGIN_SCHEMES.has(data.meta.marginScheme)
@@ -187,7 +199,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
     const metadataDiscountAmount = line.metadata?.discountAmount
     const metadataDiscountPercent = line.metadata?.discountPercent
     return withComputedTotals(
-      {
+      normalizeStoredLine({
         name: toStr(line.name),
         quantity: toStr(line.quantity, '1'),
         quantityUnit: line.quantityUnit ?? '',
@@ -213,7 +225,7 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
         metadata: line.metadata ?? null,
         sku: line.sku ?? undefined,
         productId,
-      },
+      }),
       currencyCode,
       index + 1,
       priceMode,
@@ -226,12 +238,24 @@ function mapResponseToFormValue(data: InvoiceDetailResponse): InvoiceFormValue {
       invoiceNumber: toStr(data.invoice?.invoiceNumber),
       issueDate: toDateInput(data.invoice?.issueDate),
       dueDate: toDateInput(data.invoice?.dueDate),
+      saleDate: toDateInput(
+        typeof invoiceMetadata?.saleDate === 'string' ? invoiceMetadata.saleDate : undefined,
+      ),
       currencyCode,
       orderId: toStr(data.invoice?.orderId),
+      signatureMode: typeof signature?.mode === 'string' ? signature.mode : 'no_signatures',
+      issuerSignatory: typeof signature?.issuerSignatory === 'string' ? signature.issuerSignatory : '',
+      recipientSignatory:
+        typeof signature?.recipientSignatory === 'string' ? signature.recipientSignatory : '',
+      contractNumber:
+        typeof invoiceMetadata?.contractNumber === 'string' ? invoiceMetadata.contractNumber : '',
+      transportTerms:
+        typeof invoiceMetadata?.transportTerms === 'string' ? invoiceMetadata.transportTerms : '',
     },
     buyer: buyerFromMetadata(invoiceMetadata),
     lines: lines.length ? lines : [],
     meta: data.meta ? toFormMeta(wireMeta) : {},
+    payment: paymentFromMetadata(invoiceMetadata),
     priceMode,
     notes: typeof invoiceMetadata?.notes === 'string' ? invoiceMetadata.notes : '',
     metadata: invoiceMetadata,

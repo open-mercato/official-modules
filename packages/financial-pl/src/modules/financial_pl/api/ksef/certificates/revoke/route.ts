@@ -5,6 +5,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import type { CommandRuntimeContext, CommandBus } from '@open-mercato/shared/lib/commands'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
@@ -79,7 +80,7 @@ export async function POST(req: Request) {
       { status: 200 },
     )
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.ksef_certificate.revoke failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

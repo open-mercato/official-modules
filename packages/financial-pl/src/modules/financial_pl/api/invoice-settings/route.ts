@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { InvoiceSettings, type InvoiceBankAccount, type InvoiceNumberingSeries } from '../../data/entities'
@@ -26,6 +27,7 @@ const EMPTY_SETTINGS = {
   defaultPriceMode: null as string | null,
   bankAccounts: [] as InvoiceBankAccount[],
   numberingSeries: [] as InvoiceNumberingSeries[],
+  restrictInvoiceWrite: false as boolean,
   seller: null as SellerIdentity | null,
 }
 
@@ -41,6 +43,7 @@ function toDto(row: InvoiceSettings | null, seller: SellerIdentity | null) {
     defaultPriceMode: row.defaultPriceMode ?? null,
     bankAccounts: row.bankAccounts ?? [],
     numberingSeries: row.numberingSeries ?? [],
+    restrictInvoiceWrite: row.restrictInvoiceWrite ?? false,
     seller,
   }
 }
@@ -69,7 +72,7 @@ export async function GET(req: Request) {
     const seller = await readSellerIdentity(container, { organizationId, tenantId: auth.tenantId })
     return NextResponse.json({ settings: toDto(row, seller) })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     console.error('[internal] financial_pl.invoice-settings GET failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
@@ -101,6 +104,7 @@ export async function PUT(req: Request) {
     if (parsed.defaultTaxRate !== undefined) row.defaultTaxRate = parsed.defaultTaxRate
     if (parsed.defaultCurrencyCode !== undefined) row.defaultCurrencyCode = parsed.defaultCurrencyCode
     if (parsed.defaultPriceMode !== undefined) row.defaultPriceMode = parsed.defaultPriceMode
+    if (parsed.restrictInvoiceWrite !== undefined) row.restrictInvoiceWrite = parsed.restrictInvoiceWrite
     if (parsed.bankAccounts !== undefined) {
       const accounts = parsed.bankAccounts ?? []
       // Exactly one default, decided server-side: two defaults (or none, with accounts present)
@@ -127,7 +131,7 @@ export async function PUT(req: Request) {
     const seller = await readSellerIdentity(container, { organizationId, tenantId: auth.tenantId })
     return NextResponse.json({ ok: true, settings: toDto(row, seller) })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     }
@@ -144,6 +148,7 @@ const settingsSchema = z.object({
   defaultTaxRate: z.string().nullable(),
   defaultCurrencyCode: z.string().nullable(),
   defaultPriceMode: z.string().nullable(),
+  restrictInvoiceWrite: z.boolean(),
   bankAccounts: z.array(
     z.object({
       id: z.string(),

@@ -9,6 +9,12 @@ import {
   receiveSyncSchema,
   nbpRateQuerySchema,
   batchSendSchema,
+  collectInvoiceFieldProblems,
+  hasAdvanceSettlementData,
+  invoiceDateProblems,
+  isAdvanceInvoiceKind,
+  pruneInvoiceFieldErrors,
+  todayInWarsaw,
 } from '../validators'
 
 // Valid seller/buyer (10-digit + checksum-valid NIPs reused across the FA(3) test suite).
@@ -24,6 +30,174 @@ const buyer = {
   countryCode: 'PL',
   addressLine1: 'ul. Kliencka 2, 00-002 Kraków',
 } as const
+
+describe('invoice field problem collector', () => {
+  const validValue = {
+    buyer: {
+      companyName: 'Nabywca',
+      addressLine1: 'ul. Kliencka 2',
+      nip: '3755747347',
+    },
+    lines: [{
+      name: 'Pozycja',
+      quantity: '1',
+      unitPriceNet: '100',
+      unitPriceGross: '123',
+      discountPercent: '0',
+      taxRate: '23',
+    }],
+    payment: { method: 'transfer' },
+    meta: { invoiceKind: 'vat' as const },
+  }
+  const validHeader = {
+    issueDate: '2026-08-13',
+    saleDate: '2026-08-13',
+    dueDate: '2026-08-27',
+    orderId: '',
+  }
+  const options = {
+    isEdit: false,
+    today: '2026-08-13',
+    priceMode: 'net' as const,
+    marginScheme: null,
+  }
+
+  it('returns the exact field keys consumed by the invoice child editors', () => {
+    const problems = collectInvoiceFieldProblems(
+      {
+        buyer: { companyName: '', addressLine1: '', nip: '1234567890' },
+        lines: [{
+          name: '',
+          quantity: '0',
+          unitPriceNet: '-1',
+          unitPriceGross: '',
+          discountPercent: '12.567',
+          taxRate: '',
+        }],
+        payment: { method: 'other', paid: true },
+        meta: { invoiceKind: 'vat' },
+      },
+      { ...validHeader, orderId: 'not-a-uuid' },
+      options,
+    )
+
+    expect(problems.map((problem) => problem.field)).toEqual(expect.arrayContaining([
+      'orderId',
+      'line.0.name',
+      'line.0.quantity',
+      'line.0.unitPrice',
+      'line.0.discount',
+      'line.0.taxRate',
+      'buyer.nip',
+      'buyer.companyName',
+      'buyer.addressLine1',
+      'payment.paidDate',
+      'payment.methodOther',
+    ]))
+  })
+
+  it('returns no problems for a complete, valid invoice', () => {
+    expect(collectInvoiceFieldProblems(validValue, validHeader, options)).toEqual([])
+  })
+
+  it('keeps edit-only line checks out of the collector', () => {
+    const problems = collectInvoiceFieldProblems(
+      { ...validValue, lines: [] },
+      validHeader,
+      { ...options, isEdit: true },
+    )
+    expect(problems.map((problem) => problem.field)).not.toContain('lines')
+  })
+})
+
+describe('invoiceDateProblems', () => {
+  it('blocks due-before-issue and future issue dates for every invoice kind', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-14',
+      saleDate: '2026-08-20',
+      dueDate: '2026-08-13',
+      today: '2026-08-13',
+      invoiceKind: 'zal',
+    })
+    expect(result.errors.map((problem) => problem.messageKey)).toEqual(expect.arrayContaining([
+      'financial_pl.validation.dueBeforeIssue',
+      'financial_pl.validation.issueDateFuture',
+    ]))
+  })
+
+  it('blocks due-before-sale for a regular invoice', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-10',
+      saleDate: '2026-08-13',
+      dueDate: '2026-08-12',
+      today: '2026-08-13',
+      invoiceKind: 'vat',
+    })
+    expect(result.errors.map((problem) => problem.messageKey)).toContain(
+      'financial_pl.validation.dueBeforeSale',
+    )
+  })
+
+  it('warns without blocking for issue-before-sale and a future sale on a regular invoice', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-13',
+      saleDate: '2026-08-20',
+      dueDate: '2026-08-20',
+      today: '2026-08-13',
+      invoiceKind: 'vat',
+    })
+    expect(result.errors).toEqual([])
+    expect(result.warnings.map((problem) => problem.messageKey)).toEqual([
+      'financial_pl.validation.issueBeforeSaleWarning',
+      'financial_pl.validation.saleDateFutureWarning',
+    ])
+  })
+
+  it.each(['zal', 'roz', 'kor_zal', 'kor_roz'] as const)(
+    'exempts %s from due-before-sale and the non-advance warnings',
+    (invoiceKind) => {
+      const result = invoiceDateProblems({
+        issueDate: '2026-08-10',
+        saleDate: '2026-08-20',
+        dueDate: '2026-08-12',
+        today: '2026-08-13',
+        invoiceKind,
+      })
+      expect(result).toEqual({ errors: [], warnings: [] })
+    },
+  )
+
+  it('uses the Warsaw calendar day across the UTC-midnight boundary', () => {
+    const afterWarsawMidnight = new Date('2026-08-12T22:30:00.000Z')
+    const today = todayInWarsaw(afterWarsawMidnight)
+    expect(today).toBe('2026-08-13')
+    expect(invoiceDateProblems({
+      issueDate: '2026-08-13',
+      saleDate: '2026-08-13',
+      dueDate: '2026-08-13',
+      today,
+      invoiceKind: 'vat',
+    }).errors).toEqual([])
+  })
+})
+
+describe('invoice live validation helpers', () => {
+  it('prunes resolved errors and never adds a newly failing field', () => {
+    expect(pruneInvoiceFieldErrors(
+      { issueDate: 'old issue', dueDate: 'old due' },
+      { dueDate: 'current due', saleDate: 'new failure' },
+    )).toEqual({ dueDate: 'current due' })
+  })
+
+  it('detects every advance/order data shape used by the submit guard', () => {
+    expect(['zal', 'roz', 'kor_zal', 'kor_roz'].every(isAdvanceInvoiceKind)).toBe(true)
+    expect(isAdvanceInvoiceKind('vat')).toBe(false)
+    expect(hasAdvanceSettlementData({ advancePayments: [{}] })).toBe(true)
+    expect(hasAdvanceSettlementData({ advanceRefs: [{}] })).toBe(true)
+    expect(hasAdvanceSettlementData({ orderSnapshot: { lines: [] } })).toBe(true)
+    expect(hasAdvanceSettlementData({ advancePayments: [], advanceRefs: [], orderSnapshot: null })).toBe(false)
+  })
+})
 
 type InvoiceOverrides = Partial<Parameters<typeof fa3InvoiceSchema.parse>[0]>
 

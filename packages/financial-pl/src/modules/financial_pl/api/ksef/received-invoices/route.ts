@@ -6,6 +6,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import type { CommandRuntimeContext, CommandBus } from '@open-mercato/shared/lib/commands'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../lib/public-error'
 import { findAndCountWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
@@ -168,7 +169,7 @@ export async function GET(req: Request) {
       summary,
     })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.ksef received-invoices list failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -226,7 +227,7 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({ ok: true, synced: result?.synced ?? 0 }, { status: 200 })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.ksef_receive.receive_invoices failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

@@ -267,7 +267,7 @@ export function BuyerFields({ value, onChange, disabled, errors }: BuyerFieldsPr
             ? t('financial_pl.buyer.nip', 'Buyer NIP')
             : t('financial_pl.buyer.euVatId', 'Buyer EU VAT ID')}
         </label>
-        <div className="flex items-start gap-4">
+        <div className="flex flex-wrap items-start gap-4">
           <div className="flex flex-1 flex-col gap-1">
             {isPolishBuyer ? (
               <Input
@@ -315,7 +315,7 @@ export function BuyerFields({ value, onChange, disabled, errors }: BuyerFieldsPr
             </Button>
           ) : null}
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           {vatStatus ? (
             <Tag variant={vatStatusVariant(vatStatus)} dot>
               {t('financial_pl.buyer.vatStatus', 'VAT status')}: {vatStatus}

@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from 'react'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
+import type { SortingState } from '@tanstack/react-table'
 import { FileCog, Plus, Send } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -28,6 +29,7 @@ import {
 import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-badge'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { openKsefDownload } from '../../../lib/ksef-download'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { LoadingMessage } from '@open-mercato/ui/backend/detail/LoadingMessage'
@@ -290,13 +292,14 @@ export default function FinancialPlJpkPage() {
     const kod = kodUrzedu.trim()
     if (!/^\d{4}$/.test(kod)) {
       flash(
-        t('financial_pl.jpk.generate.kodUrzeduInvalid', 'A 4-digit tax-office code (kod urzędu) is required.'),
+        t('financial_pl.jpk.generate.kodUrzeduInvalid', 'A 4-digit tax-office code is required.'),
         'error',
       )
       return
     }
     const nip = contextNip.trim()
     setBusy(true)
+    let filingCreated = false
     try {
       await runMutation({
         operation: async () => {
@@ -320,6 +323,7 @@ export default function FinancialPlJpkPage() {
                 ?? t('financial_pl.jpk.filings.errors.create', 'Failed to create the JPK filing.'),
             )
           }
+          filingCreated = true
           const filingId = createCall.result.id
           // 2) Generate the XML for the freshly-created filing.
           const generateCall = await apiCall<GenerateResponse>(
@@ -338,19 +342,27 @@ export default function FinancialPlJpkPage() {
         mutationPayload: { action: 'generate', variant, year, month, kodUrzedu: kod, contextNip: nip || null },
       })
       flash(t('financial_pl.jpk.filings.messages.generated', 'JPK filing generated.'), 'success')
-      refresh()
     } catch (err) {
+      const message = err instanceof Error ? err.message : t('financial_pl.jpk.filings.errors.generate', 'Failed to generate the JPK XML.')
+      // If the header was created but generation failed, show a partial-success message; the finally
+      // block still refreshes so the created filing is visible for a manual re-generate (QA #34).
       flash(
-        err instanceof Error ? err.message : t('financial_pl.jpk.filings.errors.generate', 'Failed to generate the JPK XML.'),
+        filingCreated
+          ? t('financial_pl.jpk.filings.messages.createdNotGenerated', 'The JPK filing was created, but generating its XML failed. Retry generation from the list.')
+          : message,
         'error',
       )
     } finally {
+      // Refresh once the filing header exists — even if generation failed — so a created-but-not-
+      // generated filing is not hidden until a manual reload (QA #34).
+      if (filingCreated) refresh()
       setBusy(false)
     }
   }, [contextNip, kodUrzedu, month, mutationContext, refresh, runMutation, t, variant, year])
 
-  // Download streams the already-generated XML — window.open the GET endpoint. A draft filing
-  // has no XML yet (the GET would 422), so prompt the operator to generate it first.
+  // Download streams the already-generated XML via the blob-aware `openKsefDownload` helper (a JSON
+  // error becomes a toast, not raw JSON in a tab). A draft filing has no XML yet (the GET would 422),
+  // so prompt the operator to generate it first.
   const [generatingFilingId, setGeneratingFilingId] = React.useState<string | null>(null)
 
   const handleGenerateXml = React.useCallback(
@@ -379,8 +391,7 @@ export default function FinancialPlJpkPage() {
   )
 
   const handleDownload = React.useCallback(
-    (row: FilingRow) => {
-      if (typeof window === 'undefined') return
+    async (row: FilingRow) => {
       if (row.status === 'draft') {
         flash(
           t('financial_pl.jpk.filings.errors.notGenerated', 'Generate the filing before downloading its XML.'),
@@ -388,15 +399,22 @@ export default function FinancialPlJpkPage() {
         )
         return
       }
-      window.open(`/api/financial_pl/ksef/jpk/export?filingId=${encodeURIComponent(row.id)}`, '_blank', 'noopener')
+      // Blob-aware download so a JSON error is a translated toast, not raw JSON in a tab (QA #39).
+      const outcome = await openKsefDownload(`/api/financial_pl/ksef/jpk/export?filingId=${encodeURIComponent(row.id)}`)
+      if (!outcome.ok) {
+        flash(outcome.error ?? t('financial_pl.errors.actionFailed', 'Could not download the JPK XML.'), 'error')
+      }
     },
     [t],
   )
 
-  const handleUpoDownload = React.useCallback((row: FilingRow) => {
-    if (typeof window === 'undefined' || row.status !== 'submitted' || !row.hasUpo) return
-    window.open(`/api/financial_pl/ksef/jpk/upo?filingId=${encodeURIComponent(row.id)}`, '_blank', 'noopener')
-  }, [])
+  const handleUpoDownload = React.useCallback(async (row: FilingRow) => {
+    if (row.status !== 'submitted' || !row.hasUpo) return
+    const outcome = await openKsefDownload(`/api/financial_pl/ksef/jpk/upo?filingId=${encodeURIComponent(row.id)}`)
+    if (!outcome.ok) {
+      flash(outcome.error ?? t('financial_pl.errors.actionFailed', 'Could not open the UPO.'), 'error')
+    }
+  }, [t])
 
   const handleSubmit = React.useCallback(
     async (row: FilingRow) => {

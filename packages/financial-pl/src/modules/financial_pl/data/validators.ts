@@ -6,6 +6,7 @@ import { GTU_CODES, JPK_PROCEDURE_MARKINGS, JPK_TYP_DOKUMENTU, type JpkProcedure
 import { SERIES_FORMAT_MAX_LENGTH, validateSeriesFormat, validateSeriesList } from '../lib/invoice-numbering'
 import { DEFAULT_INVOICE_NUMBER_FORMAT } from '@open-mercato/core/modules/sales/lib/documentNumberTokens'
 import type { AdvanceInvoiceRef, AdvancePaymentSnapshot, InvoiceKindColumn, OrderSnapshot } from './entities'
+import { isValidBankAccount } from '../lib/bank-account'
 
 // 10 digits AND a valid NIP checksum, so a malformed NIP is rejected with a clear 422
 // before send rather than silently dropped into a `<BrakID>` filing or bounced by KSeF.
@@ -30,6 +31,264 @@ const optionalMoneySchema = z
   .regex(/^(-?\d+(\.\d{1,2})?)?$/, 'Amount must be a decimal with up to 2 fraction digits')
   .optional()
 const marginSchemeSchema = z.enum(['travel', 'used_goods', 'art', 'collectibles'])
+
+const INVOICE_KINDS = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'] as const satisfies readonly InvoiceKindColumn[]
+export const ADVANCE_INVOICE_KINDS = ['zal', 'roz', 'kor_zal', 'kor_roz'] as const satisfies readonly InvoiceKindColumn[]
+const ADVANCE_INVOICE_KIND_SET: ReadonlySet<string> = new Set(ADVANCE_INVOICE_KINDS)
+
+/** Whether FA(3) permits advance/settlement data for this invoice kind. */
+export function isAdvanceInvoiceKind(invoiceKind: InvoiceKindColumn | string | null | undefined): boolean {
+  return typeof invoiceKind === 'string' && ADVANCE_INVOICE_KIND_SET.has(invoiceKind.trim().toLowerCase())
+}
+
+/** "Today" in the Polish tax timezone, never the server/browser's UTC calendar day. */
+export function todayInWarsaw(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(now)
+}
+
+const invoiceDateProblemInputSchema = z.object({
+  issueDate: z.string().optional(),
+  saleDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  today: z.string(),
+  invoiceKind: z.enum(INVOICE_KINDS).optional(),
+})
+export type InvoiceDateProblemInput = z.infer<typeof invoiceDateProblemInputSchema>
+
+const invoiceFieldCollectorValueSchema = z.object({
+  buyer: z.object({
+    companyName: z.string().optional(),
+    addressLine1: z.string().optional(),
+    nip: z.string().optional(),
+  }),
+  lines: z.array(z.object({
+    name: z.string(),
+    quantity: z.string(),
+    unitPriceNet: z.string(),
+    unitPriceGross: z.string().optional(),
+    discountPercent: z.string().optional(),
+    taxRate: z.string().optional(),
+  })),
+  payment: z.object({
+    method: z.string(),
+    methodOther: z.string().optional(),
+    bankAccount: z.string().optional(),
+    paid: z.boolean().optional(),
+    paidDate: z.string().optional(),
+  }),
+  meta: z.object({ invoiceKind: z.enum(INVOICE_KINDS).optional() }),
+})
+export type InvoiceFieldCollectorValue = z.infer<typeof invoiceFieldCollectorValueSchema>
+
+const invoiceFieldCollectorHeaderSchema = z.object({
+  issueDate: z.string().optional(),
+  saleDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  orderId: z.string().optional(),
+})
+export type InvoiceFieldCollectorHeader = z.infer<typeof invoiceFieldCollectorHeaderSchema>
+
+const invoiceFieldCollectorOptionsSchema = z.object({
+  isEdit: z.boolean(),
+  today: z.string(),
+  priceMode: z.enum(['net', 'gross']),
+  marginScheme: marginSchemeSchema.nullable(),
+})
+export type InvoiceFieldCollectorOptions = z.infer<typeof invoiceFieldCollectorOptionsSchema>
+
+export type InvoiceProblemMessageKey =
+  | 'financial_pl.invoices.form.linesRequired'
+  | 'financial_pl.invoices.form.lineNameRequired'
+  | 'financial_pl.validation.orderIdUuid'
+  | 'financial_pl.validation.dueBeforeIssue'
+  | 'financial_pl.validation.issueDateFuture'
+  | 'financial_pl.validation.dueBeforeSale'
+  | 'financial_pl.validation.issueBeforeSaleWarning'
+  | 'financial_pl.validation.saleDateFutureWarning'
+  | 'financial_pl.validation.quantityPositive'
+  | 'financial_pl.validation.unitPricePositive'
+  | 'financial_pl.validation.discountInvalid'
+  | 'financial_pl.validation.vatRateNumeric'
+  | 'financial_pl.validation.nipChecksumBuyer'
+  | 'financial_pl.validation.buyerRequiredUpr'
+  | 'financial_pl.validation.buyerRequired'
+  | 'financial_pl.validation.bankAccount'
+  | 'financial_pl.validation.paidDateRequired'
+  | 'financial_pl.validation.methodOtherRequired'
+
+export type InvoiceFieldProblem = {
+  tab: 'faktura' | 'podatki' | 'uwagi' | 'dodatkowe'
+  field: string
+  messageKey: InvoiceProblemMessageKey
+}
+
+function invoiceProblem(
+  tab: InvoiceFieldProblem['tab'],
+  field: string,
+  messageKey: InvoiceProblemMessageKey,
+): InvoiceFieldProblem {
+  return { tab, field, messageKey }
+}
+
+/** One shared date cross-check for hard errors and lawful-but-unusual warnings. */
+export function invoiceDateProblems(input: InvoiceDateProblemInput): {
+  errors: InvoiceFieldProblem[]
+  warnings: InvoiceFieldProblem[]
+} {
+  const issueDate = (input.issueDate ?? '').trim()
+  const saleDate = (input.saleDate ?? '').trim()
+  const dueDate = (input.dueDate ?? '').trim()
+  const today = input.today.trim()
+  const advanceKind = isAdvanceInvoiceKind(input.invoiceKind)
+  const errors: InvoiceFieldProblem[] = []
+  const warnings: InvoiceFieldProblem[] = []
+
+  if (issueDate && dueDate && dueDate < issueDate) {
+    errors.push(invoiceProblem('faktura', 'dueDate', 'financial_pl.validation.dueBeforeIssue'))
+  }
+  if (issueDate && today && issueDate > today) {
+    errors.push(invoiceProblem('faktura', 'issueDate', 'financial_pl.validation.issueDateFuture'))
+  }
+  if (!advanceKind && saleDate && dueDate && dueDate < saleDate) {
+    errors.push(invoiceProblem('faktura', 'dueDate', 'financial_pl.validation.dueBeforeSale'))
+  }
+  if (!advanceKind && issueDate && saleDate && issueDate < saleDate) {
+    warnings.push(invoiceProblem('faktura', 'saleDate', 'financial_pl.validation.issueBeforeSaleWarning'))
+  }
+  if (!advanceKind && saleDate && today && saleDate > today) {
+    warnings.push(invoiceProblem('faktura', 'saleDate', 'financial_pl.validation.saleDateFutureWarning'))
+  }
+
+  return { errors, warnings }
+}
+
+function isValidDiscountPercentForInvoice(value: string | undefined): boolean {
+  const text = (value ?? '').trim()
+  if (!text) return true
+  if (!/^\d{1,3}(?:\.\d{0,2})?$/.test(text)) return false
+  const numeric = Number(text)
+  return Number.isFinite(numeric) && numeric >= 0 && numeric <= 100
+}
+
+/**
+ * Field-addressable invoice checks shared by submit and live error pruning.
+ * Submit-only hard stops (currency/margin/taxpayer/term-days/advance-kind) deliberately stay in
+ * the submit handler and are not part of this collector.
+ */
+export function collectInvoiceFieldProblems(
+  value: InvoiceFieldCollectorValue,
+  header: InvoiceFieldCollectorHeader,
+  options: InvoiceFieldCollectorOptions,
+): InvoiceFieldProblem[] {
+  const problems: InvoiceFieldProblem[] = []
+  const orderId = (header.orderId ?? '').trim()
+  if (orderId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)) {
+    problems.push(invoiceProblem('dodatkowe', 'orderId', 'financial_pl.validation.orderIdUuid'))
+  }
+
+  if (!options.isEdit) {
+    if (value.lines.length < 1) {
+      problems.push(invoiceProblem('faktura', 'lines', 'financial_pl.invoices.form.linesRequired'))
+    }
+    value.lines.forEach((line, index) => {
+      if (!line.name.trim()) {
+        problems.push(invoiceProblem('faktura', `line.${index}.name`, 'financial_pl.invoices.form.lineNameRequired'))
+      }
+    })
+  }
+
+  problems.push(...invoiceDateProblems({
+    issueDate: header.issueDate,
+    saleDate: header.saleDate,
+    dueDate: header.dueDate,
+    today: options.today,
+    invoiceKind: value.meta.invoiceKind,
+  }).errors)
+
+  if (!options.isEdit) {
+    value.lines.forEach((line, index) => {
+      const quantity = Number(line.quantity)
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        problems.push(invoiceProblem('faktura', `line.${index}.quantity`, 'financial_pl.validation.quantityPositive'))
+      }
+      const unitPrice = Number(options.priceMode === 'gross' ? line.unitPriceGross : line.unitPriceNet)
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        problems.push(invoiceProblem('faktura', `line.${index}.unitPrice`, 'financial_pl.validation.unitPricePositive'))
+      }
+      if (!isValidDiscountPercentForInvoice(line.discountPercent)) {
+        problems.push(invoiceProblem('faktura', `line.${index}.discount`, 'financial_pl.validation.discountInvalid'))
+      }
+      const taxRateText = (line.taxRate ?? '').trim()
+      const taxRate = Number(taxRateText)
+      if (
+        !options.marginScheme &&
+        (!taxRateText || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)
+      ) {
+        problems.push(invoiceProblem('faktura', `line.${index}.taxRate`, 'financial_pl.validation.vatRateNumeric'))
+      }
+    })
+  }
+
+  const buyerNipRaw = (value.buyer.nip ?? '').trim()
+  const buyerNip = buyerNipRaw.replace(/\D/g, '')
+  if (buyerNipRaw && !isValidPolishNip(buyerNip)) {
+    problems.push(invoiceProblem('faktura', 'buyer.nip', 'financial_pl.validation.nipChecksumBuyer'))
+  }
+  const hasBuyerName = Boolean(value.buyer.companyName?.trim())
+  const hasBuyerAddress = Boolean(value.buyer.addressLine1?.trim())
+  if ((value.meta.invoiceKind ?? 'vat') === 'upr') {
+    if (!(hasBuyerName && hasBuyerAddress) && !buyerNip) {
+      problems.push(invoiceProblem('faktura', 'buyer.companyName', 'financial_pl.validation.buyerRequiredUpr'))
+    }
+  } else if (!hasBuyerName || !hasBuyerAddress) {
+    if (!hasBuyerName) {
+      problems.push(invoiceProblem('faktura', 'buyer.companyName', 'financial_pl.validation.buyerRequired'))
+    }
+    if (!hasBuyerAddress) {
+      problems.push(invoiceProblem('faktura', 'buyer.addressLine1', 'financial_pl.validation.buyerRequired'))
+    }
+  }
+
+  if (value.payment.method === 'transfer') {
+    const bankAccount = (value.payment.bankAccount ?? '').trim()
+    if (bankAccount && !isValidBankAccount(bankAccount)) {
+      problems.push(invoiceProblem('faktura', 'payment.bankAccount', 'financial_pl.validation.bankAccount'))
+    }
+  }
+  if (value.payment.paid && !(value.payment.paidDate ?? '').trim()) {
+    problems.push(invoiceProblem('faktura', 'payment.paidDate', 'financial_pl.validation.paidDateRequired'))
+  }
+  if (value.payment.method === 'other' && !(value.payment.methodOther ?? '').trim()) {
+    problems.push(invoiceProblem('faktura', 'payment.methodOther', 'financial_pl.validation.methodOtherRequired'))
+  }
+
+  return problems
+}
+
+/** True when changing away from an advance kind would otherwise silently discard entered data. */
+export function hasAdvanceSettlementData(value: {
+  advancePayments?: readonly unknown[]
+  advanceRefs?: readonly unknown[]
+  orderSnapshot?: unknown | null
+}): boolean {
+  return (
+    (value.advancePayments?.length ?? 0) > 0 ||
+    (value.advanceRefs?.length ?? 0) > 0 ||
+    value.orderSnapshot != null
+  )
+}
+
+/** Remove resolved errors without ever introducing a new error before another submit. */
+export function pruneInvoiceFieldErrors(
+  current: Readonly<Record<string, string>>,
+  failing: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.keys(current)
+      .filter((field) => Object.prototype.hasOwnProperty.call(failing, field))
+      .map((field) => [field, failing[field]]),
+  )
+}
 
 // FA(3) simplified-invoice (UPR) statutory threshold: total ≤ 450 PLN (art. 106e ust. 5 pkt 3).
 // An EUR/OSS invoice is PLN-converted via the resolved rate for the threshold check, or
@@ -631,8 +890,16 @@ export const jpkPurchaseRecordUpsertSchema = z.object({
   supplierCountryCode: z.string().length(2).optional(),
   supplierName: z.string().min(1).max(512).optional(),
   documentNumber: z.string().min(1).max(256),
-  purchaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  receiptDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Reject future purchase/receipt dates — a purchase cannot be recorded before it happens (QA warning).
+  purchaseDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((v) => v <= todayInWarsaw(), 'The purchase date cannot be in the future.'),
+  receiptDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((v) => v <= todayInWarsaw(), 'The receipt date cannot be in the future.')
+    .optional(),
   documentType: z.enum(['MK', 'VAT_RR', 'WEW']).optional(),
   imp: z.boolean().optional(),
   ksefMarking: z.enum(['NrKSeF', 'OFF', 'BFK', 'DI']).optional(),
@@ -727,8 +994,6 @@ export const ksefCertificateRevokeSchema = z.object({
 })
 
 // --- Invoice PL VAT metadata PUT body (SPEC-009) ----------------------------------------------
-const INVOICE_KINDS = ['vat', 'zal', 'roz', 'upr', 'kor_zal', 'kor_roz'] as const satisfies readonly InvoiceKindColumn[]
-
 const advancePaymentSchema = z.object({
   receivedDate: z.string().min(1).max(40),
   amount: z.string().min(1).max(40),
@@ -903,6 +1168,8 @@ export const invoiceSettingsPutSchema = z.object({
   defaultTaxRate: z.string().max(10).nullish(),
   defaultCurrencyCode: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).nullish(),
   defaultPriceMode: z.enum(['net', 'gross']).nullish(),
+  // QA #35 — opt-in: when true, only roles with `financial_pl.invoices.manage` may create/edit invoices.
+  restrictInvoiceWrite: z.boolean().nullish(),
   bankAccounts: z
     .array(
       z.object({

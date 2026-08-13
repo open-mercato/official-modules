@@ -65,14 +65,15 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/shared": "0.6.6-develop.6366.1.fba69a7362",
-    "@open-mercato/ui": "0.6.6-develop.6366.1.fba69a7362",
+    "@open-mercato/shared": "0.6.8-develop.6931.1.4a1e1c786b",
+    "@open-mercato/ui": "0.6.8-develop.6931.1.4a1e1c786b",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "jest": "^30.2.0",
-    "react": "19.2.1",
-    "react-dom": "19.2.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-is": "^19.2.8",
     "ts-jest": "^29.4.6",
     "typescript": "^5.9.3"
   },

@@ -9,6 +9,7 @@ import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuarde
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { hasAllFeatures } from '@open-mercato/shared/security/features'
+import { openKsefDownload } from '../lib/ksef-download'
 
 /** The latest KSeF submission for the invoice, as resolved by the host page. */
 export type KsefSubmissionSummary = {
@@ -153,17 +154,23 @@ export function KsefActions({ invoiceId, submission, features, onChanged }: Ksef
     })
   }, [confirm, runAction, invoiceId, t])
 
-  const openPdf = React.useCallback(() => {
-    if (typeof window === 'undefined') return
-    const href = `/api/financial_pl/ksef/invoice-pdf?salesInvoiceId=${encodeURIComponent(invoiceId)}`
-    window.open(href, '_blank', 'noopener,noreferrer')
-  }, [invoiceId])
+  const openPdf = React.useCallback(async () => {
+    // Blob-aware download via the sanctioned client: a JSON error (e.g. 422 seller_required, whose
+    // message already points at the KSeF seller configuration) is shown as a translated toast instead
+    // of rendering raw JSON in a new tab (QA #39).
+    const outcome = await openKsefDownload(`/api/financial_pl/ksef/invoice-pdf?salesInvoiceId=${encodeURIComponent(invoiceId)}`)
+    if (!outcome.ok) {
+      flash(outcome.error ?? t('financial_pl.errors.actionFailed', 'Could not open the invoice PDF.'), 'error')
+    }
+  }, [invoiceId, t])
 
-  const openUpo = React.useCallback(() => {
-    if (typeof window === 'undefined' || !upoTarget) return
-    const href = `/api/financial_pl/ksef/submissions/upo?id=${encodeURIComponent(upoTarget.id)}`
-    window.open(href, '_blank', 'noopener,noreferrer')
-  }, [upoTarget])
+  const openUpo = React.useCallback(async () => {
+    if (!upoTarget) return
+    const outcome = await openKsefDownload(`/api/financial_pl/ksef/submissions/upo?id=${encodeURIComponent(upoTarget.id)}`)
+    if (!outcome.ok) {
+      flash(outcome.error ?? t('financial_pl.errors.actionFailed', 'Could not open the UPO.'), 'error')
+    }
+  }, [upoTarget, t])
 
   return (
     <div className="flex flex-wrap items-center gap-2">

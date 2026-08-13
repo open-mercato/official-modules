@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { companyLookupQuerySchema } from '../../../data/validators'
 import { lookupCompanyByNip } from '../../../lib/company-lookup'
@@ -48,7 +49,7 @@ export async function GET(req: Request) {
     // unavailable / not_found ⇒ fail-open 200 so the editor shows a non-blocking notice.
     return NextResponse.json({ ok: false, reason: result.reason })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     console.error('[internal] financial_pl.company-lookup failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

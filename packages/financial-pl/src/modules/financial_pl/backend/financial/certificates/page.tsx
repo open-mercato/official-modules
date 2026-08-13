@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from 'react'
-import type { ColumnDef } from '@tanstack/react-table'
+import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { ShieldPlus } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -34,6 +34,12 @@ import { LoadingMessage } from '@open-mercato/ui/backend/detail/LoadingMessage'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { hasAllFeatures } from '@open-mercato/shared/security/features'
+import {
+  CertificateListFailureState,
+  CredentialHealthTokenIndicator,
+  resolveCertificateListFailure,
+  type CertificateListFailure,
+} from './CertificateStates'
 
 type CertificateType = 'Authentication' | 'Offline'
 
@@ -102,7 +108,7 @@ export default function FinancialPlCertificatesPage() {
 
   const [rows, setRows] = React.useState<CertificateRow[]>([])
   const [isLoading, setLoading] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
+  const [listFailure, setListFailure] = React.useState<CertificateListFailure | null>(null)
   const [health, setHealth] = React.useState<CredentialHealthResponse | null>(null)
   const [healthLoading, setHealthLoading] = React.useState(false)
   const [healthError, setHealthError] = React.useState<string | null>(null)
@@ -141,16 +147,11 @@ export default function FinancialPlCertificatesPage() {
 
   const loadCertificates = React.useCallback(async () => {
     setLoading(true)
-    setError(null)
+    setListFailure(null)
     try {
       const call = await apiCall<CertificateListResponse>('/api/financial_pl/ksef/certificates')
       if (!call.ok) {
-        // 409 = no certificate credential configured: surface a friendly, recoverable message.
-        const message =
-          call.status === 409
-            ? t('financial_pl.certificates.errors.noCredential', 'No KSeF certificate credential is configured for this organization.')
-            : t('financial_pl.certificates.errors.load', 'Failed to load KSeF certificates.')
-        setError(message)
+        setListFailure(resolveCertificateListFailure(call.status))
         setRows([])
         return
       }
@@ -168,7 +169,7 @@ export default function FinancialPlCertificatesPage() {
       )
     } catch (err) {
       console.error('financial_pl.certificates.load', err)
-      setError(t('financial_pl.certificates.errors.load', 'Failed to load KSeF certificates.'))
+      setListFailure('error')
     } finally {
       setLoading(false)
     }
@@ -208,12 +209,18 @@ export default function FinancialPlCertificatesPage() {
     setEnrollOpen(true)
   }, [])
 
+  const enrollInFlightRef = React.useRef(false)
   const handleEnroll = React.useCallback(async () => {
     const certificateName = enrollName.trim()
     if (!certificateName) {
       flash(t('financial_pl.certificates.enroll.errors.nameRequired', 'A certificate name is required.'), 'error')
       return
     }
+    // Enroll-scoped in-flight guard: the shared `busy` flag is also used by revoke and is only set
+    // after the name check, so a rapid double-submit could fire two identical enroll requests (QA
+    // cert-dedup warning). This ref is dedicated to enroll and set before any await.
+    if (enrollInFlightRef.current) return
+    enrollInFlightRef.current = true
     setBusy(true)
     try {
       await runMutation({
@@ -245,6 +252,7 @@ export default function FinancialPlCertificatesPage() {
         'error',
       )
     } finally {
+      enrollInFlightRef.current = false
       setBusy(false)
     }
   }, [enrollName, enrollType, mutationContext, refresh, runMutation, t])
@@ -416,32 +424,12 @@ export default function FinancialPlCertificatesPage() {
                 </Tag>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
-                <div className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-background p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium">{t('financial_pl.credentialHealth.token', 'Token')}</span>
-                    <Tag
-                      variant={
-                        !health.token.present
-                          ? 'neutral'
-                          : health.token.daysToSunset !== null && health.token.daysToSunset < 60
-                            ? 'warning'
-                            : 'info'
-                      }
-                      dot
-                    >
-                      {!health.token.present
-                        ? t('financial_pl.credentialHealth.missing', 'Missing')
-                        : health.token.daysToSunset !== null && health.token.daysToSunset < 60
-                          ? t('financial_pl.credentialHealth.sunsetSoon', 'Sunset soon')
-                          : t('financial_pl.credentialHealth.configured', 'Configured')}
-                    </Tag>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {health.token.present
-                      ? `${t('financial_pl.credentialHealth.tokenSunset', 'Sunset')} ${formatDate(health.token.sunsetDate)}${formatDays(health.token.daysToSunset)}`
-                      : t('financial_pl.credentialHealth.notConfigured', 'Not configured')}
-                  </span>
-                </div>
+                <CredentialHealthTokenIndicator
+                  token={health.token}
+                  formatDate={formatDate}
+                  formatDays={formatDays}
+                  t={t}
+                />
                 {renderCertificateHealth(
                   t('financial_pl.credentialHealth.authCert', 'Authentication certificate'),
                   health.authCert,
@@ -453,8 +441,8 @@ export default function FinancialPlCertificatesPage() {
               </div>
             </div>
           ) : null}
-          {error ? (
-            <ErrorMessage label={error} />
+          {listFailure === 'error' ? (
+            <CertificateListFailureState failure={listFailure} t={t} />
           ) : (
             <DataTable<CertificateRow>
               stickyActionsColumn
@@ -497,9 +485,13 @@ export default function FinancialPlCertificatesPage() {
                 ) : null
               }
               emptyState={
-                <div className="py-10 text-center text-sm text-muted-foreground">
-                  {t('financial_pl.certificates.empty', 'No KSeF certificates yet.')}
-                </div>
+                listFailure === 'certificate-missing' ? (
+                  <CertificateListFailureState failure={listFailure} t={t} />
+                ) : (
+                  <div className="py-10 text-center text-sm text-muted-foreground">
+                    {t('financial_pl.certificates.empty', 'No KSeF certificates yet.')}
+                  </div>
+                )
               }
             />
           )}

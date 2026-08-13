@@ -5,6 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
@@ -23,6 +24,7 @@ export const metadata = {
 const KSEF_SUBMISSION_STATUSES: ReadonlySet<KsefSubmissionStatusColumn> = new Set([
   'not_applicable', 'ready', 'queued', 'processing', 'accepted', 'rejected', 'offline_issued',
 ])
+const ISSUED_KSEF_SUBMISSION_STATUSES: readonly KsefSubmissionStatusColumn[] = ['accepted', 'offline_issued']
 
 /**
  * Narrow query-engine surface this route depends on. financial_pl reads core sales data ONLY through
@@ -230,11 +232,56 @@ export async function GET(req: Request) {
       restrictInvoiceIds = statusInvoiceIds ?? kindInvoiceIds
     }
 
+    // Core sales_invoice.status is not populated by this module. Its document lifecycle is derived
+    // from our own issuance signal instead: any accepted/offline-issued invoice is "issued", and
+    // every other invoice is "draft". Resolve that scoped set before querying core so the two UI
+    // values form a complete partition without post-filtering (which would corrupt total/pagination).
+    let acceptedInvoiceIds: string[] | null = null
+    if (documentStatus) {
+      if (documentStatus !== 'draft' && documentStatus !== 'issued') {
+        throw new CrudHttpError(400, { error: 'Invalid document status filter' })
+      }
+      const decryptionScope = {
+        tenantId: auth.tenantId,
+        organizationId: Array.isArray(organizationIds) && organizationIds.length === 1 ? organizationIds[0] : null,
+      }
+      const acceptedRows = await findWithDecryption(
+        em,
+        KsefSubmission,
+        {
+          status: { $in: [...ISSUED_KSEF_SUBMISSION_STATUSES] },
+          documentKind: 'invoice',
+          tenantId: auth.tenantId,
+          ...(organizationIds ? { organizationId: { $in: organizationIds } } : {}),
+          deletedAt: null,
+        },
+        { fields: ['salesInvoiceId'] },
+        decryptionScope,
+      )
+      acceptedInvoiceIds = Array.from(new Set(acceptedRows.map((row) => row.salesInvoiceId)))
+      if (documentStatus === 'issued') {
+        if (acceptedInvoiceIds.length === 0) {
+          return NextResponse.json({ items: [], total: 0, page, pageSize, summary: EMPTY_SUMMARY })
+        }
+        if (restrictInvoiceIds) {
+          const acceptedSet = new Set(acceptedInvoiceIds)
+          restrictInvoiceIds = restrictInvoiceIds.filter((id) => acceptedSet.has(id))
+          if (restrictInvoiceIds.length === 0) {
+            return NextResponse.json({ items: [], total: 0, page, pageSize, summary: EMPTY_SUMMARY })
+          }
+        } else {
+          restrictInvoiceIds = acceptedInvoiceIds
+        }
+      }
+    }
+
     const queryEngine = container.resolve('queryEngine') as InvoiceListQueryEngine
     const filters: Record<string, unknown> = {}
     if (search) filters.invoice_number = { $ilike: `%${escapeLikePattern(search)}%` }
-    if (restrictInvoiceIds) filters.id = { $in: restrictInvoiceIds }
-    if (documentStatus) filters.status = documentStatus
+    const idFilter: Record<string, string[]> = {}
+    if (restrictInvoiceIds) idFilter.$in = restrictInvoiceIds
+    if (documentStatus === 'draft' && acceptedInvoiceIds?.length) idFilter.$nin = acceptedInvoiceIds
+    if (Object.keys(idFilter).length > 0) filters.id = idFilter
     if (issueDateFrom || issueDateTo) {
       const range: Record<string, string> = {}
       if (issueDateFrom) range.$gte = issueDateFrom
@@ -406,7 +453,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ items, total, page, pageSize, summary })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.ksef invoices list failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -451,7 +498,7 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'List sales invoices with their KSeF status',
       description:
-        'Self-contained invoice list for the financial_pl backoffice: reads core SalesInvoice rows for the current org/tenant via the QueryEngine and joins the latest KsefSubmission + SalesInvoicePlMeta (batched, no N+1) to attach KSeF status/number/UPO availability/offline deadline and the PL invoice kind. Supports ?search= (invoice number), ?status= (KSeF submission status), ?issueDateFrom=, ?issueDateTo=, ?page=, ?pageSize= (default 25, max 100). The response includes a summary over the full filtered period with count, net/gross totals, and a capped flag when totals cover only the first 1000 matching invoices. Org/tenant scoped; encrypted columns are never projected into the response. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
+        'Self-contained invoice list for the financial_pl backoffice: reads core SalesInvoice rows for the current org/tenant via the QueryEngine and joins the latest KsefSubmission + SalesInvoicePlMeta (batched, no N+1) to attach KSeF status/number/UPO availability/offline deadline and the PL invoice kind. Supports ?search= (invoice number), ?status= (KSeF submission status), ?documentStatus=draft|issued (derived from accepted/offline-issued KSeF submissions), ?issueDateFrom=, ?issueDateTo=, ?page=, ?pageSize= (default 25, max 100). The response includes a summary over the full filtered period with count, net/gross totals, and a capped flag when totals cover only the first 1000 matching invoices. Org/tenant scoped; encrypted columns are never projected into the response. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
       responses: [{ status: 200, description: 'Invoice list with KSeF status', schema: listResponseSchema }],
       errors: [{ status: 400, description: 'Invalid query / status filter', schema: errorSchema }],
     },

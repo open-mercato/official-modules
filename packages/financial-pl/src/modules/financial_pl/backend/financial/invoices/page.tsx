@@ -21,7 +21,8 @@ import {
   Loader2,
 } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
+import type { SortingState } from '@tanstack/react-table'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import type { FilterValues } from '@open-mercato/ui/backend/FilterBar'
@@ -30,6 +31,7 @@ import { InvoiceScopeTabs } from '../../../components/InvoiceScopeTabs'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { openKsefDownload } from '../../../lib/ksef-download'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
@@ -810,12 +812,14 @@ export default function FinancialPlInvoicesPage() {
                   id: 'print',
                   label: t('financial_pl.invoices.list.table.print', 'Print / PDF'),
                   icon: Printer,
-                  onSelect: () => {
-                    window.open(
+                  onSelect: async () => {
+                    // Blob-aware download so a JSON error is a translated toast, not raw JSON in a tab (QA #39).
+                    const outcome = await openKsefDownload(
                       `/api/financial_pl/ksef/invoice-pdf?salesInvoiceId=${encodeURIComponent(row.id)}&disposition=inline`,
-                      '_blank',
-                      'noopener,noreferrer',
                     )
+                    if (!outcome.ok) {
+                      flash(outcome.error ?? t('financial_pl.errors.actionFailed', 'Could not open the invoice PDF.'), 'error')
+                    }
                   },
                 },
                 {

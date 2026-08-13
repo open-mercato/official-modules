@@ -11,6 +11,8 @@ module.exports = {
       {
         tsconfig: {
           jsx: 'react-jsx',
+          rootDir: '.',
+          ignoreDeprecations: '6.0',
           module: 'commonjs',
           target: 'es2022',
           esModuleInterop: true,

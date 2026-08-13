@@ -4,6 +4,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { assessCredentialHealth } from '../../../lib/credential-health'
 import { readKsefCredentials } from '../../../lib/credentials'
@@ -32,7 +33,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json(health, { status: 200 })
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     console.error('[internal] financial_pl.credential_health failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

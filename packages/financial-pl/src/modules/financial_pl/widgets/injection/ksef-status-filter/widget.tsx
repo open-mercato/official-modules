@@ -61,7 +61,7 @@ export function InvoiceFiltersWidget({ context }: { context: InvoiceFiltersConte
             WCAG 1.4.3 AA floor of 4.5:1 for text below 18px.
           */}
           <SelectTrigger
-            className="w-auto min-w-0 shrink gap-2 sm:min-w-[8.5rem] sm:shrink-0"
+            className="w-auto min-w-0 shrink gap-2 sm:min-w-34 sm:shrink-0"
             aria-label={filter.label}
           >
             {/*

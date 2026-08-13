@@ -31,7 +31,7 @@ import { CorrectionForm } from '../../../../components/CorrectionForm'
 import { InvoiceDocumentPreview } from '../../../../components/InvoiceDocumentPreview'
 import { useInvoiceSettings } from '../../../../components/useInvoiceSettings'
 import { PlVatMetaForm, type InvoiceMeta, type ProcedureMarkings } from '../../../../components/PlVatMetaForm'
-import type { InvoiceLineInput } from '../../../../components/InvoiceLinesField'
+import { normalizeStoredLine, type InvoiceLineInput } from '../../../../components/InvoiceLinesField'
 import { buyerFromMetadata } from '../../../../components/BuyerFields'
 import type { InvoiceKindColumn } from '../../../../data/entities'
 import type { GtuCode, JpkProcedureMarking, JpkTypDokumentu } from '../../../../lib/jpk-markings-codes'
@@ -209,7 +209,7 @@ const LINE_KINDS: ReadonlySet<string> = new Set(['product', 'service', 'shipping
 
 /** Project the wire line shape into the `InvoiceLineInput` shape the correction form reuses. */
 function toLineInput(line: InvoiceLineDetail, currencyFallback: string): InvoiceLineInput {
-  return {
+  return normalizeStoredLine({
     name: line.name ?? '',
     quantity: line.quantity ?? '',
     quantityUnit: line.quantityUnit ?? undefined,
@@ -225,7 +225,7 @@ function toLineInput(line: InvoiceLineDetail, currencyFallback: string): Invoice
     lineNumber: line.lineNumber ?? undefined,
     kind: line.kind && LINE_KINDS.has(line.kind) ? (line.kind as InvoiceLineInput['kind']) : undefined,
     metadata: line.metadata ?? undefined,
-  }
+  })
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

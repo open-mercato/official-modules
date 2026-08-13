@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { CreditCard, FileImage, Hash, Plus, Settings2, Trash2 } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -14,6 +15,8 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { SegmentedControl, SegmentedControlItem } from '@open-mercato/ui/primitives/segmented-control'
+import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
+import { ShieldCheck } from 'lucide-react'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { ErrorMessage } from '@open-mercato/ui/backend/detail/ErrorMessage'
@@ -48,6 +51,7 @@ type InvoiceSettings = {
   defaultPriceMode: string | null
   bankAccounts: BankAccount[]
   numberingSeries: NumberingSeries[]
+  restrictInvoiceWrite: boolean
 }
 
 type BankAccount = {
@@ -78,6 +82,7 @@ const EMPTY: InvoiceSettings = {
   defaultPriceMode: null,
   bankAccounts: [],
   numberingSeries: [],
+  restrictInvoiceWrite: false,
 }
 
 /** Starter format for a fresh series row — the Polish shape operators expect. */
@@ -287,6 +292,7 @@ export default function InvoiceSettingsPage() {
         defaultTaxRate: trimmed(settings.defaultTaxRate),
         defaultCurrencyCode: trimmed(settings.defaultCurrencyCode),
         defaultPriceMode: settings.defaultPriceMode,
+        restrictInvoiceWrite: settings.restrictInvoiceWrite,
         // Blank rows are the operator adding a row and changing their mind; dropping them here
         // keeps an empty account number from ever reaching the invoice.
         bankAccounts: settings.bankAccounts
@@ -343,6 +349,41 @@ export default function InvoiceSettingsPage() {
                 : t('financial_pl.settings.save', 'Save settings')}
             </Button>
           </div>
+
+          <FormSection
+            icon={<ShieldCheck className="size-4" />}
+            title={t('financial_pl.settings.permissions.title', 'Invoice-write permission')}
+            description={t(
+              'financial_pl.settings.permissions.description',
+              'Control who may create and edit invoices in this organization.',
+            )}
+          >
+            <SwitchField
+              label={t(
+                'financial_pl.settings.permissions.restrictLabel',
+                'Restrict invoice issuing and editing to selected roles',
+              )}
+              checked={Boolean(settings.restrictInvoiceWrite)}
+              disabled={saving}
+              onCheckedChange={(next) =>
+                setSettings((prev) => ({ ...prev, restrictInvoiceWrite: Boolean(next) }))
+              }
+            />
+            <p className="mt-2 text-sm text-muted-foreground">
+              {settings.restrictInvoiceWrite
+                ? t(
+                    'financial_pl.settings.permissions.onHint',
+                    'Only roles granted the “Create and edit invoices” permission may write invoices. Grant it to the appropriate roles under Roles & Permissions.',
+                  )
+                : t(
+                    'financial_pl.settings.permissions.offHint',
+                    'Anyone your platform authorizes to manage sales invoices may write invoices (current behavior).',
+                  )}{' '}
+              <Link className="underline" href="/backend/roles">
+                {t('financial_pl.settings.permissions.rolesLink', 'Roles & Permissions')}
+              </Link>
+            </p>
+          </FormSection>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <FormSection

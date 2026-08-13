@@ -5,6 +5,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import type { CommandRuntimeContext, CommandBus } from '@open-mercato/shared/lib/commands'
 import { CrudHttpError, isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { respondPublicError } from '../../../../lib/public-error'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { runCrudMutationGuardAfterSuccess, validateCrudMutationGuard } from '@open-mercato/shared/lib/crud/mutation-guard'
@@ -73,7 +74,7 @@ export async function POST(req: Request) {
       { status: 202 },
     )
   } catch (err) {
-    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    if (isCrudHttpError(err)) return respondPublicError(err)
     if (err instanceof z.ZodError) return NextResponse.json({ error: 'Validation failed', details: err.issues }, { status: 400 })
     console.error('[internal] financial_pl.ksef_submission.send_from_credit_memo failed', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -94,12 +95,12 @@ export const openApi: OpenApiRouteDoc = {
       requestBody: { contentType: 'application/json', schema: sendFromCreditMemoSchema },
       responses: [{ status: 202, description: 'Correction queued', schema: okResponseSchema }],
       errors: [
-        { status: 404, description: 'Credit memo or original invoice not found', schema: errorSchema },
-        { status: 409, description: 'Original not accepted by KSeF / credentials missing', schema: errorSchema },
+        { status: 404, description: 'Credit memo or original invoice not found (genuinely-unknown id; a freshly-created memo whose header is still converging is retried by the existence probe, not 404ed)', schema: errorSchema },
+        { status: 409, description: 'Original not accepted by KSeF / credentials missing / source_not_ready — a freshly-created correction whose LINE rows have not converged in the read projection yet (raised after bounded retry); safe to retry the same creditMemoId', schema: errorSchema },
         {
           status: 422,
           description:
-            'Cannot build FA(3) KOR: credit_memo_not_linked / correction_reason_required / correction_lines_required / original_ksef_number_unknown / currency_unsupported / vat_rate_unsupported / seller_required / buyer_required',
+            'Cannot build FA(3) KOR (terminal): credit_memo_not_linked / correction_reason_required / original_ksef_number_unknown / currency_unsupported / vat_rate_unsupported / seller_required / buyer_required. (correction_lines_required is treated as projection lag and surfaced as 409 source_not_ready after retry, not 422.)',
           schema: errorSchema,
         },
       ],

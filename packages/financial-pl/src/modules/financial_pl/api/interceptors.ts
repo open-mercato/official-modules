@@ -1,6 +1,6 @@
 import type { ApiInterceptor, InterceptorRequest, InterceptorContext } from '@open-mercato/shared/lib/crud/api-interceptor'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
-import { KsefSubmission } from '../data/entities'
+import { InvoiceSettings, KsefSubmission } from '../data/entities'
 import { enrichFinancialPlInvoices } from '../data/enrichers'
 
 /**
@@ -87,6 +87,66 @@ async function guard(request: InterceptorRequest, context: InterceptorContext) {
   return { ok: true }
 }
 
+const INVOICE_MANAGE_FEATURE = 'financial_pl.invoices.manage'
+const WRITE_FORBIDDEN_DEFAULT =
+  'You do not have permission to create or edit invoices. Ask an administrator to grant the invoice-management permission.'
+
+/** True when the caller's organization has opted into invoice-write restriction (QA #35). */
+async function isInvoiceWriteRestricted(context: InterceptorContext): Promise<boolean> {
+  const tenantId = asString(context.tenantId)
+  const organizationId = asString(context.organizationId)
+  // No resolvable scope ⇒ nothing configured to restrict; the route's own auth still applies.
+  if (!tenantId || !organizationId) return false
+  const em = context.em.fork()
+  const settings = await em.findOne(InvoiceSettings, { tenantId, organizationId, deletedAt: null })
+  return settings?.restrictInvoiceWrite === true
+}
+
+async function writeForbiddenMessage(): Promise<string> {
+  try {
+    const { translate } = await resolveTranslations()
+    return translate('financial_pl.errors.invoice_write_forbidden', WRITE_FORBIDDEN_DEFAULT)
+  } catch {
+    return WRITE_FORBIDDEN_DEFAULT
+  }
+}
+
+/**
+ * SPEC-010 / QA #35 — invoice-write permission guard.
+ *
+ * The invoice header/lines write is owned by CORE's `sales/invoices` (and `sales/credit-memos`)
+ * routes, which core gates on `sales.invoices.manage` (granted to employees by default). When an
+ * organization opts into restriction (`InvoiceSettings.restrictInvoiceWrite`), this fail-closed
+ * `before` interceptor additionally requires the module feature `financial_pl.invoices.manage` — the
+ * only server-side seam that can gate the core-owned write (a disabled UI button is bypassable).
+ * Admins/super-admins satisfy it through their `financial_pl.*` / `*` wildcard grants, so there is no
+ * lockout and no role-name special-casing. Unset restriction ⇒ unchanged behavior (backward compatible).
+ */
+export async function invoiceWriteGuard(_request: InterceptorRequest, context: InterceptorContext) {
+  try {
+    if (!(await isInvoiceWriteRestricted(context))) return { ok: true as const }
+    const userId = asString(context.userId)
+    if (!userId) return { ok: false as const, statusCode: 403, message: await writeForbiddenMessage() }
+    const rbac = context.container.resolve('rbacService') as {
+      userHasAllFeatures: (
+        userId: string,
+        required: string[],
+        scope: { tenantId: string | null; organizationId: string | null },
+      ) => Promise<boolean>
+    }
+    const allowed = await rbac.userHasAllFeatures(userId, [INVOICE_MANAGE_FEATURE], {
+      tenantId: asString(context.tenantId) ?? null,
+      organizationId: asString(context.organizationId) ?? null,
+    })
+    return allowed
+      ? { ok: true as const }
+      : { ok: false as const, statusCode: 403, message: await writeForbiddenMessage() }
+  } catch {
+    // Fail closed: an error resolving the caller or feature must deny, never open, the write.
+    return { ok: false as const, statusCode: 403, message: await writeForbiddenMessage() }
+  }
+}
+
 export const interceptors: ApiInterceptor[] = [
   {
     // Core 0.6.8's new invoice CRUD route declares an index entity but does not opt
@@ -141,6 +201,41 @@ export const interceptors: ApiInterceptor[] = [
         return { ok: false as const, statusCode: 409, message: await lockedMessage() }
       }
       return { ok: true }
+    },
+  },
+  {
+    // QA #35 — require `financial_pl.invoices.manage` on the CORE invoice write when the org opted in.
+    // Priority below the immutability guard (100) so a KSeF-locked invoice is rejected with its 409
+    // "issue a correction" message before this permission check runs.
+    id: 'financial_pl.invoice-write-permission.sales-invoices',
+    targetRoute: 'sales/invoices',
+    methods: ['POST', 'PUT', 'DELETE'],
+    priority: 90,
+    timeoutMs: 3000,
+    async before(request, context) {
+      return invoiceWriteGuard(request, context)
+    },
+  },
+  {
+    // Corrections create/edit credit memos on the core route; gate them the same way.
+    id: 'financial_pl.invoice-write-permission.sales-credit-memos',
+    targetRoute: 'sales/credit-memos',
+    methods: ['POST', 'PUT', 'DELETE'],
+    priority: 90,
+    timeoutMs: 3000,
+    async before(request, context) {
+      return invoiceWriteGuard(request, context)
+    },
+  },
+  {
+    // The module's own PL-VAT metadata PUT accompanies every invoice create/edit — gate it too.
+    id: 'financial_pl.invoice-write-permission.invoice-meta',
+    targetRoute: 'financial_pl/ksef/invoice-meta',
+    methods: ['PUT'],
+    priority: 90,
+    timeoutMs: 3000,
+    async before(request, context) {
+      return invoiceWriteGuard(request, context)
     },
   },
 ]

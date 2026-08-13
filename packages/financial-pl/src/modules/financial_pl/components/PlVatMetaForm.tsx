@@ -38,6 +38,7 @@ import type {
   OrderLineSnapshot,
   OrderSnapshot,
 } from '../data/entities'
+import { isAdvanceInvoiceKind } from '../data/validators'
 
 /** Procedure-markings flag map (one optional boolean per JPK procedure code). */
 export type ProcedureMarkings = Partial<Record<JpkProcedureMarking, boolean>>
@@ -93,7 +94,6 @@ const MARGIN_SCHEME_TO_PROCEDURE = {
 
 const labelClass = 'text-sm font-medium text-foreground'
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
-const ADVANCE_SECTION_INVOICE_KINDS: readonly InvoiceKindColumn[] = ['zal', 'roz', 'kor_zal', 'kor_roz']
 
 export type PlVatMetaFormProps = {
   value: InvoiceMeta
@@ -128,7 +128,7 @@ function computePlVatAccordionOpenSections(value: InvoiceMeta, includeFx: boolea
     (value.advancePayments?.length ?? 0) > 0 ||
     (value.advanceRefs?.length ?? 0) > 0 ||
     value.orderSnapshot != null ||
-    ADVANCE_SECTION_INVOICE_KINDS.includes(value.invoiceKind ?? 'vat')
+    isAdvanceInvoiceKind(value.invoiceKind)
   ) {
     open.push('advance')
   }
@@ -230,6 +230,7 @@ export function PlVatMetaForm({
   }, [showFxSection, value])
 
   const invoiceKind = value.invoiceKind ?? 'vat'
+  const advanceEditorEnabled = isAdvanceInvoiceKind(invoiceKind)
   const gtuCodes = value.gtuCodes ?? []
   const procedureMarkings = value.procedureMarkings ?? {}
   // Kept in the canonical JPK order rather than object-key order, so a read-only list always reads
@@ -563,7 +564,8 @@ export function PlVatMetaForm({
             {t('financial_pl.invoices.plvat.section.advance', 'Advance & settlement (ZAL/ROZ)')}
           </AccordionTrigger>
           <AccordionContent>
-            <div className="flex flex-col gap-2">
+            {advanceEditorEnabled ? (
+              <div className="flex flex-col gap-2">
               <fieldset className="flex flex-col gap-4 rounded-md border border-border p-4">
                 <legend className="px-1 text-sm font-medium text-foreground">
                   {t('financial_pl.fields.advancePaymentsGroup', 'Advance payments (ZAL)')}
@@ -811,7 +813,15 @@ export function PlVatMetaForm({
                   </>
                 ) : null}
               </fieldset>
-            </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  'financial_pl.invoices.form.advances.kindHint',
+                  'Advance payments and order data are available only for ZAL/ROZ invoices and their corrections.',
+                )}
+              </p>
+            )}
           </AccordionContent>
         </AccordionItem>
 

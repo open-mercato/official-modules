@@ -55,7 +55,7 @@ export function InvoiceRowActions({ items }: { items: InvoiceRowAction[] }) {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="flex w-max min-w-[8rem] flex-col p-1"
+        className="flex w-max min-w-32 flex-col p-1"
         onClick={(event) => event.stopPropagation()}
       >
         {items.map((item) => {

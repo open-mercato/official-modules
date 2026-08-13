@@ -17,6 +17,7 @@ export function FormSection({
   actions,
   className,
   bodyClassName,
+  allowOverflow,
   children,
 }: {
   icon: React.ReactNode
@@ -27,10 +28,13 @@ export function FormSection({
   actions?: React.ReactNode
   className?: string
   bodyClassName?: string
+  /** Let content (e.g. an absolutely-positioned combobox dropdown) escape the card instead of being
+   *  clipped by the default `overflow-hidden` (QA #37 — the product picker was cut off). */
+  allowOverflow?: boolean
   children: React.ReactNode
 }) {
   return (
-    <section className={`overflow-hidden rounded-lg border bg-card ${className ?? ''}`}>
+    <section className={`${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} rounded-lg border bg-card ${className ?? ''}`}>
       <header className="flex items-start gap-2 border-b border-border/60 bg-muted/30 px-4 py-2.5">
         <span aria-hidden="true" className="mt-0.5 text-muted-foreground">
           {icon}

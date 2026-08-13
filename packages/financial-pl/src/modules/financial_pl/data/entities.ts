@@ -787,6 +787,15 @@ export class InvoiceSettings {
   @Property({ name: 'numbering_series', type: 'json', nullable: true })
   numberingSeries?: InvoiceNumberingSeries[] | null
 
+  /**
+   * When true, only roles granted `financial_pl.invoices.manage` may create/edit invoices — enforced
+   * by the write interceptor on the core sales-invoice routes. Null/false = unrestricted (the prior
+   * behavior: any caller core authorizes may write), so the feature is backward compatible when unset
+   * (QA #35).
+   */
+  @Property({ name: 'restrict_invoice_write', type: 'boolean', nullable: true })
+  restrictInvoiceWrite?: boolean | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
