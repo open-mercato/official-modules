@@ -43,6 +43,8 @@ type FixtureSubmission = {
   ksefNumber: string | null
   offlineSendDeadlineAt: null
   createdAt: Date
+  /** The stored UPO receipt. `null` models an accepted row whose receipt never landed. */
+  upoXml: string | null
 }
 
 type QueryOptions = {
@@ -104,6 +106,7 @@ const submissions: FixtureSubmission[] = [
     ksefNumber: null,
     offlineSendDeadlineAt: null,
     createdAt: new Date('2026-08-11T12:00:00.000Z'),
+    upoXml: null,
   },
   {
     id: '20000000-0000-4000-8000-000000000002',
@@ -112,6 +115,7 @@ const submissions: FixtureSubmission[] = [
     ksefNumber: 'accepted-ksef-number',
     offlineSendDeadlineAt: null,
     createdAt: new Date('2026-08-12T12:00:00.000Z'),
+    upoXml: '<UPO/>',
   },
 ]
 
@@ -151,7 +155,23 @@ describe('ksef/invoices document-status partition (Packet B)', () => {
     jest.clearAllMocks()
     mockCreateRequestContainer.mockResolvedValue({
       resolve: (name: string) => {
-        if (name === 'em') return { fork: () => ({}) }
+        // `find` backs the UPO-presence lookup: it must honour the `upo_xml is not null`
+        // filter, so an accepted submission with no stored receipt is excluded.
+        if (name === 'em') {
+          return {
+            fork: () => ({
+              find: (_entity: unknown, where: Record<string, unknown>) => {
+                const id = where.id as FilterOperators | undefined
+                return Promise.resolve(
+                  submissions
+                    .filter((submission) => !id?.$in || id.$in.includes(submission.id))
+                    .filter((submission) => submission.upoXml !== null)
+                    .map((submission) => ({ id: submission.id })),
+                )
+              },
+            }),
+          }
+        }
         if (name === 'queryEngine') return { query: mockQuery }
         throw new Error(`[internal] Unexpected dependency: ${name}`)
       },
@@ -270,5 +290,36 @@ describe('ksef/invoices document-status partition (Packet B)', () => {
         page: { page: 1, pageSize: 1000 },
       }),
     )
+  })
+
+  // QA #40: the list advertised "Download UPO" for every accepted submission, but an accepted
+  // row can legitimately hold no receipt — clicking it 404'd. Availability must track the
+  // stored receipt, not the status.
+  describe('upoAvailable', () => {
+    const acceptedSubmission = submissions.find((submission) => submission.status === 'accepted')!
+    const originalUpoXml = acceptedSubmission.upoXml
+
+    afterEach(() => {
+      acceptedSubmission.upoXml = originalUpoXml
+    })
+
+    async function readAcceptedItem() {
+      const response = await GET(makeRequest('page=1&pageSize=25'))
+      const body = await response.json()
+      expect(response.status).toBe(200)
+      return body.items.find((item: { id: string }) => item.id === ACCEPTED_ID)
+    }
+
+    it('advertises the UPO when the receipt is stored', async () => {
+      expect(await readAcceptedItem()).toEqual(expect.objectContaining({ upoAvailable: true }))
+    })
+
+    it('withholds the UPO for an accepted submission whose receipt never landed', async () => {
+      acceptedSubmission.upoXml = null
+
+      const item = await readAcceptedItem()
+
+      expect(item).toEqual(expect.objectContaining({ ksefStatus: 'accepted', upoAvailable: false }))
+    })
   })
 })

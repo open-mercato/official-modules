@@ -456,6 +456,7 @@
   "financial_pl.invoices.tabs.received": "Zakupy",
   "financial_pl.invoices.tabs.sent": "Sprzedaż",
   "financial_pl.jpk.filings.actions.download": "Pobierz XML",
+  "financial_pl.jpk.filings.actions.downloadUpo": "Pobierz UPO",
   "financial_pl.jpk.filings.actions.generate": "Generuj XML",
   "financial_pl.jpk.filings.actions.generating": "Generowanie…",
   "financial_pl.jpk.filings.empty": "Brak deklaracji JPK. Wygeneruj powyżej.",

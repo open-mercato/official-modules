@@ -11,6 +11,7 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { KsefSubmission, SalesInvoicePlMeta } from '../../../../data/entities'
 import { readSellerIdentity } from '../../../../lib/seller-identity'
+import { selectSubmissionIdsWithUpo } from '../../../../lib/upo-availability'
 
 export const metadata = {
   // Composed gate (SPEC-013): this endpoint exposes core SalesInvoice business data which core
@@ -367,14 +368,20 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
         }
       : null
 
+    // Derived from the stored receipt, never from `status === 'accepted'`: an accepted row can
+    // legitimately have no UPO yet, and offering the download for one 404s the user (QA #40).
+    const submissionIdsWithUpo = await selectSubmissionIdsWithUpo(
+      em,
+      submissionRow ? [submissionRow.id] : [],
+      auth.tenantId,
+    )
+
     const submission: SubmissionDetail | null = submissionRow
       ? {
           id: submissionRow.id,
           status: submissionRow.status,
           ksefNumber: submissionRow.ksefNumber ?? null,
-          // Accepted ⟺ a stored UPO (finalizeAccepted only flips to 'accepted' after the receipt is
-          // persisted), so this is an accurate, decryption-free availability flag.
-          upoAvailable: submissionRow.status === 'accepted',
+          upoAvailable: submissionIdsWithUpo.has(submissionRow.id),
           offlineSendDeadlineAt: submissionRow.offlineSendDeadlineAt
             ? submissionRow.offlineSendDeadlineAt.toISOString()
             : null,
@@ -452,7 +459,7 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'Read one sales invoice (header + lines + PL-VAT meta + KSeF submission)',
       description:
-        'Self-contained single-invoice read for the financial_pl backoffice edit/detail pages (released core has no invoice-lines read API). Reads the core SalesInvoice header and its SalesInvoiceLine rows for the current org/tenant via the QueryEngine (core GET is header-only), and joins the SalesInvoicePlMeta row + the latest KsefSubmission (document_kind=invoice) from this module. Line field names mirror core\'s invoice-line create payload so the edit page can round-trip them straight into POST/PUT /api/sales/invoices. upoAvailable is derived from submission.status===\'accepted\'. Org/tenant scoped; encrypted columns are never projected into the response; returns 404 when the invoice is not in the caller\'s scope. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
+        'Self-contained single-invoice read for the financial_pl backoffice edit/detail pages (released core has no invoice-lines read API). Reads the core SalesInvoice header and its SalesInvoiceLine rows for the current org/tenant via the QueryEngine (core GET is header-only), and joins the SalesInvoicePlMeta row + the latest KsefSubmission (document_kind=invoice) from this module. Line field names mirror core\'s invoice-line create payload so the edit page can round-trip them straight into POST/PUT /api/sales/invoices. upoAvailable reports whether the submission actually stored a UPO receipt (an accepted submission whose receipt has not landed yet reports false); the encrypted receipt itself is never projected. Org/tenant scoped; encrypted columns are never projected into the response; returns 404 when the invoice is not in the caller\'s scope. Requires both financial_pl.view and sales.invoices.manage (composed gate).',
       responses: [{ status: 200, description: 'Invoice detail with lines, PL-VAT meta and KSeF status', schema: detailResponseSchema }],
       errors: [
         { status: 400, description: 'Invalid invoice id', schema: errorSchema },

@@ -17,6 +17,7 @@ import { E } from '@open-mercato/core/generated-shims/entities.ids.generated'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission, SalesInvoicePlMeta } from './entities'
 import { deriveJpkVatMarking, type JpkVatMarking } from '../lib/jpk-vat-marking'
+import { selectSubmissionIdsWithUpo } from '../lib/upo-availability'
 
 type InvoiceRecord = Record<string, unknown> & { id: string }
 type EnricherScope = EnricherContext & { em: EntityManager }
@@ -62,8 +63,8 @@ export async function enrichFinancialPlInvoices(
   // VAT-exemption UI creates it). Project ONLY the plaintext columns we need: the
   // encrypted `invoice_xml`/`upo_xml` are deliberately excluded so the on-load encryption
   // subscriber never decrypts the (potentially large) receipt just to enrich a list.
-  // UPO availability is derived from the accepted status (the flow stores the receipt
-  // before flipping to 'accepted'), so no encrypted column is read at all.
+  // UPO availability is resolved separately by `selectSubmissionIdsWithUpo`, which tests the
+  // receipt column for NULL without projecting it — so no encrypted column is read here either.
   // Only the invoice's OWN submissions (document_kind='invoice'): a correction
   // submission stores sales_invoice_id = the CORRECTED original, so without this filter
   // an accepted correction would bleed its status/number/marking onto the original.
@@ -106,6 +107,13 @@ export async function enrichFinancialPlInvoices(
   const metaByInvoice = new Map<string, SalesInvoicePlMeta>()
   for (const row of metaRows) metaByInvoice.set(row.salesInvoiceId, row)
 
+  // Only the latest submission per invoice is surfaced, so only those need the receipt check.
+  const submissionIdsWithUpo = await selectSubmissionIdsWithUpo(
+    em,
+    [...submissionByInvoice.values()].map((submission) => submission.id),
+    context.tenantId,
+  )
+
   return records.map((record) => {
     const submission = submissionByInvoice.get(record.id)
     const meta = metaByInvoice.get(record.id)
@@ -123,9 +131,8 @@ export async function enrichFinancialPlInvoices(
         ksefStatus,
         ksefNumber,
         submissionId: submission?.id ?? null,
-        // Accepted ⟺ a stored UPO (finalizeAccepted only flips to 'accepted' after the
-        // receipt is persisted), so this is an accurate, decryption-free availability flag.
-        upoAvailable: submission?.status === 'accepted',
+        // Derived from the stored receipt, never from `status === 'accepted'` (QA #40).
+        upoAvailable: submission ? submissionIdsWithUpo.has(submission.id) : false,
         offlineSendDeadlineAt: submission?.offlineSendDeadlineAt
           ? submission.offlineSendDeadlineAt.toISOString()
           : null,

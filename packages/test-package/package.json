@@ -65,8 +65,8 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/shared": "0.6.8-develop.6931.1.4a1e1c786b",
-    "@open-mercato/ui": "0.6.8-develop.6931.1.4a1e1c786b",
+    "@open-mercato/shared": "0.6.8-develop.7000.1.0ae682bad1",
+    "@open-mercato/ui": "0.6.8-develop.7000.1.0ae682bad1",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",

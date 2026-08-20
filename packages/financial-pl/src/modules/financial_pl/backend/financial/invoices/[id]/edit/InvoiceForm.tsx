@@ -30,7 +30,7 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Separator } from '@open-mercato/ui/primitives/separator'
-import { Alert, AlertDescription, AlertTitle } from '@open-mercato/ui/primitives/alert'
+import { Alert, AlertTitle } from '@open-mercato/ui/primitives/alert'
 import { FormSection } from '../../../../../components/FormSection'
 import { useInvoiceSettings } from '../../../../../components/useInvoiceSettings'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
@@ -2251,13 +2251,17 @@ export function InvoiceForm({ invoiceId, initialValue, readOnly, lockNotice, onP
           <AlertTitle>
             {t('financial_pl.invoices.form.dateWarningsTitle', 'Check the invoice dates')}
           </AlertTitle>
-          <AlertDescription>
-            <ul className="list-disc space-y-1 pl-5">
-              {dateWarnings.map((warning) => (
-                <li key={`${warning.field}:${warning.messageKey}`}>{t(warning.messageKey)}</li>
-              ))}
-            </ul>
-          </AlertDescription>
+          {/*
+            Deliberately NOT wrapped in `AlertDescription`: that renders a <p>, and a <ul> inside a
+            <p> is invalid DOM — React logged a validateDOMNesting warning every time this banner
+            appeared. `Alert` puts its children in a plain <div>, so the list is a valid sibling of
+            the title; it carries the description's own typography classes to look unchanged.
+          */}
+          <ul className="list-disc space-y-1 pl-5 text-sm leading-5">
+            {dateWarnings.map((warning) => (
+              <li key={`${warning.field}:${warning.messageKey}`}>{t(warning.messageKey)}</li>
+            ))}
+          </ul>
         </Alert>
       ) : null}
       {!isEdit ? (

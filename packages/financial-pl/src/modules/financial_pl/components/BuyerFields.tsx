@@ -337,6 +337,7 @@ export function BuyerFields({ value, onChange, disabled, errors }: BuyerFieldsPr
       <div className="flex flex-col gap-2">
         <label className={labelClass} htmlFor="financial_pl-buyer-name">
           {t('financial_pl.buyer.companyName', 'Buyer name')}
+          <span aria-hidden="true" className="text-status-error-text"> *</span>
         </label>
         <div
           data-invalid={errorFor('companyName') ? 'true' : undefined}

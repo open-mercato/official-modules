@@ -13,6 +13,7 @@ import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { KsefSubmission, SalesInvoicePlMeta, type KsefSubmissionStatusColumn } from '../../../data/entities'
 import { ksefInvoiceListQuerySchema } from '../../../data/validators'
 import { isInvoiceIssued } from '../../../lib/invoice-status'
+import { selectSubmissionIdsWithUpo } from '../../../lib/upo-availability'
 
 export const metadata = {
   // Composed gate (SPEC-013): this endpoint exposes core SalesInvoice business data which core
@@ -372,12 +373,14 @@ export async function GET(req: Request) {
     // own-module, org/tenant-scoped logic as the response enricher (data/enrichers.ts). Project ONLY
     // the plaintext columns we need: the encrypted invoice_xml/upo_xml are deliberately excluded so
     // the on-load encryption subscriber never decrypts a (potentially large) receipt to render a
-    // list. UPO availability is derived from the accepted status (the flow stores the receipt before
-    // flipping to 'accepted'), so no encrypted column is read at all. Only the invoice's OWN
+    // list. UPO availability is resolved separately by `selectSubmissionIdsWithUpo`, which tests the
+    // receipt column for NULL without projecting it, so no encrypted column is read at all either
+    // way. Only the invoice's OWN
     // submissions (document_kind='invoice'): a correction stores sales_invoice_id = the CORRECTED
     // original, so without this filter an accepted correction would bleed its status onto the
     // original.
-    const submissionByInvoice = new Map<string, { status: KsefSubmissionStatusColumn; ksefNumber: string | null; offlineSendDeadlineAt: Date | null }>()
+    const submissionByInvoice = new Map<string, { id: string; status: KsefSubmissionStatusColumn; ksefNumber: string | null; offlineSendDeadlineAt: Date | null }>()
+    let submissionIdsWithUpo: Set<string> = new Set()
     const metaByInvoice = new Map<string, { invoiceKind: string }>()
     if (invoiceIds.length > 0) {
       const decryptionScope = {
@@ -403,12 +406,19 @@ export async function GET(req: Request) {
       for (const submission of submissions) {
         if (!submissionByInvoice.has(submission.salesInvoiceId)) {
           submissionByInvoice.set(submission.salesInvoiceId, {
+            id: submission.id,
             status: submission.status,
             ksefNumber: submission.ksefNumber ?? null,
             offlineSendDeadlineAt: submission.offlineSendDeadlineAt ?? null,
           })
         }
       }
+      // Only the latest submission per invoice is surfaced, so only those need the receipt check.
+      submissionIdsWithUpo = await selectSubmissionIdsWithUpo(
+        em,
+        [...submissionByInvoice.values()].map((submission) => submission.id),
+        auth.tenantId,
+      )
       const metaRows = await findWithDecryption(
         em,
         SalesInvoicePlMeta,
@@ -441,9 +451,8 @@ export async function GET(req: Request) {
         buyerNip: buyer.nip,
         ksefStatus: submission?.status ?? null,
         ksefNumber: submission?.ksefNumber ?? null,
-        // Accepted ⟺ a stored UPO (finalizeAccepted only flips to 'accepted' after the receipt is
-        // persisted), so this is an accurate, decryption-free availability flag.
-        upoAvailable: submission?.status === 'accepted',
+        // Derived from the stored receipt, never from `status === 'accepted'` (QA #40).
+        upoAvailable: submission ? submissionIdsWithUpo.has(submission.id) : false,
         offlineSendDeadlineAt: submission?.offlineSendDeadlineAt
           ? submission.offlineSendDeadlineAt.toISOString()
           : null,

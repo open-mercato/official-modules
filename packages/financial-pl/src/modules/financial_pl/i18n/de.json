@@ -456,6 +456,7 @@
   "financial_pl.invoices.tabs.received": "Einkauf",
   "financial_pl.invoices.tabs.sent": "Verkauf",
   "financial_pl.jpk.filings.actions.download": "XML herunterladen",
+  "financial_pl.jpk.filings.actions.downloadUpo": "UPO herunterladen",
   "financial_pl.jpk.filings.actions.generate": "XML erzeugen",
   "financial_pl.jpk.filings.actions.generating": "Wird erzeugt…",
   "financial_pl.jpk.filings.empty": "Noch keine JPK-Meldungen. Erzeugen Sie oben eine.",

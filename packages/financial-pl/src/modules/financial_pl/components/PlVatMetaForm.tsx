@@ -497,7 +497,14 @@ export function PlVatMetaForm({
             </AccordionTrigger>
             <AccordionContent>
               <div className="grid grid-cols-1 gap-4 @sm:grid-cols-2">
-                <div className="flex flex-col gap-2">
+                {/*
+                  Own container: the row below must break against THIS cell's width, not the
+                  form's. Both queries used to resolve against the same outer container, so once
+                  the grid split into two columns at `@sm` the cell was only ~half that width
+                  while the row still went horizontal at `@md` — which clipped the NBP button and
+                  then hid it behind the date field between ~450px and ~900px (QA #51).
+                */}
+                <div className="@container flex flex-col gap-2">
                   <label className={labelClass} htmlFor="financial_pl-exchange-rate">
                     {t('financial_pl.fields.exchangeRate', 'Exchange rate (to PLN)')}
                   </label>

@@ -37,6 +37,7 @@ import { ErrorMessage } from '@open-mercato/ui/backend/detail/ErrorMessage'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { IsoDatePicker } from '../../../components/IsoDatePicker'
+import { readApiErrorMessage } from '../../../lib/api-error-message'
 
 type JpkVariant = 'V7M' | 'V7K'
 
@@ -615,9 +616,13 @@ export default function FinancialPlJpkPage() {
             body: JSON.stringify(payload),
           })
           if (!call.ok) {
+            // Surface the zod detail (e.g. the future-date rule) — "Validation failed" alone
+            // does not tell the user which field to fix.
             throw new Error(
-              call.result?.error
-                ?? t('financial_pl.jpk.purchaseRecords.errors.add', 'Failed to add the purchase record.'),
+              readApiErrorMessage(
+                call.result,
+                t('financial_pl.jpk.purchaseRecords.errors.add', 'Failed to add the purchase record.'),
+              ),
             )
           }
           return call

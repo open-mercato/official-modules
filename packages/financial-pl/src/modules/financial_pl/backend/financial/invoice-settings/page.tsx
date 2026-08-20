@@ -28,6 +28,7 @@ import { FormSection } from '../../../components/FormSection'
 import { isValidBankAccount, normalizeAccountNumber } from '../../../lib/bank-account'
 import { lookupPolishBank } from '../../../lib/pl-bank-registry'
 import { isValidSwift } from '../../../lib/pl-format'
+import { readApiErrorMessage } from '../../../lib/api-error-message'
 import {
   renderInvoiceNumberTemplate,
   validateSeriesFormat,
@@ -321,10 +322,10 @@ export default function InvoiceSettingsPage() {
     if (!res.ok) {
       // Surface the first zod detail when present — "Validation failed" alone does not say which
       // series rule (duplicate code/format, reserved format…) was violated.
-      const detail = Array.isArray((res.result as { details?: Array<{ message?: string }> } | undefined)?.details)
-        ? (res.result as { details: Array<{ message?: string }> }).details.find((issue) => issue?.message)?.message
-        : undefined
-      flash(detail ?? res.result?.error ?? t('financial_pl.settings.saveFailed', 'Could not save invoice settings.'), 'error')
+      flash(
+        readApiErrorMessage(res.result, t('financial_pl.settings.saveFailed', 'Could not save invoice settings.')),
+        'error',
+      )
       return
     }
     flash(t('financial_pl.settings.saved', 'Invoice settings saved.'), 'success')
