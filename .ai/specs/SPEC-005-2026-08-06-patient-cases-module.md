@@ -9,7 +9,7 @@
 **Scope:**
 - `Patient` — record with encrypted PII, hash-based deduplication on a national identifier, fallback identity path.
 - `Case` — lifecycle from intake to handover, carrying measurements, product specification, and references to the production and sales orders.
-- The **appointment layer** — booking, conflict checking, availability — is *not* specified here. It is a subject-agnostic primitive broader than this vertical and is specified in **SPEC-009**, gated on its own open question. This document defines only the case's view of it: an ordered series of bookings the case owns the numbering of.
+- The **appointment layer** — booking, conflict checking, availability — is *not* specified here. Two documents cover it: **SPEC-008** (PR #33) proposes a generic reservations engine, and **SPEC-009** (PR #53) states this vertical's requirements against whichever engine wins. This document defines only the case's view: an ordered series of reservations it owns the position and numbering of (`CaseBooking`).
 - Consent is **not** implemented here — it is consumed from `@open-mercato/forms` (`FormConsentRecord`).
 
 **Concerns:**
@@ -85,7 +85,7 @@ A community module owning three concepts and duplicating nothing core or another
 | Decision | Rationale |
 |----------|-----------|
 | The **case** is the central entity; the patient record and the booking series are its layers | Modelling the patient record and the appointment as two independent capabilities duplicates the numbering, the vocabulary and the lifecycle in two places — which is the same terminology debt described in the Problem Statement, relocated into the architecture |
-| The appointment layer is a separate specification, not a separate module (yet) | The layer is subject-agnostic and useful beyond this vertical, so its home is an open question in SPEC-009; splitting the *documents* lets this half be answered and built while that question is open, without splitting the *lifecycle*, whose centre stays the case |
+| The appointment layer is somebody else's specification | The layer is subject-agnostic and useful beyond this vertical, and an engine for it is already proposed in SPEC-008 (#33). Splitting the *documents* lets this half be answered and built while that question is open, without splitting the *lifecycle*, whose centre stays the case |
 | Consent consumed from `forms`, not owned here | `FormConsentRecord` is already subject-agnostic, PII-free and clause-hash-versioned; a second consent log would fragment the audit surface and duplicate GDPR export/erasure that `forms` already implements |
 | `measurements` / `specification` as `jsonb` | Their shape depends on the product type and is defined per tenant; individual dimensions are never filtered or sorted on. Everything that *is* filtered on has its own column |
 | Every case status change writes a `CaseTransition` row | The status column is never edited without history, which is what makes the lifecycle auditable and reversible |
@@ -98,7 +98,7 @@ A community module owning three concepts and duplicating nothing core or another
 | Book onto the CRM calendar (`customers`, `/backend/calendar`) | Its data model is `CustomerInteraction` — a CRM touchpoint whose conflict detection is client-side and advisory, whose actors are users rather than rooms and equipment, and which computes no availability. Storing a fitting there means a reservation nothing enforces, on a subject that is a CRM contact rather than a person under Art. 9. Its *view* layer, however, is reused rather than rebuilt — see UI/UX |
 | Model the case as a `sales.order` with extra fields | A sales order has neither a visit series nor measurements as its content, and its recipient is a counterparty rather than the person whose measurements are the subject. The link to sales exists as a reference, not as inheritance |
 | Ship an own `PatientConsent` append-only log | Duplicates `forms.FormConsentRecord`, which is already subject-agnostic and PII-free, and would fragment GDPR export/erasure across two modules |
-| Separate *modules* for the patient record and for appointments | Rejected as an early decision, and distinct from the document split adopted here: the numbering, the vocabulary and the lifecycle stay owned by the case in SPEC-005, while SPEC-009 owns a booking primitive that knows nothing about cases. Whether that primitive ends up as its own module is SPEC-009's Q1, answered on its own merits rather than by how this document is filed |
+| Separate *modules* for the patient record and for appointments | Rejected as an early decision, and distinct from the document split adopted here: the numbering, the vocabulary and the lifecycle stay owned by the case, while the booking primitive knows nothing about cases. Where that primitive ends up — SPEC-008's engine, a `planner` contribution, or module-local entities — is answered on its own merits rather than by how this document is filed |
 
 ## User Stories / Use Cases
 
@@ -289,7 +289,7 @@ All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every r
 ### Patients
 - `GET | POST | PUT | DELETE /api/patient_cases/patients` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ firstName, lastName, phone?, email?, hasNoNationalId, nationalId?, identityDocumentType?, identityDocumentNumber?, birthDate?, sex?, preferredLanguage?, addressLine?, city?, postalCode?, heightCm?, weightKg?, defaultPractitionerId? }`
-- Response: `{ item: Patient }` with encrypted fields decrypted for roles holding `patient_cases.view_sensitive`, and reduced to the visible subset otherwise (Q4)
+- Response: `{ item: Patient }` with encrypted fields decrypted for roles holding `patient_cases.view_sensitive`, and reduced otherwise (Q4) to exactly `firstName`, `lastName`, `heightCm`, `weightKg` — the set the reference deployment's owner granted the workshop floor
 - Errors: `409 { error: 'duplicate_national_id', patientId }` · `400 { error: 'identity_inconsistent' }` · `409 { error: 'record_modified', code: 'optimistic_lock_conflict', currentUpdatedAt, expectedUpdatedAt }`
 
 ### Patient lookup
@@ -334,9 +334,20 @@ Backend pages under `/backend/patient-cases`, all sharing one `pageGroup` / `pag
 
 **Measurement chart** — a stepped wizard with autosave, left/right side switching and copy-between-sides. Measurements are the content of the case, not an attachment.
 
+**What the reduced field set contains, and why measurements are not in it.** Without `patient_cases.view_sensitive` a caller receives the patient's first name, last name, height and weight, plus the case number and product type from the case — nothing else. `measurements` and `specification` are deliberately excluded even though the workshop is the party that manufactures from them: they are pseudonymised data concerning health, and a production board visible from the shop floor is the wrong surface for a full body profile. Where a workshop genuinely needs dimensions to work, the tenant grants a separate `patient_cases.view_measurements` feature to that role, so the decision is explicit, auditable and revocable per tenant rather than implied by having board access at all.
+
 **Production board** — a `DataTable`-backed board whose stages are per-tenant configurable data. This is the screen the workshop floor sees, and the one that must not display sensitive data (Q4).
 
-**No third calendar.** The repository already carries two calendar surfaces: `@open-mercato/ui/backend/schedule` (`ScheduleGrid`, `ScheduleAgenda`, `ScheduleToolbar`, `ScheduleView`, `recurrence.ts`), whose item kinds `event` / `exception` already encode the booked-versus-blocked distinction this design needs; and the CRM calendar's own hand-rolled components inside `customers`, written because — per its specification — the `ScheduleItem` model did not fit CRM rendering. This module renders through the `ui` package, which is a package import rather than a cross-module one; whatever it lacks (a buffer band around a block, several participants on one row) is proposed as a contribution to `ui` rather than maintained as a private copy. Extracting the shared half of the CRM calendar into `ui` is worth doing before a fourth one appears, and is raised with maintainers rather than assumed here.
+**No third calendar.** The repository already carries two calendar surfaces: `@open-mercato/ui/backend/schedule` (`ScheduleGrid`, `ScheduleAgenda`, `ScheduleToolbar`, `ScheduleView`, `recurrence.ts`), and the CRM calendar's own hand-rolled components inside `customers`, written because — per its specification — the `ScheduleItem` model did not fit CRM rendering. This module renders through the `ui` package, which is a package import rather than a cross-module one.
+
+What `ScheduleItem` already gives, checked rather than assumed: `kind: 'availability' | 'event' | 'exception'` — **three** kinds, which is exactly the free / booked / blocked triple this design argues is three different things rather than two. That is a stronger starting point than the design assumed.
+
+What it does not give, and what therefore has to be contributed rather than wished for:
+- `status` is `'draft' | 'negotiation' | 'confirmed' | 'cancelled'` — it carries neither `checked_in` nor `no_show`, so the visit state machine either travels in `metadata` or the union gains two members. The second is additive and preferable.
+- `subjectType` is a closed `'member' | 'resource'`, and one item carries one subject. A reservation occupying a practitioner *and* a room therefore renders as one item per lane — which is how a resource-lane calendar draws it anyway, so this is a rendering convention to state rather than a blocker.
+- Buffers have no representation at all; a buffer band around a block is a new visual affordance.
+
+Extracting the shared half of the CRM calendar into `ui` is worth doing before a fourth calendar appears, and is raised with maintainers rather than assumed here.
 
 `DataTable` hosts keep `entityId` and `extensionTableId` stable (`patient_cases.patient`, `patient_cases.case`) so injection from other modules stays backward-compatible. `pageSize` ≤ 100. Every dialog supports `Cmd/Ctrl+Enter` to submit and `Escape` to cancel; icon-only buttons carry `aria-label`.
 
@@ -395,7 +406,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `packages/patient-cases/package.json` | Create | `@open-mercato/patient-cases`, publishable |
 | `packages/patient-cases/src/index.ts` | Create | Barrel exporting module metadata |
 | `.../modules/patient_cases/index.ts` | Create | `ModuleInfo` metadata |
-| `.../modules/patient_cases/acl.ts` | Create | `view`, `create`, `edit`, `delete`, `view_sensitive` |
+| `.../modules/patient_cases/acl.ts` | Create | `view`, `create`, `edit`, `delete`, `view_sensitive`, `view_measurements` |
 | `.../modules/patient_cases/setup.ts` | Create | `defaultRoleFeatures` (including `forms.view` for reception and practitioner roles), required retention setting |
 | `.../modules/patient_cases/encryption.ts` | Create | `defaultEncryptionMaps` |
 | `.../modules/patient_cases/events.ts` | Create | `createModuleEvents` declarations |
@@ -516,7 +527,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | root AGENTS.md | MUST filter every query by `organization_id` | Compliant | Scope is a required argument of every read, including the identifier lookup; asserted by a two-tenant integration fixture |
 | root AGENTS.md | Table names plural snake_case | Compliant | `patient_cases_patients`, `patient_cases_cases`, … |
 | root AGENTS.md | Standard columns `id`, `organization_id`, `tenant_id`, `created_at`, `updated_at` | Compliant | Plus `deleted_at`, `is_active` |
-| root AGENTS.md | Feature ID `<moduleId>.<action>` | Compliant | `patient_cases.view` / `.create` / `.edit` / `.delete` / `.view_sensitive` |
+| root AGENTS.md | Feature ID `<moduleId>.<action>` | Compliant | `patient_cases.view` / `.create` / `.edit` / `.delete` / `.view_sensitive` / `.view_measurements` |
 | root AGENTS.md | Event ID `<moduleId>.<entity>.<past_tense>` | Compliant | `patient_cases.case.status_changed`, `patient_cases.case.consent_check_bypassed`, … |
 | root AGENTS.md | MUST declare `defaultRoleFeatures` for every feature in `acl.ts` | Compliant | Declared in `setup.ts`; `view_sensitive` granted to admin and superadmin only |
 | root AGENTS.md | API routes MUST export `openApi` and `metadata` | Compliant | Stated per route in API Contracts |
@@ -559,6 +570,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 ## Changelog
 
 ### [2026-08-21]
+- Stated the reduced field set explicitly (first name, last name, height, weight) and split measurements out behind their own `patient_cases.view_measurements` grant, so shop-floor access to a body profile is a per-tenant decision rather than a side effect of board access.
+- Replaced the assumed reuse of `@open-mercato/ui/backend/schedule` with what its `ScheduleItem` actually offers: three kinds (the free / booked / blocked triple, already modelled), no `checked_in` or `no_show` status, a closed `member | resource` subject, and no buffer representation — so what must be contributed upstream is named rather than discovered later.
 - Closed the gap the split left behind: the booking series is now a modelled thing (`CaseBooking`), not an implied one. The case owns which reservations belong to it and their `/1`, `/2` position, assigned in this module's transaction with a unique index as the arbiter; the appointment layer owns the reservation and stores nothing about cases. Nothing about a reservation is copied, so there is no second source of truth for its time.
 - Grounded the design against what core gained after 0.6.6: the CRM calendar at `/backend/calendar` is documented as what it is (a read view over `CustomerInteraction`, with advisory client-side conflicts) and rejected as a booking store in Alternatives, while its view layer is explicitly reused — this module renders through `@open-mercato/ui/backend/schedule` rather than adding a third calendar to the repository.
 - Recorded that two booking-layer proposals are in flight (SPEC-008 / PR #33 and SPEC-009) and that this document depends on neither, plus the six requirements this vertical has against whichever wins.
