@@ -227,7 +227,9 @@ Append-only. A status is never written without a matching transition row.
 - `case_id`: string, indexed — FK id → `patient_cases_cases`
 - `booking_ref`: string, indexed — the opaque id of a reservation in whichever appointment layer is installed
 - `sequence_no`: int — the `/1`, `/2` position within the case
-- `unique (case_id, sequence_no)` and `unique (case_id, booking_ref)`
+- `unique (case_id, sequence_no)` and `unique (tenant_id, organization_id, booking_ref)`
+
+**A reservation belongs to exactly one case.** The uniqueness on `booking_ref` is scoped to the organisation rather than to the case, which is what enforces it: attaching a reservation already attached elsewhere fails, rather than quietly giving one appointment two meanings. This is a domain rule, not a modelling convenience — a visit exists to answer *what it is for*, and a schedule that cannot tell reception which case a patient is coming about is worse than no schedule. Bilateral work is one case with `sides = 'both'`, which is what that column is for; two genuinely separate cases mean two appointments, even on the same day.
 
 This is the whole of the seam on this side, and it is deliberately three columns. The case owns the *series*: which reservations belong to it and in what order. The appointment layer owns the *reservation*: when it is, who it occupies, what state it is in. Neither stores the other's half.
 
@@ -300,7 +302,7 @@ All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every r
 - `POST | DELETE /api/patient_cases/cases/:id/bookings` — features `patient_cases.edit`
 - Request (POST): `{ bookingRef }` · Response: `{ item: CaseBooking }` with the assigned `sequenceNo`
 - Attaches a reservation created in the appointment layer to the case and gives it its position in the series; DELETE detaches without touching the reservation itself, because cancelling a booking is that layer's operation, not this one's.
-- Errors: `409 { error: 'booking_already_attached', caseId }` · `409 { error: 'sequence_conflict' }` (concurrent attach; the client retries)
+- Errors: `409 { error: 'booking_already_attached', caseId }` — returned whether the reservation is already on *this* case or on another one, since a reservation belongs to exactly one case · `409 { error: 'sequence_conflict' }` (concurrent attach; the client retries)
 
 ### Cases
 - `GET | POST | PUT | DELETE /api/patient_cases/cases` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
@@ -458,7 +460,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Severity**: Medium
 - **Affected area**: case timeline, patient-facing paperwork
 - **Mitigation**: `unique (case_id, sequence_no)` is the arbiter, assigned inside this module's write transaction rather than read-then-written. The loser retries and takes `/3`; the client is told to retry rather than shown a raw constraint error.
-- **Residual risk**: A reservation can exist in the appointment layer without a `CaseBooking` row if the attach fails after the booking was created. It surfaces as an orphan on that layer's calendar rather than as a phantom on the timeline, and re-attaching is idempotent on `(case_id, booking_ref)`.
+- **Residual risk**: A reservation can exist in the appointment layer without a `CaseBooking` row if the attach fails after the booking was created. It surfaces as an orphan on that layer's calendar rather than as a phantom on the timeline, and re-attaching the same reservation to the same case is idempotent; re-attaching it to a *different* case is refused, because a reservation belongs to exactly one case.
 
 #### Referenced entity deleted mid-flight
 - **Scenario**: A practitioner is removed from `staff` while cases referencing them exist.
@@ -570,6 +572,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 ## Changelog
 
 ### [2026-08-21]
+- Stated and enforced the rule that a reservation belongs to exactly one case: `booking_ref` is unique per organisation rather than per case. A visit exists to answer what it is for, and one appointment with two meanings makes the schedule unreadable at the desk. Bilateral work is one case with `sides = 'both'`.
 - Stated the reduced field set explicitly (first name, last name, height, weight) and split measurements out behind their own `patient_cases.view_measurements` grant, so shop-floor access to a body profile is a per-tenant decision rather than a side effect of board access.
 - Replaced the assumed reuse of `@open-mercato/ui/backend/schedule` with what its `ScheduleItem` actually offers: three kinds (the free / booked / blocked triple, already modelled), no `checked_in` or `no_show` status, a closed `member | resource` subject, and no buffer representation — so what must be contributed upstream is named rather than discovered later.
 - Closed the gap the split left behind: the booking series is now a modelled thing (`CaseBooking`), not an implied one. The case owns which reservations belong to it and their `/1`, `/2` position, assigned in this module's transaction with a unique index as the arbiter; the appointment layer owns the reservation and stores nothing about cases. Nothing about a reservation is copied, so there is no second source of truth for its time.
