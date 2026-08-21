@@ -1,11 +1,12 @@
-# SPEC-006: Appointment Layer — Booking on Top of `planner`
+# SPEC-009: Appointment Layer — Practice Requirements for a Booking Engine
 
 ## TLDR
 
 **Key Points:**
-- Core owns availability (`planner`), the people and rooms that have it (`staff`, `resources`) and nothing that **books** against it. This document specifies that missing primitive: a booking with participants, buffers, a state machine and a conflict check.
-- The primitive is deliberately **subject-agnostic**. A booking references its subject by `(subject_type, subject_id)` and knows nothing about what that subject is — a patient case, a service ticket, a training slot.
-- Split out of SPEC-005, which uses this layer as its first consumer. SPEC-005 is answerable and buildable without this document; this document is gated on **Q1** alone.
+- Core owns availability (`planner`), the people and rooms that have it (`staff`, `resources`) and nothing that **books** against it. **SPEC-008 (PR #33) already proposes an engine for exactly that**, filed before this document.
+- This document is therefore **not a competing proposal**. It states what an appointment-shaped consumer needs from such an engine — minute-level scheduling, per-type buffers, multi-participant reservations, server-side rejection, non-attendance as its own state, availability computed from `planner` — and gives a reference shape for each, so the requirements can be checked against a design rather than argued in the abstract.
+- Two of the six are schema and write-path decisions, cheap while an engine is still a specification and expensive after an MVP ships. That is why they are published now rather than filed as feedback later.
+- Split out of SPEC-005, which consumes whichever engine wins and depends on neither document.
 
 **Scope:**
 - `BookingType` — per-tenant dictionary entry with its own duration and buffers.
@@ -14,15 +15,16 @@
 - The availability service — `planner` rules minus bookings, buffers and blocks, computed on the fly and cached.
 
 **Concerns:**
-- Where this layer belongs is genuinely open (Q1) and moves the whole document: a new module, an extension of `planner`, or — the fallback — these entities living inside `patient_cases` under the domain name `Visit*`.
+- Two booking proposals in flight at once is worse for maintainers than either alone. This one yields the engine question to SPEC-008 and keeps only the requirements and the fallback.
 
 ## Open Questions
 
 > **Design-only.** No package is scaffolded until Q1 is answered, because Q1 decides which package this is.
 
-- **Q1**: Where does the appointment layer belong? **(a)** a new subject-agnostic scheduling module in core or the official-modules monorepo; **(b)** inside `patient_cases`, named `Visit*` and scoped to that vertical; **(c)** a contribution extending `planner` itself with a booking layer. The layer is broader than the medical vertical — beauty, field service, consulting and training need the same primitive — and the OpenEMR/OpenMRS split between practice management and the record layer argues for (a). Under (b) every entity here keeps its shape and gains the `patient_cases_` table prefix and the domain name; nothing else in this document changes. Under (c) the entities land beside `planner_availability_rule_set` and the module boundary disappears.
+- **Q1**: Does **SPEC-008** (PR #33) take these six requirements into its scope? Its MVP is explicit that an hourly timeline is out of scope, that a conflict is a plain overlap, and that a booking ties **one** resource to a target — so items 1, 3 and 4 of the requirement list are open against it today, and items 3 and 4 change its schema and write path rather than its UI. If the answer is yes, this document becomes the acceptance criteria for that engine and its reference model below is redundant — the better outcome.
+- **Q1b** (only if the answer to Q1 is no): where does a second layer belong — a subject-agnostic scheduling module, a `planner` contribution, or these entities inside `patient_cases` under the domain name `Visit*`? Under the last option every entity keeps its shape and gains the `patient_cases_` table prefix; nothing else changes.
 
-This is the only open question in this document. Everything below is written for outcome (a) and annotated where (b) or (c) would differ.
+No package is scaffolded under either answer until maintainers have picked one.
 
 ---
 
@@ -31,6 +33,10 @@ This is the only open question in this document. Everything below is written for
 `planner` answers "when is this person or room available"; nothing in the platform answers "and what is booked against that availability". Every vertical that schedules anything therefore rebuilds the same thing: a reservation, the actors it occupies, the buffers around it, and the check that stops two of them landing on one slot.
 
 This document specifies that reservation once, without the vertical. Its first consumer is SPEC-005 (`patient_cases`), where a booking is called a *visit* and its subject is a case — but the primitive itself carries no such vocabulary.
+
+**Relationship to SPEC-008 (PR #33).** That proposal covers the same ground — bookings tying a resource to a target over time, conflict detection, a schedule, a resource-lane timeline — and was filed on 2026-08-10, eleven days before this document. It is the natural home for the engine. Its MVP, by its own scope section, works at **daily** granularity with an hourly timeline explicitly deferred, treats a conflict as a plain overlap, and binds one resource per booking. Those are exactly the three gaps a practice calendar cannot live with, and two of them are schema-level. The requirement list below is written to be usable as review input on that PR.
+
+**Relationship to the CRM calendar.** Core also ships a full-page calendar at `/backend/calendar` (`customers` module). Its own specification states it adds no entity, no route and no schema change: it is a read view plus editor over `CustomerInteraction`, with client-side advisory conflict badges over user participants. It is not a booking store, but its view layer — together with `@open-mercato/ui/backend/schedule` — is what any of these engines should render through. The repository already has two calendar surfaces; a third would be a mistake, and extracting the shared half into `ui` is worth raising on its own.
 
 **Relationship to SPEC-005.** The two meet at one seam, stated identically in both documents:
 
@@ -42,6 +48,21 @@ This document specifies that reservation once, without the vertical. Its first c
 > **Market Reference**: HL7 FHIR (`Schedule` / `Slot` / `Appointment`), Cal.com, and the practice-management layers of OpenEMR and OpenMRS.
 > **Adopted**: the three-way distinction between free, booked and **blocked** time; booking as a multi-actor reservation, since FHIR hangs a schedule off an actor (practitioner, location, device) and a conflict check must therefore cover all of them; booking type as configurable data with its own duration and buffers, as in Cal.com's event types; non-attendance as its own terminal state rather than a cancellation.
 > **Rejected**: slot materialisation — FHIR pre-generates `Slot` rows while Cal.com computes availability on the fly; the computed approach avoids a table to maintain, backfill and desynchronise, and the platform cache covers the performance gap at this scale. Also rejected: the participant confirmation round-trip (`AppointmentResponse` — in practice the receptionist sets the time), and recurring bookings or series templates.
+
+## The six requirements
+
+Each is stated as the practice behaviour it protects, then as what it costs an engine to support. The reference model further down shows one way to satisfy all six; it is not the only way, and where SPEC-008 satisfies a requirement differently, its answer wins.
+
+| # | Requirement | Why the practice needs it | Cost to an engine |
+|---|---|---|---|
+| 1 | **Minute-level scheduling** | A fitting is at 10:30, not on Tuesday. Reception books into a working day, not a date range | UI and arithmetic; SPEC-008 notes its model already stores full timestamps, so no schema change |
+| 2 | **Per-type duration and buffers** | A consultation, a trial fitting and a handover occupy different amounts of a day; the cleaning gap after a cast is occupancy, not decoration | A type dictionary entity plus buffer arithmetic inside the conflict check |
+| 3 | **Several participants per reservation** | A fitting occupies a practitioner *and* a room *and* sometimes a device; a clash on any of them is a clash | **Schema**: a participant table rather than one resource column. Cheap now, a migration later |
+| 4 | **Conflicts rejected server-side** | Two receptionists on one slot must get a 409, not two bookings and a warning badge | **Write path**: the check runs inside the write transaction, not in the client. Cheap now, a rewrite later |
+| 5 | **Non-attendance as its own terminal state** | "Did not show up" and "cancelled in advance" are different business events; collapsing them destroys the only metric that measures the problem | One extra state and one extra event id |
+| 6 | **Availability computed from `planner` rules** | Reception asks "what is free for a 45-minute fitting next week", not "show me the occupancy and let me subtract" | A read service combining rules, bookings, buffers and blocked time |
+
+Requirements 3 and 4 are the ones worth settling before an MVP ships; the rest are additive afterwards.
 
 ## Problem Statement
 
@@ -208,7 +229,7 @@ No hardcoded user-facing strings; all copy resolves through `useT()`.
 
 **Booking calendar** — filtered by type from the dictionary. Blocked time is visually distinct from booked time; they are not the same thing. State changes in one click, with "did not attend" as prominent as "cancelled" — otherwise reception uses cancellation for both and the metric stops meaning anything.
 
-![Booking calendar](assets/spec-006/booking-calendar.png)
+![Booking calendar](assets/spec-009/booking-calendar.png)
 
 *The mock is rendered with synthetic data from the SPEC-005 vertical; the layer itself carries no vertical.*
 
@@ -378,10 +399,11 @@ No hardcoded user-facing strings; all copy resolves through `useT()`.
 
 ### Verdict
 
-Blocked on **Q1** alone. The document is complete enough to review; the package it describes is not scaffolded until maintainers say which package it is.
+Blocked on **Q1** alone — and the preferred resolution is that SPEC-008 absorbs the requirements and this document becomes its acceptance criteria rather than a second engine. The document is complete enough to review; the package it describes is not scaffolded until maintainers say which package it is.
 
 ## Changelog
 
 ### [2026-08-21]
+- Reframed from an engine proposal into a requirements document after finding SPEC-008 (PR #33), which proposes the same engine and was filed eleven days earlier. The engine question is yielded to that PR; what remains here is the six appointment-shaped requirements, a reference shape for each, and the fallback if the answer is no. Renumbered from SPEC-006 to SPEC-009, since 006, 007 and 008 were taken by PRs #31, #26 and #33 while this was being written.
 - Split out of SPEC-005 after review feedback that an architectural question touching one phase should not hold the other two hostage. Carries the appointment layer and its open question; SPEC-005 keeps the patient record and the case lifecycle and depends on nothing here.
 - Entities renamed to their subject-agnostic form (`Visit*` → `Booking*`) and the subject expressed as `(subject_type, subject_id)`, so the layer serves verticals beyond the medical one. Under Q1 outcome (b) the original names return unchanged.

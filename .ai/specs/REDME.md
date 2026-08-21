@@ -43,7 +43,7 @@ Files like `AGENTS.md` and `CLAUDE.md` use UPPERCASE names and are not numberedâ
 | [SPEC-001](SPEC-001-2026-01-21-ui-reusable-components.md) | 2026-01-21 | UI Reusable Components | Library of reusable UI components and patterns |
 | [SPEC-002](SPEC-002-2026-01-23-messages-module.md) | 2026-01-23 | Messages Module | Internal messaging and communication system |
 | [SPEC-003](SPEC-003-2026-01-23-notifications-module.md) | 2026-01-23 | Notifications Module | User notification system with multiple channels |
-| [SPEC-006](SPEC-006-2026-08-21-appointment-layer.md) | 2026-08-21 | Appointment Layer | Subject-agnostic booking on top of `planner`: bookings, participants, buffers, blocked time and availability |
+| [SPEC-009](SPEC-009-2026-08-21-appointment-layer.md) | 2026-08-21 | Appointment Layer | Practice requirements for a booking engine (see SPEC-008): minute-level scheduling, buffers, multi-participant reservations, enforced conflicts |
 
 ## Specification Structure
 
