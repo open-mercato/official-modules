@@ -13,8 +13,8 @@
 - Consent is **not** implemented here — it is consumed from `@open-mercato/forms` (`FormConsentRecord`).
 
 **Concerns:**
-- Core has no appointment primitive at all. Q1 decides whether the appointment layer belongs in this module or in a generic scheduling module — the answer moves three entities and three API routes.
-- Declaring patient names in `defaultEncryptionMaps` breaks fuzzy search, which reception depends on daily. Q3 asks whether the platform has a direction for this.
+- Core has no appointment primitive at all. Q1 decides whether the appointment layer belongs in this module or in a generic scheduling module — the answer moves four entities and four API routes.
+- Declaring patient names in `defaultEncryptionMaps` does **not** break the internal token search (`query_index` indexes decrypted content); it removes them from external engines. Q3 is narrowed to external engines and to whether tokens derived from Art. 9 names should exist at all.
 
 ## Open Questions
 
@@ -22,7 +22,8 @@
 
 - **Q1**: Should the appointment layer (`Visit`, `VisitType`, `VisitParticipant`, `TimeBlock`) live in this module, in a **generic subject-agnostic scheduling module**, or as a contribution extending `planner` with a booking layer? The layer is broader than this vertical — beauty, field service, consulting and training need the same primitive — and the OpenEMR/OpenMRS split between practice management and the record layer suggests the generic option.
 - **Q2**: Consent reuse. This spec assumes `patient_cases` consumes `@open-mercato/forms` `FormConsentRecord` with `subject_type = 'patient_cases.patient'` rather than shipping its own consent log. Is that the intended composition, and is `forms` an acceptable peer dependency for a community module?
-- **Q3**: Search over encrypted fields. Once `first_name` / `last_name` are declared in `defaultEncryptionMaps`, fuzzy search stops working, and reception searches by surname constantly. Do `query_index` / `search` have a planned direction for encryption-mapped fields? Without one, v1 does exact-match lookup via `hashField` only, with the limitation stated rather than failing silently.
+- **Q3**: Search over encrypted fields — **narrowed after review**. `query_index` builds search tokens from *decrypted* documents (`packages/core/src/modules/query_index/lib/indexer.ts` resolves the tenant encryption service and calls `decryptIndexDocForSearch` before `replaceSearchTokensForRecord`), so token search over `first_name` / `last_name` works with those fields declared in `defaultEncryptionMaps`. What excludes them is the external-engine field policy (`packages/search/src/lib/field-policy.ts`), which drops encryption-mapped fields from documents sent to Meilisearch/vector and routes `hashField` fields to hash-only matching. Two questions remain: **(a)** is there a planned direction for fulltext/vector engines over encryption-mapped fields, and **(b)** should search tokens derived from Art. 9 names sit in `search_tokens` at all? (b) is a privacy question rather than a capability one, and it is the one this module most needs answered — if the answer is no, names stay out of the search config entirely and lookup remains identifier-only.
+  - *Related documentation defect*: the standalone search guide shipped with a 0.6.6 scaffold states as MUST rule #5 — "MUST NOT include encrypted/sensitive fields in `buildSource` text" — without distinguishing the internal token path from documents sent to an external engine. That rule is right for external engines and misleading for tokens; this spec was originally written against it. Worth correcting upstream so the next module author does not design around a limit that is not there.
 - **Q4**: Role-scoped field visibility. The requirement is that a workshop role sees a patient's first name, last name, height and weight and nothing else, enforced server-side. Is that a platform concern (RBAC/UMES) or a module concern? If platform, it ships as a separate contribution and this module only configures it.
 - **Q5**: Clinical documentation is assumed out of scope — a case carries measurements, specification, schedule and status, not diagnoses (in Poland this additionally touches the EDM/P1 regulatory surface). Confirming this closes the `Case` entity.
 
@@ -58,7 +59,7 @@ The planning primitives exist and are good. What is missing is the entity that c
 
 1. **The visit calendar** had to be built from scratch, including all conflict and availability handling, because core has no appointment concept.
 2. **Terminology drift between "consultation" and "visit"** — not a typo but a symptom. With nothing modelling the difference between a *case* and a *visit within it*, the vocabulary split apart in the code and in conversations with the client. A consultation is in fact one visit type within a case, not a synonym for the case.
-3. **Search collided with encryption** — a direct consequence of encrypting PII at rest without a lookup strategy designed alongside it. Any integrator who declares personal fields in encryption maps according to platform rules hits the same wall.
+3. **Search collided with encryption** — recorded here as a historical observation rather than a standing platform gap. The deployment predates `query_index` decrypting documents before building search tokens; what survives of the problem is the external-engine path and the privacy question in Q3.
 
 A fourth observation concerns access rather than a defect: the owner refused workshop technicians access to sensitive patient data, granting them exactly first name, last name, weight and height. The production board and the tablet went live under that constraint — a field-level requirement on a record that is simultaneously the subject of a production order (Q4).
 
@@ -84,6 +85,7 @@ A community module owning three concepts and duplicating nothing core or another
 | One `Visit` entity with a state machine, not FHIR's `Appointment` + `Encounter` | While clinical documentation is out of scope (Q5) an encounter carries almost nothing beyond a status; splitting it out later is additive |
 | `measurements` / `specification` as `jsonb` | Their shape depends on the product type and is defined per tenant; individual dimensions are never filtered or sorted on. Everything that *is* filtered on has its own column |
 | `no_show` is a terminal state distinct from `cancelled` | They are different business events with different operational meaning; collapsing them makes the resulting metric meaningless |
+| Staff absence is copied into `TimeBlock` rather than read through at computation time | Availability is the hot path, and read-through puts a cross-module `staff` read on every computation; `TimeBlock` exists regardless for manual blocks, so the alternative removes the projection, not the entity; and with `staff` absent the copy degrades to manual entry while read-through degrades to nothing. The cost — drift when a subscriber fails — is answered by an idempotent reprojection command rather than accepted silently. Read-through remains the documented exit path |
 | Every case status change writes a `CaseTransition` row | The status column is never edited without history, which is what makes the lifecycle auditable and reversible |
 
 ### Alternatives Considered
@@ -133,7 +135,7 @@ The module owns nothing that core already provides. Availability rules come from
 ### Commands & Events
 
 - **Commands**: `patient_cases.patient.create` · `patient_cases.patient.update` · `patient_cases.case.create` · `patient_cases.case.transition` · `patient_cases.visit.schedule` · `patient_cases.visit.reschedule` · `patient_cases.visit.transition`
-- **Events**: `patient_cases.case.created` · `patient_cases.case.status_changed` · `patient_cases.case.handed_over` · `patient_cases.visit.scheduled` · `patient_cases.visit.rescheduled` · `patient_cases.visit.cancelled` · `patient_cases.visit.no_show`
+- **Events**: `patient_cases.case.created` · `patient_cases.case.status_changed` · `patient_cases.case.handed_over` · `patient_cases.visit.scheduled` · `patient_cases.visit.rescheduled` · `patient_cases.visit.cancelled` · `patient_cases.visit.marked_no_show` · `patient_cases.case.consent_check_bypassed`
 
 Events make the operational metrics — no-show rate, schedule utilisation, time-to-handover — measurable without bolting on separate analytics.
 
@@ -153,12 +155,14 @@ The module is an external extension and modifies no core package.
 
 All entities carry the standard columns: `id` (UUID PK), `organization_id`, `tenant_id`, `created_at`, `updated_at`, `deleted_at`, `is_active`, with `organization_id` indexed. Only domain fields are listed below.
 
+Optimistic locking is on by default in the platform (`OM_OPTIMISTIC_LOCK`), so every editable entity here exposes `updated_at` as `updatedAt` in list and detail responses, every edit and delete request carries the expected-version header (`x-om-ext-optimistic-lock-expected-updated-at`), and a stale write returns `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`. Two receptionists editing one patient record is an ordinary collision in this domain, not a corner case, so the conflict is a documented outcome rather than a surprise.
+
 ### Patient (`patient_cases_patients`)
 - `first_name`: string — encrypted
 - `last_name`: string — encrypted
 - `phone`: string, nullable — encrypted
 - `email`: string, nullable — encrypted; `email_hash`: string, nullable, indexed
-- `national_id`: string, nullable — encrypted; `national_id_hash`: string, nullable, **unique per tenant**
+- `national_id`: string, nullable — encrypted; `national_id_hash`: string, nullable, **unique per organization** — index on `(tenant_id, organization_id, national_id_hash)`
 - `has_no_national_id`: boolean, default `false`
 - `identity_document_type`: string, nullable — `passport` | `other`
 - `identity_document_number`: string, nullable — encrypted
@@ -172,6 +176,8 @@ All entities carry the standard columns: `id` (UUID PK), `organization_id`, `ten
 
 `national_id_hash` is nullable, so Postgres's `NULL <> NULL` semantics already permit any number of patients without an identifier under a unique index, with no extra schema work.
 
+**Uniqueness is scoped per organization, not per tenant.** Every read path in the platform filters by `organization_id`, so a tenant-wide unique index would let a receptionist in organisation B hit `409 duplicate_national_id` carrying the id of a record they cannot open, cannot read, and are not meant to know exists — intake blocked with no in-product resolution. Scoping the index to the organisation removes the situation instead of specifying a workaround for it. The accepted cost is that one person registered in two organisations of the same tenant is two records, which is what the organisational boundary already means everywhere else in the platform. The lookup endpoint is scoped identically.
+
 ### Case (`patient_cases_cases`)
 - `case_number`: string(64) — unique per organization
 - `patient_id`: string, indexed — FK id → `patient_cases_patients`
@@ -184,6 +190,7 @@ All entities carry the standard columns: `id` (UUID PK), `organization_id`, `ten
 - `practitioner_id`: string, nullable, indexed — FK id → `staff`
 - `production_order_ref`: string, nullable
 - `sales_order_id`: string, nullable, indexed — FK id → `sales`
+- `terms_consent_bypassed`: boolean, default `false` — set when the case was created while no consent source was resolvable
 
 ### CaseTransition (`patient_cases_case_transitions`)
 - `case_id`: string, indexed
@@ -235,50 +242,83 @@ Blocked time is distinct from booked time; both remove availability, only one is
 
 `src/modules/patient_cases/encryption.ts` declares `defaultEncryptionMaps` for `patient_cases:patient` covering `first_name`, `last_name`, `phone`, `address_line`, `city`, `identity_document_number`, `email` (`hashField: 'email_hash'`) and `national_id` (`hashField: 'national_id_hash'`). Reads go exclusively through `findWithDecryption` / `findOneWithDecryption` with `{ tenantId, organizationId }`.
 
-Deliberately not encrypted: `sex`, `preferred_language`, `postal_code`, `height_cm`, `weight_kg` — classification codes and numbers that must be filtered and grouped on, with no compliance benefit from encryption. **Case, visit and time-block entities hold no personal data at all**; they reference the patient by id, which is what makes it possible to show the production board and the calendar to a role with no right to the patient record.
+Deliberately not encrypted: `sex`, `preferred_language`, `postal_code`, `height_cm`, `weight_kg` — classification codes and numbers that must be filtered and grouped on, with no compliance benefit from encryption.
+
+**Case, visit and time-block entities carry no direct identifiers** — they reference the patient by id. That is deliberately not the same claim as "no personal data": `measurements` and `specification` are body measurements bound to a patient id, i.e. pseudonymised data concerning health. What the absence of direct identifiers buys is narrower and still worth having — the production board and the calendar can be shown to a role holding no right to the patient record. The workshop's access to measurements is justified on its own footing, as processing necessary to manufacture the device, and that justification is exactly what Q4 has to settle.
+
+#### Lookup hashes require a pepper
+
+`hashForLookup(value, context?)` uses a keyed HMAC only when a secret resolves — `LOOKUP_HASH_PEPPER`, then `TENANT_DATA_ENCRYPTION_FALLBACK_KEY`, then `TENANT_DATA_ENCRYPTION_KEY` — and otherwise falls back to `legacyHashForLookup`, an unkeyed SHA-256 of the normalised value. A national identifier has a small, structured search space, so an unkeyed digest is invertible offline against a stolen dump in minutes, which would make the encrypted `national_id` column standing next to it decorative.
+
+As module-level rules:
+- A lookup pepper is a **deployment precondition**, stated in the module README and verified at setup time.
+- The module refuses to write `national_id_hash` when no secret resolves — failing loudly rather than persisting an invertible digest. Deduplication degrades to the fallback-identity path until the secret is configured.
+- Hashes are computed with an explicit context — `hashForLookup(nationalId, 'patient_cases:national_id')` — so the same identifier hashed for another entity is not comparable across tables.
 
 ### Consent (external)
 
 Consent state is read from `forms.FormConsentRecord` with `subject_type = 'patient_cases.patient'` and `subject_id = patient.id`. The module stores no consent columns. Opening a case requires an `active` record for the tenant-configured terms clause; processing and marketing consents are read for display and for governing consent-dependent processing, and do **not** gate the record — the lawful basis for holding the documentation is a statutory retention obligation, not a consent the patient could withdraw out from under the practice.
+
+**How such a record comes to exist.** `FormConsentRecord` rows are projected from a form submission and inherit that submission's subject — the projector copies `subjectType` / `subjectId` off the submission — so a row with `subject_type = 'patient_cases.patient'` only ever appears if something creates a submission already bound to the patient. This module therefore owns the binding, not merely the read:
+- **At the desk** — the patient record page opens the configured terms form as a submission carrying `subjectType = 'patient_cases.patient'` and `subjectId = patient.id`, and the signature is captured in person.
+- **Remotely** — a distribution created from the patient record carries the same subject binding, so the projection lands on the patient when the patient signs.
+
+Nothing is subscribed to on the `forms` side: `forms` projects the record itself and this module reads the projection.
+
+**Read path.** Consent state is read through the DI service `formsConsentRecordService` registered by `forms`, never by querying `forms` entities across the module boundary. Where an HTTP read is needed instead, the route is `GET /api/forms/forms/subjects/{subjectType}/{subjectId}/consents`, guarded by `forms.view` — so the reception and practitioner roles need `forms.view` granted in this module's `setup.ts` alongside its own features.
+
+**A bypassed gate leaves a trace.** When the terms clause is unconfigured or `forms` is absent, case creation proceeds (see the fail-open risk) and records that it did: `Case.terms_consent_bypassed` is set on the row, and `patient_cases.case.consent_check_bypassed` is emitted for `audit_logs`. A setup-time warning does not survive into the record, and "which cases were opened without a consent check" has to be answerable from the data a year later rather than reconstructible from deployment history.
+
+### Retention, Erasure and Access Audit
+
+The Overview promises the platform handles retention once; this is what that means concretely for Art. 9 data.
+
+**How long.** Retention is a per-tenant setting, not a module constant, because the answer depends on what the tenant legally is: a healthcare provider keeping medical documentation (in Poland, a 20-year obligation) or a manufacturer of a made-to-order device, where ordinary limitation and tax periods apply. The module ships no default that pretends to settle that; setup requires the period to be stated explicitly. The basis is statutory, never consent — which is the same distinction that keeps processing consent from gating the record.
+
+**Erasure against a live obligation.** An erasure request is recorded as an event in its own right and answered, not silently refused. Where the retention obligation still runs, GDPR Art. 17(3)(b) governs: the record is soft-deleted and drops out of every operational read immediately, the requester is told the date on which erasure completes, and the anonymisation runs when the obligation lapses. Where no obligation applies, anonymisation runs at once.
+
+**Erasure means anonymisation, not deletion.** Anonymisation clears the encrypted PII columns and both identifier hashes, and drops `measurements` and `specification`; the case keeps its number, product type, dates and status as a de-identified production record. Deleting the case outright would rewrite the manufacturing history for a right that only extends to the personal data.
+
+**Access audit.** Reads of a patient detail record and identifier lookups are written to `audit_logs`; list views are not. That is a decision rather than an omission — auditing reception's daily list traffic drowns the trail that matters, which is who opened whose record.
 
 ## API Contracts
 
 All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every route file exports per-method `metadata` (`requireAuth`, `requireFeatures`) and `openApi`.
 
 ### Patients
-- `GET | POST | PUT | DELETE /api/patient-cases/patients` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
+- `GET | POST | PUT | DELETE /api/patient_cases/patients` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ firstName, lastName, phone?, email?, hasNoNationalId, nationalId?, identityDocumentType?, identityDocumentNumber?, birthDate?, sex?, preferredLanguage?, addressLine?, city?, postalCode?, heightCm?, weightKg?, defaultPractitionerId? }`
 - Response: `{ item: Patient }` with encrypted fields decrypted for roles holding `patient_cases.view_sensitive`, and reduced to the visible subset otherwise (Q4)
-- Errors: `409 { error: 'duplicate_national_id', patientId }` · `400 { error: 'identity_inconsistent' }`
+- Errors: `409 { error: 'duplicate_national_id', patientId }` · `400 { error: 'identity_inconsistent' }` · `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`
 
 ### Patient lookup
-- `GET /api/patient-cases/patients/lookup?nationalId=` — feature `patient_cases.view`
+- `GET /api/patient_cases/patients/lookup?nationalId=` — feature `patient_cases.view`
 - Response: `{ match: { id, displayName } | null }` — always `200`. Advisory before submit; the unique index is the authoritative block.
 
 ### Cases
-- `GET | POST | PUT | DELETE /api/patient-cases/cases` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
+- `GET | POST | PUT | DELETE /api/patient_cases/cases` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ patientId, productTypeId?, sides?, plannedFittingAt?, plannedHandoverAt?, practitionerId? }`
-- Errors: `422 { error: 'terms_consent_missing' }` when no `active` terms consent record exists for the patient
+- Errors: `422 { error: 'terms_consent_missing' }` when no `active` terms consent record exists for the patient · `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`
 
 ### Case transition
-- `POST /api/patient-cases/cases/:id/transition` — feature `patient_cases.edit`
+- `POST /api/patient_cases/cases/:id/transition` — feature `patient_cases.edit`
 - Request: `{ toStatus, note? }` · Response: `{ item: Case, transition: CaseTransition }`
 - Errors: `409 { error: 'illegal_transition', from, to }`
 
 ### Visit types
-- `GET | POST | PUT | DELETE /api/patient-cases/visit-types` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
+- `GET | POST | PUT | DELETE /api/patient_cases/visit-types` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 
 ### Visits
-- `GET | POST | PUT | DELETE /api/patient-cases/visits` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
+- `GET | POST | PUT | DELETE /api/patient_cases/visits` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ caseId, visitTypeId, startsAt, participants: [{ participantType, participantId }] }`
 - Errors: `409 { error: 'participant_conflict', conflicts: [{ participantType, participantId, visitId }] }`
 
 ### Visit transition
-- `POST /api/patient-cases/visits/:id/transition` — feature `patient_cases.edit`
+- `POST /api/patient_cases/visits/:id/transition` — feature `patient_cases.edit`
 - Request: `{ toStatus, cancelledReason? }` · Errors: `409 { error: 'illegal_transition', from, to }`
 
 ### Availability
-- `GET /api/patient-cases/visits/availability?visitTypeId=&practitionerId=&from=&to=` — feature `patient_cases.view`
+- `GET /api/patient_cases/visits/availability?visitTypeId=&practitionerId=&from=&to=` — feature `patient_cases.view`
 - Response: `{ slots: [{ startsAt, endsAt }] }` — computed from `planner` rules minus visits, buffers and time blocks. Advisory; the write decides.
 
 ## Internationalization (i18n)
@@ -330,6 +370,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 
 - Terms clause binding — tenant setting naming the `forms` form id and `consent_field_key` that count as the practice's terms acceptance. Without it the terms gate is inactive and case creation is not blocked.
 - Case-number format — tenant setting; defaults to `{PREFIX}/{SEQ}/{YYYY}`.
+- Retention period — tenant setting, required at setup, with no module default (see Data Models → Retention, Erasure and Access Audit).
+- Lookup pepper — `LOOKUP_HASH_PEPPER` (or one of the encryption-key fallbacks) is a deployment precondition; without it the module refuses to write identifier hashes and deduplication degrades to the fallback-identity path.
 
 ## Migration & Compatibility
 
@@ -348,6 +390,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 4. `api/patients/route.ts` via `makeCrudRoute` with `indexer`; `api/patients/lookup/route.ts`.
 5. Backend list + record pages with identifier masking and the debounced lookup alert.
 
+**Done when**: a patient with a national identifier cannot be created twice in one organisation (409 carries the existing id); a patient without one saves through the fallback path; identifier hashes are refused when no lookup pepper resolves; a role without `patient_cases.view_sensitive` receives the reduced field set from the API, not a UI-filtered one; a stale edit returns `optimistic_lock_conflict`.
+
 ### Phase 2: Case
 1. `Case` and `CaseTransition` entities; generate the migration.
 2. Case create/update commands; `api/cases/route.ts`.
@@ -355,6 +399,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 4. Measurements and specification editing with autosave and left/right copy.
 5. Case timeline page.
 6. `forms` consent integration — terms gate on case creation, consent block on the record page.
+
+**Done when**: every status change has a matching `CaseTransition` row and no illegal transition is accepted; case creation without an active terms consent returns 422, and creation through an open gate sets `terms_consent_bypassed` and emits the audit event; left/right measurement copy is independent after the copy.
 
 ### Phase 3: Visits *(gated on Q1)*
 1. `VisitType` entity and CRUD; seed the default dictionary in `setup.ts`.
@@ -364,6 +410,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 5. Availability service with cache tagging and event-driven invalidation.
 6. Visit calendar page with one-click state changes.
 
+**Done when**: a buffer-only overlap is rejected; concurrent booking of one slot yields 409 rather than an overwrite; staff leave blocks a slot without cancelling booked visits, and reprojection rebuilds blocks after a dropped event; `marked_no_show` and `cancelled` emit distinct events; with `planner` absent a manual time range still books.
+
 ### File Manifest
 
 | File | Action | Purpose |
@@ -372,7 +420,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `packages/patient-cases/src/index.ts` | Create | Barrel exporting module metadata |
 | `.../modules/patient_cases/index.ts` | Create | `ModuleInfo` metadata |
 | `.../modules/patient_cases/acl.ts` | Create | `view`, `create`, `edit`, `delete`, `view_sensitive` |
-| `.../modules/patient_cases/setup.ts` | Create | `defaultRoleFeatures`, seeded visit-type dictionary |
+| `.../modules/patient_cases/setup.ts` | Create | `defaultRoleFeatures` (including `forms.view` for reception and practitioner roles), seeded visit-type dictionary, required retention setting |
 | `.../modules/patient_cases/encryption.ts` | Create | `defaultEncryptionMaps` |
 | `.../modules/patient_cases/events.ts` | Create | `createModuleEvents` declarations |
 | `.../modules/patient_cases/data/entities.ts` | Create | 7 entities |
@@ -394,14 +442,14 @@ The three screens below are static mocks of the proposed module, rendered with s
 
 | Surface | Covered by |
 |---|---|
-| `GET/POST/PUT/DELETE /api/patient-cases/patients` | TC-PC-001 (CRUD + dedup 409) |
-| `GET /api/patient-cases/patients/lookup` | TC-PC-002 (match / no match / failure fail-open) |
-| `GET/POST/PUT/DELETE /api/patient-cases/cases` | TC-PC-003 (CRUD + terms gate 422) |
-| `POST /api/patient-cases/cases/:id/transition` | TC-PC-004 (legal + illegal transitions) |
-| `GET/POST/PUT/DELETE /api/patient-cases/visit-types` | TC-PC-005 |
-| `GET/POST/PUT/DELETE /api/patient-cases/visits` | TC-PC-006 (conflict, buffer, concurrency) |
-| `POST /api/patient-cases/visits/:id/transition` | TC-PC-007 (`no_show` vs `cancelled` events) |
-| `GET /api/patient-cases/visits/availability` | TC-PC-008 (blocks, buffers, `planner` absent) |
+| `GET/POST/PUT/DELETE /api/patient_cases/patients` | TC-PC-001 (CRUD + dedup 409) |
+| `GET /api/patient_cases/patients/lookup` | TC-PC-002 (match / no match / failure fail-open) |
+| `GET/POST/PUT/DELETE /api/patient_cases/cases` | TC-PC-003 (CRUD + terms gate 422) |
+| `POST /api/patient_cases/cases/:id/transition` | TC-PC-004 (legal + illegal transitions) |
+| `GET/POST/PUT/DELETE /api/patient_cases/visit-types` | TC-PC-005 |
+| `GET/POST/PUT/DELETE /api/patient_cases/visits` | TC-PC-006 (conflict, buffer, concurrency) |
+| `POST /api/patient_cases/visits/:id/transition` | TC-PC-007 (`marked_no_show` vs `cancelled` events) |
+| `GET /api/patient_cases/visits/availability` | TC-PC-008 (blocks, buffers, `planner` absent) |
 | UI: patient record, case timeline, visit calendar | TC-PC-009 (happy path walk-through) |
 
 ## Risks & Impact Review
@@ -411,8 +459,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 #### Concurrent creation of the same patient
 - **Scenario**: Two receptionists submit the same national identifier within the same second; both lookups return no match before either write lands.
 - **Severity**: Medium
-- **Affected area**: `POST /api/patient-cases/patients`, patient record UI
-- **Mitigation**: The tenant-scoped unique index on `national_id_hash` is the authoritative arbiter, not the advisory lookup. The second insert fails on the constraint and is translated into `409 { error: 'duplicate_national_id', patientId }` pointing at the existing record.
+- **Affected area**: `POST /api/patient_cases/patients`, patient record UI
+- **Mitigation**: The organization-scoped unique index on `national_id_hash` is the authoritative arbiter, not the advisory lookup. The second insert fails on the constraint and is translated into `409 { error: 'duplicate_national_id', patientId }` pointing at the existing record — which the caller can always open, because the index and every read share the same scope.
 - **Residual risk**: Patients registered through the fallback-identity path have no system-level uniqueness at all. Accepted and documented; soft deduplication on the document number is deferred.
 
 #### Case status written without a transition row
@@ -443,14 +491,14 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Severity**: Medium
 - **Affected area**: availability, visit booking
 - **Mitigation**: The subscriber is persistent and retried; failure never blocks the originating `staff` operation. Availability degrades toward *over*-offering slots rather than losing bookings.
-- **Residual risk**: A window in which a receptionist can book into an absence. The collision surfaces on the case list rather than silently cancelling the visit.
+- **Residual risk**: A window in which a receptionist can book into an absence. The collision surfaces on the case list rather than silently cancelling the visit, and an idempotent reprojection command (`patient_cases time-blocks reproject --tenant <id>`) rebuilds blocks from `staff` absences, so a dropped event is recoverable rather than permanent drift.
 
 #### `forms` unavailable or not installed
 - **Scenario**: The consent projection cannot be read, so the terms gate has nothing to evaluate.
 - **Severity**: Medium
 - **Affected area**: case creation, consent block
 - **Mitigation**: The gate is fail-open by design and documented as such: with no consent source the module does not block clinical operations, and the consent block renders an empty state. The alternative — blocking intake because an optional peer is down — is worse for the practice and no better for compliance, since the record's lawful basis is a retention obligation rather than consent.
-- **Residual risk**: A tenant could run without consent capture and not notice. Mitigated by a setup-time warning when the terms clause setting is present but `forms` is absent.
+- **Residual risk**: A tenant could run without consent capture and not notice. Mitigated by a setup-time warning when the terms clause setting is present but `forms` is absent, and — because a warning does not survive into the record — by `Case.terms_consent_bypassed` plus a `patient_cases.case.consent_check_bypassed` audit event on every case created through the open gate.
 
 #### Event storm on bulk rescheduling
 - **Scenario**: Rescheduling a full day emits hundreds of visit events, each invalidating the availability cache.
@@ -478,7 +526,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 #### Encrypted fields returned to an under-privileged role
 - **Scenario**: A workshop role calls the patient endpoint directly and receives the full decrypted record because the visibility filter lives only in the UI.
 - **Severity**: High
-- **Affected area**: `GET /api/patient-cases/patients`, production board
+- **Affected area**: `GET /api/patient_cases/patients`, production board
 - **Mitigation**: Field reduction happens in the read path, keyed on `patient_cases.view_sensitive`; the UI renders whatever the server returns. Q4 asks whether the mechanism belongs to the platform.
 - **Residual risk**: Until Q4 is resolved the reduction is module-local, so a future platform mechanism will supersede it. Being additive, that migration is non-breaking.
 
@@ -488,7 +536,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Scenario**: A tenant imports patients before `defaultEncryptionMaps` is applied, leaving plaintext rows that later reads treat as ciphertext.
 - **Severity**: High
 - **Affected area**: patient record, lookup
-- **Mitigation**: Documented ordering — seed encryption before import — plus `yarn mercato entities rotate-encryption-key` to encrypt plaintext rows after the fact.
+- **Mitigation**: Documented ordering — seed encryption before import — plus `yarn mercato entities rotate-encryption-key` to encrypt plaintext rows after the fact. (`entities rotate-encryption-key` is the command that walks entity encryption maps; `auth rotate-encryption-key` is the auth-module counterpart and is not the one meant here.)
 - **Residual risk**: A tenant that ignores both leaves PII at rest in plaintext. Detectable, correctable, and called out in the module README.
 
 #### Migration interrupted midway
@@ -503,7 +551,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 #### No-show rate silently wrong
 - **Scenario**: Reception cancels no-shows instead of marking them, so the metric the practice relies on is systematically understated.
 - **Severity**: Medium
-- **Affected area**: reporting built on `patient_cases.visit.no_show`
+- **Affected area**: reporting built on `patient_cases.visit.marked_no_show`
 - **Mitigation**: A product decision rather than a technical one — both actions are equally reachable from the calendar, and the two emit different events.
 - **Residual risk**: Training-dependent. Worth a follow-up dashboard comparing cancellation timing distributions.
 
@@ -539,7 +587,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | root AGENTS.md | Table names plural snake_case | Compliant | `patient_cases_patients`, `patient_cases_cases`, … |
 | root AGENTS.md | Standard columns `id`, `organization_id`, `tenant_id`, `created_at`, `updated_at` | Compliant | Plus `deleted_at`, `is_active` |
 | root AGENTS.md | Feature ID `<moduleId>.<action>` | Compliant | `patient_cases.view` / `.create` / `.edit` / `.delete` / `.view_sensitive` |
-| root AGENTS.md | Event ID `<moduleId>.<entity>.<past_tense>` | Compliant | `patient_cases.visit.no_show`, `patient_cases.case.status_changed`, … |
+| root AGENTS.md | Event ID `<moduleId>.<entity>.<past_tense>` | Compliant | `patient_cases.visit.marked_no_show`, `patient_cases.case.status_changed`, … |
 | root AGENTS.md | MUST declare `defaultRoleFeatures` for every feature in `acl.ts` | Compliant | Declared in `setup.ts`; `view_sensitive` granted to admin and superadmin only |
 | root AGENTS.md | API routes MUST export `openApi` and `metadata` | Compliant | Stated per route in API Contracts |
 | root AGENTS.md | MUST use `makeCrudRoute` with `indexer: { entityType }` | Compliant | All list/CRUD routes |
@@ -550,7 +598,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | root AGENTS.md | No hardcoded user-facing strings | Compliant | i18n section enumerates key namespaces |
 | root AGENTS.md | No raw `fetch`; use `apiCall`/`apiCallOrThrow` | Compliant | UI section |
 | root AGENTS.md | `pageSize` ≤ 100; dialogs support `Cmd/Ctrl+Enter` and `Escape` | Compliant | UI section |
-| root AGENTS.md | API route path `/api/<module>/<resource>` | Compliant | `/api/patient-cases/...` |
+| root AGENTS.md | API route path `/api/<module>/<resource>` | Compliant | `/api/patient_cases/...` |
 | root AGENTS.md | Package kebab-case, module ID snake_case | Compliant | `patient-cases` / `patient_cases` |
 | `.ai/specs/AGENTS.md` | Spec includes TLDR, Overview, Problem Statement, Proposed Solution, Architecture, Data Models, API Contracts, Risks & Impact Review, Final Compliance Report, Changelog | Compliant | All present |
 | `.ai/specs/AGENTS.md` | Risks document scenario, severity, affected area, mitigation, residual risk | Compliant | Risk Register format used throughout |
@@ -579,6 +627,15 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Non-compliant (by design)**: Blocked on Q1–Q5 by the module's own Open Questions gate. The specification is complete enough to review; implementation starts only after maintainer answers, and Phase 3 in particular is gated on Q1.
 
 ## Changelog
+
+### [2026-08-21]
+- Responded to the specification review. API paths corrected to `/api/patient_cases/...` (route paths are built from the module id verbatim; backend page paths are not and stay kebab-case).
+- Q3 narrowed: `query_index` builds search tokens from decrypted documents, so token search over encryption-mapped fields already works; what remains open is external engines and whether tokens derived from Art. 9 names should exist at all. Problem Statement defect #3 restated as a historical observation.
+- Identifier hashing hardened: lookup pepper as a deployment precondition, refusal to write hashes without one, and context-scoped digests.
+- `national_id_hash` uniqueness rescoped from tenant to organization, matching the scope of every read.
+- Consent write side specified (who creates the subject-bound submission), read path named (`formsConsentRecordService`), `forms.view` added to role grants, and the fail-open bypass now recorded per case with an audit event.
+- Added Retention, Erasure and Access Audit; restated case/visit entities as carrying no *direct identifiers* rather than no personal data.
+- Added optimistic-locking contract, per-phase acceptance criteria, the rationale for projecting staff absence into `TimeBlock` plus a reprojection command, and renamed `visit.no_show` to `visit.marked_no_show`.
 
 ### [2026-08-09]
 - Added three illustrative mocks under `assets/spec-005/` (case timeline, visit calendar, production board), rendered with synthetic data and a generic made-to-measure product.
