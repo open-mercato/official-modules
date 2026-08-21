@@ -40,8 +40,8 @@ This document specifies that reservation once, without the vertical. Its first c
 
 **Relationship to SPEC-005.** The two meet at one seam, stated identically in both documents:
 
-- The **consumer** owns the series and its user-visible numbering (`OL/148/2026/1`, `/2`). This document defines no numbering format.
-- The **booking** carries `(subject_type, subject_id)` and never reaches into the consumer's tables.
+- The **consumer** owns the series *and* the position within it, not merely the format. SPEC-005 materialises that as its own `CaseBooking` table (`case_id`, `booking_ref`, `sequence_no`), assigning the position inside its own transaction against its own unique index. An engine storing that column instead would be serialising writes on behalf of an ordering it cannot see, so this layer stores no series position at all — one fewer thing to get wrong on both sides.
+- The **booking** carries `(subject_type, subject_id)` and never reaches into the consumer's tables. The reference is deliberately two-sided: the subject pair makes "what is booked for this case" answerable from this layer, while the consumer's own link table keeps the module usable against an engine with no subject field at all. Neither side is load-bearing alone, which is what keeps either replaceable.
 - Terminology is **mapped, not shared**: a `patient_cases` visit *is* a booking of the configured type for the case's patient. The mapping sentence lives in SPEC-005.
 - The two lifecycles stay separate: the case status machine belongs to SPEC-005, the booking status machine to this document.
 
@@ -168,7 +168,6 @@ All entities carry the standard columns: `id` (UUID PK), `organization_id`, `ten
 - `booking_type_id`: string, indexed
 - `starts_at`, `ends_at`: timestamptz, indexed
 - `status`: string — `scheduled` | `confirmed` | `checked_in` | `completed` | `cancelled` | `no_show`
-- `sequence_no`: int, nullable — the consumer's position within its own series; this layer stores it and never formats it
 - `cancelled_reason`: string, nullable
 
 ```
@@ -404,6 +403,7 @@ Blocked on **Q1** alone — and the preferred resolution is that SPEC-008 absorb
 ## Changelog
 
 ### [2026-08-21]
+- Dropped `Booking.sequence_no`: series position belongs to the consumer, which owns the ordering rules and assigns it transactionally against its own unique index (SPEC-005 does exactly that with `CaseBooking`).
 - Reframed from an engine proposal into a requirements document after finding SPEC-008 (PR #33), which proposes the same engine and was filed eleven days earlier. The engine question is yielded to that PR; what remains here is the six appointment-shaped requirements, a reference shape for each, and the fallback if the answer is no. Renumbered from SPEC-006 to SPEC-009, since 006, 007 and 008 were taken by PRs #31, #26 and #33 while this was being written.
 - Split out of SPEC-005 after review feedback that an architectural question touching one phase should not hold the other two hostage. Carries the appointment layer and its open question; SPEC-005 keeps the patient record and the case lifecycle and depends on nothing here.
 - Entities renamed to their subject-agnostic form (`Visit*` → `Booking*`) and the subject expressed as `(subject_type, subject_id)`, so the layer serves verticals beyond the medical one. Under Q1 outcome (b) the original names return unchanged.
