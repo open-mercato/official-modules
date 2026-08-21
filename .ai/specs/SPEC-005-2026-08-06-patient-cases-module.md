@@ -135,7 +135,7 @@ The module owns nothing that core already provides. Attending people come from `
 
 The two documents meet at exactly one place, and the shape of that seam is what SPEC-009's Q1 decides:
 
-- **The case owns the series and its numbering.** `OL/148/2026/1`, `/2` are a view of the case, never of the booking. SPEC-009 defines no numbering format at all.
+- **The case owns the series and its numbering**, materialised as `CaseBooking` (see Data Models): which reservations belong to the case, in what order, with the position assigned in this module's transaction. `OL/148/2026/1`, `/2` are a view of the case, never of the booking, and the appointment layer defines no numbering format at all.
 - **The booking primitive stays subject-agnostic.** Under the generic outcome of Q1 a booking carries a subject reference (`subject_type` / `subject_id`) and knows nothing about cases; the case attaches to the booking rather than the booking reaching into the case.
 - **Terminology is mapped, not shared.** This document keeps the domain word — a *visit* — and states that a visit **is** a booking of the configured type for the case's patient. SPEC-009 uses only the neutral word. The mapping lives here, in one sentence, because an unmapped synonym pair is precisely the terminology debt the Problem Statement describes.
 - **The two lifecycles stay separate.** The case status machine is specified here; the booking status machine (including non-attendance as its own terminal state) is specified there. Neither document restates the other's.
@@ -223,6 +223,20 @@ Optimistic locking is on by default in the platform (`OM_OPTIMISTIC_LOCK`), so e
 
 Append-only. A status is never written without a matching transition row.
 
+### CaseBooking (`patient_cases_case_bookings`)
+- `case_id`: string, indexed — FK id → `patient_cases_cases`
+- `booking_ref`: string, indexed — the opaque id of a reservation in whichever appointment layer is installed
+- `sequence_no`: int — the `/1`, `/2` position within the case
+- `unique (case_id, sequence_no)` and `unique (case_id, booking_ref)`
+
+This is the whole of the seam on this side, and it is deliberately three columns. The case owns the *series*: which reservations belong to it and in what order. The appointment layer owns the *reservation*: when it is, who it occupies, what state it is in. Neither stores the other's half.
+
+**Why the link lives here rather than only on the booking.** A booking that carries `(subject_type, subject_id)` back to the case is the natural design and SPEC-009 specifies it, but relying on it alone would make this module unusable with any engine that has no subject field — and it would put the case's numbering inside a table this module does not own. With `CaseBooking` the module works against *any* layer that can hand back an id, including a spreadsheet during migration.
+
+**Nothing about the reservation is copied here** — no start time, no status, no participants. Ordering the timeline therefore costs one read from the appointment layer, which is correct: a cached `starts_at` would be a second source of truth for the one fact most likely to change.
+
+**Series position is assigned by this module, inside the case's own write transaction**, and the unique index is the arbiter. Two receptionists adding a visit to one case at the same moment produce one `/2` and one retry, not two `/2`s. `sequence_no` is never reused after a booking is detached — the numbers a patient has already seen on paperwork stay meaningful.
+
 ### Encryption
 
 `src/modules/patient_cases/encryption.ts` declares `defaultEncryptionMaps` for `patient_cases:patient` covering `first_name`, `last_name`, `phone`, `address_line`, `city`, `identity_document_number`, `email` (`hashField: 'email_hash'`) and `national_id` (`hashField: 'national_id_hash'`). Reads go exclusively through `findWithDecryption` / `findOneWithDecryption` with `{ tenantId, organizationId }`.
@@ -281,6 +295,12 @@ All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every r
 ### Patient lookup
 - `GET /api/patient_cases/patients/lookup?nationalId=` — feature `patient_cases.view`
 - Response: `{ match: { id, displayName } | null }` — always `200`. Advisory before submit; the unique index is the authoritative block.
+
+### Case bookings
+- `POST | DELETE /api/patient_cases/cases/:id/bookings` — features `patient_cases.edit`
+- Request (POST): `{ bookingRef }` · Response: `{ item: CaseBooking }` with the assigned `sequenceNo`
+- Attaches a reservation created in the appointment layer to the case and gives it its position in the series; DELETE detaches without touching the reservation itself, because cancelling a booking is that layer's operation, not this one's.
+- Errors: `409 { error: 'booking_already_attached', caseId }` · `409 { error: 'sequence_conflict' }` (concurrent attach; the client retries)
 
 ### Cases
 - `GET | POST | PUT | DELETE /api/patient_cases/cases` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
@@ -345,7 +365,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - Migrations are generated with `yarn mercato db:generate` from entity changes; none are hand-written.
 - No backfill is required for a new installation. For a tenant migrating from a bespoke implementation, patient import must run before the encryption maps are seeded, or `yarn mercato entities seed-encryption` must be re-run afterwards.
 - **Peer dependency**: `@open-mercato/forms` for consent. If absent, the terms gate is inactive and the consent block renders an empty state; nothing else degrades. This is the only cross-package dependency.
-- **Optional peers**: `staff` (practitioner names), `sales` (order reference), and the appointment layer of SPEC-009 (the booking series on the case timeline). Each absence degrades one capability and none breaks the schema (see the Risk Register).
+- **Optional peers**: `staff` (practitioner names), `sales` (order reference), and an appointment layer (the booking series on the case timeline; `CaseBooking` rows simply never get created without one). Each absence degrades one capability and none breaks the schema (see the Risk Register).
 
 ## Implementation Plan
 
@@ -379,10 +399,10 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `.../modules/patient_cases/setup.ts` | Create | `defaultRoleFeatures` (including `forms.view` for reception and practitioner roles), required retention setting |
 | `.../modules/patient_cases/encryption.ts` | Create | `defaultEncryptionMaps` |
 | `.../modules/patient_cases/events.ts` | Create | `createModuleEvents` declarations |
-| `.../modules/patient_cases/data/entities.ts` | Create | 3 entities |
+| `.../modules/patient_cases/data/entities.ts` | Create | 4 entities |
 | `.../modules/patient_cases/data/validators.ts` | Create | Zod schemas; types via `z.infer` |
 | `.../modules/patient_cases/data/enrichers.ts` | Create | Practitioner display names |
-| `.../modules/patient_cases/api/**/route.ts` | Create | 4 route files |
+| `.../modules/patient_cases/api/**/route.ts` | Create | 5 route files |
 | `.../modules/patient_cases/backend/**` | Create | List, record, timeline, measurement chart, board |
 | `.../modules/patient_cases/widgets/injection-table.ts` | Create | Sales row action, sidebar menu item |
 | `.../modules/patient_cases/i18n/{en,pl}.json` | Create | Locale dictionaries |
@@ -401,7 +421,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `GET /api/patient_cases/patients/lookup` | TC-PC-002 (match / no match / failure fail-open) |
 | `GET/POST/PUT/DELETE /api/patient_cases/cases` | TC-PC-003 (CRUD + terms gate 422) |
 | `POST /api/patient_cases/cases/:id/transition` | TC-PC-004 (legal + illegal transitions) |
-| UI: patient record, case timeline, measurement chart | TC-PC-005 (happy path walk-through) |
+| `POST/DELETE /api/patient_cases/cases/:id/bookings` | TC-PC-005 (attach, detach, duplicate attach, concurrent attach) |
+| UI: patient record, case timeline, measurement chart | TC-PC-006 (happy path walk-through) |
 
 ## Risks & Impact Review
 
@@ -420,6 +441,13 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Affected area**: case lifecycle, audit trail
 - **Mitigation**: Both writes run inside one `withAtomicFlush(em, phases, { transaction: true })`. Side effects and cache invalidation are outside the flush and fire only after commit.
 - **Residual risk**: A direct database edit bypassing the module still desynchronises history — the same exposure every audited entity in the platform carries.
+
+#### Two visits attached to one case at the same moment
+- **Scenario**: Two receptionists each create a reservation for the same case and attach it within the same second; both read `max(sequence_no) = 1`.
+- **Severity**: Medium
+- **Affected area**: case timeline, patient-facing paperwork
+- **Mitigation**: `unique (case_id, sequence_no)` is the arbiter, assigned inside this module's write transaction rather than read-then-written. The loser retries and takes `/3`; the client is told to retry rather than shown a raw constraint error.
+- **Residual risk**: A reservation can exist in the appointment layer without a `CaseBooking` row if the attach fails after the booking was created. It surfaces as an orphan on that layer's calendar rather than as a phantom on the timeline, and re-attaching is idempotent on `(case_id, booking_ref)`.
 
 #### Referenced entity deleted mid-flight
 - **Scenario**: A practitioner is removed from `staff` while cases referencing them exist.
@@ -513,7 +541,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 |-------|--------|-------|
 | Data models match API contracts | Pass | Every request field maps to a declared column; no endpoint references a field the model lacks |
 | API contracts match UI/UX section | Pass | Lookup and transition endpoints each back a described screen |
-| Risks cover all write operations | Pass | Patient create, case create and case transition each appear in the register |
+| Risks cover all write operations | Pass | Patient create, case create, case transition and booking attach each appear in the register |
 | Commands defined for all mutations | Pass | Four commands enumerated under Architecture |
 | Cache strategy covers all read APIs | Pass | No read in this document is cached beyond the query index; the cached availability read belongs to SPEC-009 |
 
@@ -531,6 +559,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 ## Changelog
 
 ### [2026-08-21]
+- Closed the gap the split left behind: the booking series is now a modelled thing (`CaseBooking`), not an implied one. The case owns which reservations belong to it and their `/1`, `/2` position, assigned in this module's transaction with a unique index as the arbiter; the appointment layer owns the reservation and stores nothing about cases. Nothing about a reservation is copied, so there is no second source of truth for its time.
 - Grounded the design against what core gained after 0.6.6: the CRM calendar at `/backend/calendar` is documented as what it is (a read view over `CustomerInteraction`, with advisory client-side conflicts) and rejected as a booking store in Alternatives, while its view layer is explicitly reused — this module renders through `@open-mercato/ui/backend/schedule` rather than adding a third calendar to the repository.
 - Recorded that two booking-layer proposals are in flight (SPEC-008 / PR #33 and SPEC-009) and that this document depends on neither, plus the six requirements this vertical has against whichever wins.
 - **Split into two specifications.** The appointment layer (`VisitType`, `Visit`, `VisitParticipant`, `TimeBlock`, the availability service, the conflict check and the calendar) moved to **SPEC-009**, together with the open question about where it belongs. This document keeps the patient record and the case lifecycle, depends on no unanswered question about the appointment layer, and can be reviewed and built on its own. The seam between the two is stated explicitly under Architecture. Q2–Q5 keep their numbers so the existing review conversation keeps its references.
