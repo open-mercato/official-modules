@@ -155,7 +155,7 @@ The module is an external extension and modifies no core package.
 
 All entities carry the standard columns: `id` (UUID PK), `organization_id`, `tenant_id`, `created_at`, `updated_at`, `deleted_at`, `is_active`, with `organization_id` indexed. Only domain fields are listed below.
 
-Optimistic locking is on by default in the platform (`OM_OPTIMISTIC_LOCK`), so every editable entity here exposes `updated_at` as `updatedAt` in list and detail responses, every edit and delete request carries the expected-version header (`x-om-ext-optimistic-lock-expected-updated-at`), and a stale write returns `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`. Two receptionists editing one patient record is an ordinary collision in this domain, not a corner case, so the conflict is a documented outcome rather than a surprise.
+Optimistic locking is on by default in the platform (`OM_OPTIMISTIC_LOCK`), so every editable entity here exposes `updated_at` as `updatedAt` in list and detail responses, every edit and delete request carries the expected-version header (`x-om-ext-optimistic-lock-expected-updated-at`), and a stale write returns the platform's own conflict body — `409 { error: 'record_modified', code: 'optimistic_lock_conflict', currentUpdatedAt, expectedUpdatedAt }` (`OPTIMISTIC_LOCK_CONFLICT_ERROR` / `_CODE`, header `x-om-ext-optimistic-lock-expected-updated-at`); the module does not invent an error code of its own. Two receptionists editing one patient record is an ordinary collision in this domain, not a corner case, so the conflict is a documented outcome rather than a surprise.
 
 ### Patient (`patient_cases_patients`)
 - `first_name`: string — encrypted
@@ -254,6 +254,8 @@ As module-level rules:
 - A lookup pepper is a **deployment precondition**, stated in the module README and verified at setup time.
 - The module refuses to write `national_id_hash` when no secret resolves — failing loudly rather than persisting an invertible digest. Deduplication degrades to the fallback-identity path until the secret is configured.
 - Hashes are computed with an explicit context — `hashForLookup(nationalId, 'patient_cases:national_id')` — so the same identifier hashed for another entity is not comparable across tables.
+- Lookups match through `lookupHashCandidates(value, context)` rather than a single digest, so rows written before a pepper (or before the context) existed still resolve. Introducing a pepper into a running tenant therefore degrades matching rather than breaking it, and a one-off rehash pass — read through the candidates, rewrite with the current scheme — is part of that tenant's migration, not an afterthought.
+- The platform exposes no predicate for "is a lookup pepper configured", so the module resolves the same variable chain itself to decide whether to refuse the write. That duplication is deliberate and worth removing upstream: a small exported helper (`isLookupPepperConfigured()`) would let every module fail the same way rather than each re-implementing the check.
 
 ### Consent (external)
 
@@ -267,7 +269,7 @@ Nothing is subscribed to on the `forms` side: `forms` projects the record itself
 
 **Read path.** Consent state is read through the DI service `formsConsentRecordService` registered by `forms`, never by querying `forms` entities across the module boundary. Where an HTTP read is needed instead, the route is `GET /api/forms/forms/subjects/{subjectType}/{subjectId}/consents`, guarded by `forms.view` — so the reception and practitioner roles need `forms.view` granted in this module's `setup.ts` alongside its own features.
 
-**A bypassed gate leaves a trace.** When the terms clause is unconfigured or `forms` is absent, case creation proceeds (see the fail-open risk) and records that it did: `Case.terms_consent_bypassed` is set on the row, and `patient_cases.case.consent_check_bypassed` is emitted for `audit_logs`. A setup-time warning does not survive into the record, and "which cases were opened without a consent check" has to be answerable from the data a year later rather than reconstructible from deployment history.
+**A bypassed gate leaves a trace.** When the terms clause is unconfigured or `forms` is absent, case creation proceeds (see the fail-open risk) and records that it did: `Case.terms_consent_bypassed` is set on the row, and `patient_cases.case.consent_check_bypassed` is emitted and recorded through the `audit_logs` `actionLogService`. A setup-time warning does not survive into the record, and "which cases were opened without a consent check" has to be answerable from the data a year later rather than reconstructible from deployment history.
 
 ### Retention, Erasure and Access Audit
 
@@ -279,7 +281,7 @@ The Overview promises the platform handles retention once; this is what that mea
 
 **Erasure means anonymisation, not deletion.** Anonymisation clears the encrypted PII columns and both identifier hashes, and drops `measurements` and `specification`; the case keeps its number, product type, dates and status as a de-identified production record. Deleting the case outright would rewrite the manufacturing history for a right that only extends to the personal data.
 
-**Access audit.** Reads of a patient detail record and identifier lookups are written to `audit_logs`; list views are not. That is a decision rather than an omission — auditing reception's daily list traffic drowns the trail that matters, which is who opened whose record.
+**Access audit.** Reads of a patient detail record and identifier lookups go to `audit_logs` through its `accessLogService`; list views are not logged. That is a decision rather than an omission — auditing reception's daily list traffic drowns the trail that matters, which is who opened whose record.
 
 ## API Contracts
 
@@ -289,7 +291,7 @@ All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every r
 - `GET | POST | PUT | DELETE /api/patient_cases/patients` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ firstName, lastName, phone?, email?, hasNoNationalId, nationalId?, identityDocumentType?, identityDocumentNumber?, birthDate?, sex?, preferredLanguage?, addressLine?, city?, postalCode?, heightCm?, weightKg?, defaultPractitionerId? }`
 - Response: `{ item: Patient }` with encrypted fields decrypted for roles holding `patient_cases.view_sensitive`, and reduced to the visible subset otherwise (Q4)
-- Errors: `409 { error: 'duplicate_national_id', patientId }` · `400 { error: 'identity_inconsistent' }` · `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`
+- Errors: `409 { error: 'duplicate_national_id', patientId }` · `400 { error: 'identity_inconsistent' }` · `409 { error: 'record_modified', code: 'optimistic_lock_conflict', currentUpdatedAt, expectedUpdatedAt }`
 
 ### Patient lookup
 - `GET /api/patient_cases/patients/lookup?nationalId=` — feature `patient_cases.view`
@@ -298,7 +300,7 @@ All list/CRUD routes use `makeCrudRoute` with `indexer: { entityType }`. Every r
 ### Cases
 - `GET | POST | PUT | DELETE /api/patient_cases/cases` — features `patient_cases.view` / `.create` / `.edit` / `.delete`
 - Request (POST): `{ patientId, productTypeId?, sides?, plannedFittingAt?, plannedHandoverAt?, practitionerId? }`
-- Errors: `422 { error: 'terms_consent_missing' }` when no `active` terms consent record exists for the patient · `409 { error: 'optimistic_lock_conflict', currentUpdatedAt }`
+- Errors: `422 { error: 'terms_consent_missing' }` when no `active` terms consent record exists for the patient · `409 { error: 'record_modified', code: 'optimistic_lock_conflict', … }`
 
 ### Case transition
 - `POST /api/patient_cases/cases/:id/transition` — feature `patient_cases.edit`
@@ -330,7 +332,7 @@ Keys under `patient_cases.*`, with `en` as the source locale and `pl` shipped al
 - `patient_cases.case.*` — status labels, timeline headings
 - `patient_cases.visit.*` — visit-type names for the seeded dictionary, status labels
 - `patient_cases.consent.*` — copy explaining that processing consent governs optional processing and does not gate the record
-- `patient_cases.error.*` — `duplicate_national_id`, `identity_inconsistent`, `terms_consent_missing`, `participant_conflict`, `illegal_transition`
+- `patient_cases.error.*` — `duplicate_national_id`, `identity_inconsistent`, `terms_consent_missing`, `participant_conflict`, `illegal_transition`, `record_modified` (the optimistic-lock conflict, phrased as "someone else changed this record")
 
 No hardcoded user-facing strings; all copy resolves through `useT()`.
 
@@ -491,7 +493,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Severity**: Medium
 - **Affected area**: availability, visit booking
 - **Mitigation**: The subscriber is persistent and retried; failure never blocks the originating `staff` operation. Availability degrades toward *over*-offering slots rather than losing bookings.
-- **Residual risk**: A window in which a receptionist can book into an absence. The collision surfaces on the case list rather than silently cancelling the visit, and an idempotent reprojection command (`patient_cases time-blocks reproject --tenant <id>`) rebuilds blocks from `staff` absences, so a dropped event is recoverable rather than permanent drift.
+- **Residual risk**: A window in which a receptionist can book into an absence. The collision surfaces on the case list rather than silently cancelling the visit, and an idempotent reprojection command (`yarn mercato patient_cases reproject-time-blocks --tenant <id>`) rebuilds blocks from `staff` absences, so a dropped event is recoverable rather than permanent drift.
 
 #### `forms` unavailable or not installed
 - **Scenario**: The consent projection cannot be read, so the terms gate has nothing to evaluate.
@@ -629,6 +631,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 ## Changelog
 
 ### [2026-08-21]
+- Second pass after a self-review of the first: corrected the optimistic-lock conflict body to the platform's own (`record_modified` / `optimistic_lock_conflict`), added the `lookupHashCandidates` read path and the rehash migration for tenants that gain a pepper later, named the `audit_logs` services (`accessLogService`, `actionLogService`), fixed the reprojection command to a single module CLI token, and added the lock-conflict i18n key.
 - Responded to the specification review. API paths corrected to `/api/patient_cases/...` (route paths are built from the module id verbatim; backend page paths are not and stay kebab-case).
 - Q3 narrowed: `query_index` builds search tokens from decrypted documents, so token search over encryption-mapped fields already works; what remains open is external engines and whether tokens derived from Art. 9 names should exist at all. Problem Statement defect #3 restated as a historical observation.
 - Identifier hashing hardened: lookup pepper as a deployment precondition, refusal to write hashes without one, and context-scoped digests.
