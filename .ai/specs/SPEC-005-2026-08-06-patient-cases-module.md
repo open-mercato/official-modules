@@ -9,18 +9,18 @@
 **Scope:**
 - `Patient` — record with encrypted PII, hash-based deduplication on a national identifier, fallback identity path.
 - `Case` — lifecycle from intake to handover, carrying measurements, product specification, and references to the production and sales orders.
-- The **appointment layer** — booking, conflict checking, availability — is *not* specified here. It is a subject-agnostic primitive broader than this vertical and is specified in **SPEC-006**, gated on its own open question. This document defines only the case's view of it: an ordered series of bookings the case owns the numbering of.
+- The **appointment layer** — booking, conflict checking, availability — is *not* specified here. It is a subject-agnostic primitive broader than this vertical and is specified in **SPEC-009**, gated on its own open question. This document defines only the case's view of it: an ordered series of bookings the case owns the numbering of.
 - Consent is **not** implemented here — it is consumed from `@open-mercato/forms` (`FormConsentRecord`).
 
 **Concerns:**
-- Core has no appointment primitive at all — the reason SPEC-006 exists. Nothing in *this* document depends on how that question resolves, which is why the two were separated.
+- Core has no booking primitive — the reason SPEC-009 exists. Two candidates are already in flight for that layer (SPEC-008, PR #33, and SPEC-009), and nothing in *this* document depends on which wins, which is why they were separated.
 - Declaring patient names in `defaultEncryptionMaps` does **not** break the internal token search (`query_index` indexes decrypted content); it removes them from external engines. Q3 is narrowed to external engines and to whether tokens derived from Art. 9 names should exist at all.
 
 ## Open Questions
 
 > This is a **design-only PR**. No package is scaffolded and no code is contributed until these are answered, because Q2 changes which entities this module owns.
 >
-> **Q1 has moved to SPEC-006** (where the appointment layer belongs). The numbering of Q2–Q5 is deliberately left unchanged, so the review conversation already referring to them keeps its references.
+> **Q1 has moved to SPEC-009** (where the appointment layer belongs). The numbering of Q2–Q5 is deliberately left unchanged, so the review conversation already referring to them keeps its references.
 
 - **Q2**: Consent reuse. This spec assumes `patient_cases` consumes `@open-mercato/forms` `FormConsentRecord` with `subject_type = 'patient_cases.patient'` rather than shipping its own consent log. Is that the intended composition, and is `forms` an acceptable peer dependency for a community module?
 - **Q3**: Search over encrypted fields — **narrowed after review**. `query_index` builds search tokens from *decrypted* documents (`packages/core/src/modules/query_index/lib/indexer.ts` resolves the tenant encryption service and calls `decryptIndexDocForSearch` before `replaceSearchTokensForRecord`), so token search over `first_name` / `last_name` works with those fields declared in `defaultEncryptionMaps`. What excludes them is the external-engine field policy (`packages/search/src/lib/field-policy.ts`), which drops encryption-mapped fields from documents sent to Meilisearch/vector and routes `hashField` fields to hash-only matching. Two questions remain: **(a)** is there a planned direction for fulltext/vector engines over encryption-mapped fields, and **(b)** should search tokens derived from Art. 9 names sit in `search_tokens` at all? (b) is a privacy question rather than a capability one, and it is the one this module most needs answered — if the answer is no, names stay out of the search config entirely and lookup remains identifier-only.
@@ -38,7 +38,7 @@ The target audience is small-to-mid manufacturers in regulated care-adjacent ver
 
 Key benefits: a single case lifecycle instead of a patient record and a schedule stitched together per deployment; encryption, deduplication and retention handled once by the platform instead of re-implemented per integrator; and a production board that can be shown to the workshop floor without exposing patient data.
 
-**Scope boundary.** This document covers the patient record and the case lifecycle. The appointment layer — the entities, the conflict check, the availability computation and the calendar — is specified in **SPEC-006** and can be answered, reviewed and built independently. The seam between them is deliberately narrow and stated in Architecture → *The seam with SPEC-006*.
+**Scope boundary.** This document covers the patient record and the case lifecycle. The appointment layer — the entities, the conflict check, the availability computation and the calendar — is out of scope here and is the subject of **SPEC-009**, which states this vertical's requirements against a booking engine; **SPEC-008** (PR #33) proposes such an engine independently. Either can satisfy this document, and both can be reviewed without it. The seam between them is deliberately narrow and stated in Architecture → *The seam with SPEC-009*.
 
 > **Market Reference**: Studied HL7 FHIR (`Patient` / `Schedule` / `Slot` / `Appointment` / `Encounter`), OpenMRS, OpenEMR and Cal.com.
 > **Adopted**: the separation of *planned* from *actual* (FHIR keeps `Appointment` apart from `Encounter`) — modelled here as an explicit state machine rather than two entities; the three-way distinction between free, booked and **blocked** time; booking as a multi-actor reservation, since FHIR hangs a schedule off an actor (practitioner, location, device) and a conflict check must therefore cover all of them; booking type as configurable data with its own duration and buffers, as in Cal.com's event types; a nullable national identifier, since no mature system treats one as mandatory; and non-attendance as its own terminal state rather than a cancellation.
@@ -46,7 +46,7 @@ Key benefits: a single case lifecycle instead of a patient record and a schedule
 
 ## Problem Statement
 
-**Core cannot express an appointment.** Verified against the generated module fact-sheets for core 0.6.6: zero matches for `appointment`, `booking`, `visit` or `slot` across entities, events and API routes. What exists nearby stops short:
+**Core cannot express an appointment.** Verified against the generated module fact-sheets for core 0.6.6, and re-checked against `develop` after the CRM calendar landed: still zero entities named `appointment`, `booking`, `visit` or `slot`. What exists nearby stops short:
 
 | Module | What it owns | What it does not own |
 |---|---|---|
@@ -56,7 +56,9 @@ Key benefits: a single case lifecycle instead of a patient record and a schedule
 | `customers` | 26 CRM entities including `customer_activity`, `customer_interaction` | a person under GDPR Art. 9, and a booked appointment |
 | `sales` | orders, fulfilment, billing | an order whose content is body measurements and whose recipient owns them |
 
-The planning primitives exist and are good. What is missing is the entity that consumes them, and the subject the whole cycle organises itself around. The first gap — the booking that consumes the availability — is SPEC-006's subject; the second — the person the cycle organises itself around — is this document's. The table is kept whole here because the two gaps were found together, in one deployment, and neither reads correctly without the other.
+**What the CRM calendar is, and is not.** Since 0.6.6 core ships a full-page calendar at `/backend/calendar` (`customers/backend/calendar/page.tsx`). Its own specification is explicit that it adds **"no new entity, no new API route, no schema change"** — it is a read view plus an editor over `CustomerInteraction`, the CRM touchpoint model. It is a genuinely good calendar and it is not a reservation: conflicts are computed client-side over the visible window as advisory badges rather than enforced on write, the actors compared are `ownerUserId` and participant *users* rather than rooms or equipment, there is no availability computation against `planner` rules, and there are no per-type durations or buffers. A double-booked fitting chair has to be a rejected write, not a badge.
+
+The planning primitives exist and are good. What is missing is the entity that consumes them, and the subject the whole cycle organises itself around. The first gap — the booking that consumes the availability — is SPEC-009's subject; the second — the person the cycle organises itself around — is this document's. The table is kept whole here because the two gaps were found together, in one deployment, and neither reads correctly without the other.
 
 **Evidence from a live deployment.** A manufacturer of made-to-measure devices for patients (client anonymised) migrated from a low-code platform to Open Mercato. OM is the system of record there — patient records, measurement charts, a production board, and a workshop tablet with PIN login. Three defects logged during the internal test run before launch map directly onto the gaps above:
 
@@ -74,7 +76,7 @@ A community module owning three concepts and duplicating nothing core or another
 
 **`Case`** — one lifecycle from intake to handover, binding the patient, the measurements, the product specification, the visit series, and references to the production and sales orders. Hierarchical numbering is user-visible: case `OL/148/2026`, production order `OL/148/2026/Z`, visits `/1`, `/2`.
 
-**The appointment layer is consumed, not defined here.** A case owns an ordered series of bookings and the user-visible numbering of that series (`/1`, `/2`); the booking primitive itself — its type dictionary, state machine, buffers, participants and availability computation — is SPEC-006's subject. This document treats a booking as an id it references, exactly as it treats a `staff` member or a `sales` order.
+**The appointment layer is consumed, not defined here.** A case owns an ordered series of bookings and the user-visible numbering of that series (`/1`, `/2`); the booking primitive itself — its type dictionary, state machine, buffers, participants and availability computation — is SPEC-009's subject. This document treats a booking as an id it references, exactly as it treats a `staff` member or a `sales` order.
 
 **Consent is consumed, not rebuilt.** `@open-mercato/forms` already ships `FormConsentRecord` — a per-subject, per-clause, deliberately PII-free projection keyed by `(organization_id, subject_type, subject_id, form_id, consent_field_key)` with `active` / `superseded` / `revoked` status, materialised by the `forms-consent-projector` subscriber. This module uses it with `subject_type = 'patient_cases.patient'` instead of shipping a parallel consent log (Q2).
 
@@ -83,7 +85,7 @@ A community module owning three concepts and duplicating nothing core or another
 | Decision | Rationale |
 |----------|-----------|
 | The **case** is the central entity; the patient record and the booking series are its layers | Modelling the patient record and the appointment as two independent capabilities duplicates the numbering, the vocabulary and the lifecycle in two places — which is the same terminology debt described in the Problem Statement, relocated into the architecture |
-| The appointment layer is a separate specification, not a separate module (yet) | The layer is subject-agnostic and useful beyond this vertical, so its home is an open question in SPEC-006; splitting the *documents* lets this half be answered and built while that question is open, without splitting the *lifecycle*, whose centre stays the case |
+| The appointment layer is a separate specification, not a separate module (yet) | The layer is subject-agnostic and useful beyond this vertical, so its home is an open question in SPEC-009; splitting the *documents* lets this half be answered and built while that question is open, without splitting the *lifecycle*, whose centre stays the case |
 | Consent consumed from `forms`, not owned here | `FormConsentRecord` is already subject-agnostic, PII-free and clause-hash-versioned; a second consent log would fragment the audit surface and duplicate GDPR export/erasure that `forms` already implements |
 | `measurements` / `specification` as `jsonb` | Their shape depends on the product type and is defined per tenant; individual dimensions are never filtered or sorted on. Everything that *is* filtered on has its own column |
 | Every case status change writes a `CaseTransition` row | The status column is never edited without history, which is what makes the lifecycle auditable and reversible |
@@ -93,14 +95,15 @@ A community module owning three concepts and duplicating nothing core or another
 | Alternative | Why Rejected |
 |-------------|-------------|
 | Extend `customers` with a "patient" role | Drags an Art. 9 domain into a module built for sales and marketing semantics, and forces patient rows to be special-cased in RBAC and encryption inside a module never designed for it |
+| Book onto the CRM calendar (`customers`, `/backend/calendar`) | Its data model is `CustomerInteraction` — a CRM touchpoint whose conflict detection is client-side and advisory, whose actors are users rather than rooms and equipment, and which computes no availability. Storing a fitting there means a reservation nothing enforces, on a subject that is a CRM contact rather than a person under Art. 9. Its *view* layer, however, is reused rather than rebuilt — see UI/UX |
 | Model the case as a `sales.order` with extra fields | A sales order has neither a visit series nor measurements as its content, and its recipient is a counterparty rather than the person whose measurements are the subject. The link to sales exists as a reference, not as inheritance |
 | Ship an own `PatientConsent` append-only log | Duplicates `forms.FormConsentRecord`, which is already subject-agnostic and PII-free, and would fragment GDPR export/erasure across two modules |
-| Separate *modules* for the patient record and for appointments | Rejected as an early decision, and distinct from the document split adopted here: the numbering, the vocabulary and the lifecycle stay owned by the case in SPEC-005, while SPEC-006 owns a booking primitive that knows nothing about cases. Whether that primitive ends up as its own module is SPEC-006's Q1, answered on its own merits rather than by how this document is filed |
+| Separate *modules* for the patient record and for appointments | Rejected as an early decision, and distinct from the document split adopted here: the numbering, the vocabulary and the lifecycle stay owned by the case in SPEC-005, while SPEC-009 owns a booking primitive that knows nothing about cases. Whether that primitive ends up as its own module is SPEC-009's Q1, answered on its own merits rather than by how this document is filed |
 
 ## User Stories / Use Cases
 
 - **A receptionist** wants to open a case for a returning patient without re-entering their details, so that intake takes seconds and no duplicate record is created.
-- **A receptionist** wants to reach the booking flow for the next appointment in the series directly from the case timeline, so that the fitting is scheduled while the patient is still at the desk (the booking itself is SPEC-006's).
+- **A receptionist** wants to reach the booking flow for the next appointment in the series directly from the case timeline, so that the fitting is scheduled while the patient is still at the desk (the booking itself is SPEC-009's).
 - **A practice owner** wants a case's planned fitting and handover dates to stay visibly out of date once an appointment is missed, so that nothing quietly runs on a schedule that no longer holds.
 - **A practitioner** wants measurements captured on a structured chart with left/right copy, so that the workshop receives unambiguous input rather than a scanned form.
 - **A workshop technician** wants to see the case number, the product type and the patient's height and weight on the production board, and nothing else, so that the practice can grant floor access without exposing patient data.
@@ -108,7 +111,7 @@ A community module owning three concepts and duplicating nothing core or another
 
 ## Architecture
 
-The module owns nothing that core already provides. Attending people come from `staff`, the sales link from `sales`, consent from `forms`, and the booking series from whatever the appointment layer turns out to be (SPEC-006). Every one of those links is an indexed plain-`uuid` (or string) column — no ORM relation crosses a module boundary.
+The module owns nothing that core already provides. Attending people come from `staff`, the sales link from `sales`, consent from `forms`, and the booking series from whatever the appointment layer turns out to be (SPEC-009). Every one of those links is an indexed plain-`uuid` (or string) column — no ORM relation crosses a module boundary.
 
 ```
                  ┌──────────────────────────────────────┐
@@ -123,21 +126,32 @@ The module owns nothing that core already provides. Attending people come from `
                        staff (practitioner)
                                 │
                    ┌────────────┴─────────────┐
-                   │  appointment layer       │  ← SPEC-006, gated on its Q1
+                   │  appointment layer       │  ← SPEC-009, gated on its Q1
                    │  (booking series)        │
                    └──────────────────────────┘
 ```
 
-### The seam with SPEC-006
+### The seam with SPEC-009
 
-The two documents meet at exactly one place, and the shape of that seam is what SPEC-006's Q1 decides:
+The two documents meet at exactly one place, and the shape of that seam is what SPEC-009's Q1 decides:
 
-- **The case owns the series and its numbering.** `OL/148/2026/1`, `/2` are a view of the case, never of the booking. SPEC-006 defines no numbering format at all.
+- **The case owns the series and its numbering.** `OL/148/2026/1`, `/2` are a view of the case, never of the booking. SPEC-009 defines no numbering format at all.
 - **The booking primitive stays subject-agnostic.** Under the generic outcome of Q1 a booking carries a subject reference (`subject_type` / `subject_id`) and knows nothing about cases; the case attaches to the booking rather than the booking reaching into the case.
-- **Terminology is mapped, not shared.** This document keeps the domain word — a *visit* — and states that a visit **is** a booking of the configured type for the case's patient. SPEC-006 uses only the neutral word. The mapping lives here, in one sentence, because an unmapped synonym pair is precisely the terminology debt the Problem Statement describes.
+- **Terminology is mapped, not shared.** This document keeps the domain word — a *visit* — and states that a visit **is** a booking of the configured type for the case's patient. SPEC-009 uses only the neutral word. The mapping lives here, in one sentence, because an unmapped synonym pair is precisely the terminology debt the Problem Statement describes.
 - **The two lifecycles stay separate.** The case status machine is specified here; the booking status machine (including non-attendance as its own terminal state) is specified there. Neither document restates the other's.
 
 With `patient_cases` deployed and no appointment layer present, cases still open, progress and hand over; the timeline simply shows no bookings.
+
+**What this vertical needs from whichever booking layer wins.** Stated here because it is the consumer's requirement, not the engine's design, and because it is short enough to check against any candidate:
+
+1. **Minute-level scheduling.** A fitting is at 10:30, not on Tuesday. SPEC-008's MVP is explicit that an hourly timeline is out of scope for now, while noting the model already stores full timestamps.
+2. **Per-type duration and buffers.** A consultation, a trial fitting and a handover occupy different amounts of a practitioner's day, and the cleaning gap after a cast is part of the occupancy rather than a display detail.
+3. **Several participants in one reservation.** A fitting occupies a practitioner *and* a room *and* sometimes a device; a conflict on any of them is a conflict.
+4. **Server-side rejection, not an advisory badge.** Two receptionists booking the same slot must produce a 409, not two bookings and a warning icon.
+5. **Non-attendance as its own terminal state**, distinct from cancellation — the two are different business events and collapsing them destroys the metric.
+6. **Availability computed against `planner` rules**, so reception can ask for free slots rather than reading occupancy and subtracting mentally.
+
+Items 3 and 4 are schema and write-path decisions: cheap while an engine is still a specification, expensive afterwards. That is the whole reason this list is published now rather than filed as feedback later.
 
 **Write path.** All mutations go through the Command pattern. Multi-phase writes (case scalar changes plus a transition row, or a visit plus its participants) use `withAtomicFlush(em, phases, { transaction: true })`; side effects and cache invalidation run after commit, never inside the flush.
 
@@ -146,7 +160,7 @@ With `patient_cases` deployed and no appointment layer present, cases still open
 - **Commands**: `patient_cases.patient.create` · `patient_cases.patient.update` · `patient_cases.case.create` · `patient_cases.case.transition`
 - **Events**: `patient_cases.case.created` · `patient_cases.case.status_changed` · `patient_cases.case.handed_over` · `patient_cases.case.consent_check_bypassed`
 
-Events make the operational metrics — time-to-handover, cases opened through an unconfigured consent gate — measurable without bolting on separate analytics. The scheduling metrics (no-show rate, schedule utilisation) belong to the appointment layer's events in SPEC-006.
+Events make the operational metrics — time-to-handover, cases opened through an unconfigured consent gate — measurable without bolting on separate analytics. The scheduling metrics (no-show rate, schedule utilisation) belong to the appointment layer's events in SPEC-009.
 
 ### UMES Extension Points
 
@@ -154,9 +168,9 @@ The module is an external extension and modifies no core package.
 
 | Extension point | Use |
 |---|---|
-| **Event subscribers** | None in v1. `forms.submission.submitted` is deliberately *not* subscribed to — `forms` already projects consent itself and this module reads the projection. The appointment layer's `staff.leave_request.*` subscriber belongs to SPEC-006 |
+| **Event subscribers** | None in v1. `forms.submission.submitted` is deliberately *not* subscribed to — `forms` already projects consent itself and this module reads the projection. The appointment layer's `staff.leave_request.*` subscriber belongs to SPEC-009 |
 | **Response enrichers** | Attach the practitioner's display name (from `staff`) to case list responses, instead of joining across modules |
-| **Widget injection** | `InjectionDataTableWidget` adding an "Open case" row action to the `sales` order table when an order carries a `patient_cases` reference; `InjectionMenuItemWidget` on `menu:sidebar:main` for the module's pages. Under SPEC-006's generic outcome, the case timeline's booking block is itself a widget injected into the booking detail |
+| **Widget injection** | `InjectionDataTableWidget` adding an "Open case" row action to the `sales` order table when an order carries a `patient_cases` reference; `InjectionMenuItemWidget` on `menu:sidebar:main` for the module's pages. Under SPEC-009's generic outcome, the case timeline's booking block is itself a widget injected into the booking detail |
 | **API interceptors** | None in v1. Listed explicitly so the absence is a decision, not an omission |
 | **Custom entities** | None — all entities are module-owned |
 
@@ -302,6 +316,8 @@ Backend pages under `/backend/patient-cases`, all sharing one `pageGroup` / `pag
 
 **Production board** — a `DataTable`-backed board whose stages are per-tenant configurable data. This is the screen the workshop floor sees, and the one that must not display sensitive data (Q4).
 
+**No third calendar.** The repository already carries two calendar surfaces: `@open-mercato/ui/backend/schedule` (`ScheduleGrid`, `ScheduleAgenda`, `ScheduleToolbar`, `ScheduleView`, `recurrence.ts`), whose item kinds `event` / `exception` already encode the booked-versus-blocked distinction this design needs; and the CRM calendar's own hand-rolled components inside `customers`, written because — per its specification — the `ScheduleItem` model did not fit CRM rendering. This module renders through the `ui` package, which is a package import rather than a cross-module one; whatever it lacks (a buffer band around a block, several participants on one row) is proposed as a contribution to `ui` rather than maintained as a private copy. Extracting the shared half of the CRM calendar into `ui` is worth doing before a fourth one appears, and is raised with maintainers rather than assumed here.
+
 `DataTable` hosts keep `entityId` and `extensionTableId` stable (`patient_cases.patient`, `patient_cases.case`) so injection from other modules stays backward-compatible. `pageSize` ≤ 100. Every dialog supports `Cmd/Ctrl+Enter` to submit and `Escape` to cancel; icon-only buttons carry `aria-label`.
 
 ### Illustrative mocks
@@ -329,7 +345,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - Migrations are generated with `yarn mercato db:generate` from entity changes; none are hand-written.
 - No backfill is required for a new installation. For a tenant migrating from a bespoke implementation, patient import must run before the encryption maps are seeded, or `yarn mercato entities seed-encryption` must be re-run afterwards.
 - **Peer dependency**: `@open-mercato/forms` for consent. If absent, the terms gate is inactive and the consent block renders an empty state; nothing else degrades. This is the only cross-package dependency.
-- **Optional peers**: `staff` (practitioner names), `sales` (order reference), and the appointment layer of SPEC-006 (the booking series on the case timeline). Each absence degrades one capability and none breaks the schema (see the Risk Register).
+- **Optional peers**: `staff` (practitioner names), `sales` (order reference), and the appointment layer of SPEC-009 (the booking series on the case timeline). Each absence degrades one capability and none breaks the schema (see the Risk Register).
 
 ## Implementation Plan
 
@@ -499,7 +515,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | API contracts match UI/UX section | Pass | Lookup and transition endpoints each back a described screen |
 | Risks cover all write operations | Pass | Patient create, case create and case transition each appear in the register |
 | Commands defined for all mutations | Pass | Four commands enumerated under Architecture |
-| Cache strategy covers all read APIs | Pass | No read in this document is cached beyond the query index; the cached availability read belongs to SPEC-006 |
+| Cache strategy covers all read APIs | Pass | No read in this document is cached beyond the query index; the cached availability read belongs to SPEC-009 |
 
 ### Non-Compliant Items
 
@@ -515,7 +531,9 @@ The three screens below are static mocks of the proposed module, rendered with s
 ## Changelog
 
 ### [2026-08-21]
-- **Split into two specifications.** The appointment layer (`VisitType`, `Visit`, `VisitParticipant`, `TimeBlock`, the availability service, the conflict check and the calendar) moved to **SPEC-006**, together with the open question about where it belongs. This document keeps the patient record and the case lifecycle, depends on no unanswered question about the appointment layer, and can be reviewed and built on its own. The seam between the two is stated explicitly under Architecture. Q2–Q5 keep their numbers so the existing review conversation keeps its references.
+- Grounded the design against what core gained after 0.6.6: the CRM calendar at `/backend/calendar` is documented as what it is (a read view over `CustomerInteraction`, with advisory client-side conflicts) and rejected as a booking store in Alternatives, while its view layer is explicitly reused — this module renders through `@open-mercato/ui/backend/schedule` rather than adding a third calendar to the repository.
+- Recorded that two booking-layer proposals are in flight (SPEC-008 / PR #33 and SPEC-009) and that this document depends on neither, plus the six requirements this vertical has against whichever wins.
+- **Split into two specifications.** The appointment layer (`VisitType`, `Visit`, `VisitParticipant`, `TimeBlock`, the availability service, the conflict check and the calendar) moved to **SPEC-009**, together with the open question about where it belongs. This document keeps the patient record and the case lifecycle, depends on no unanswered question about the appointment layer, and can be reviewed and built on its own. The seam between the two is stated explicitly under Architecture. Q2–Q5 keep their numbers so the existing review conversation keeps its references.
 - Second pass after a self-review of the first: corrected the optimistic-lock conflict body to the platform's own (`record_modified` / `optimistic_lock_conflict`), added the `lookupHashCandidates` read path and the rehash migration for tenants that gain a pepper later, named the `audit_logs` services (`accessLogService`, `actionLogService`), fixed the reprojection command to a single module CLI token, and added the lock-conflict i18n key.
 - Responded to the specification review. API paths corrected to `/api/patient_cases/...` (route paths are built from the module id verbatim; backend page paths are not and stay kebab-case).
 - Q3 narrowed: `query_index` builds search tokens from decrypted documents, so token search over encryption-mapped fields already works; what remains open is external engines and whether tokens derived from Art. 9 names should exist at all. Problem Statement defect #3 restated as a historical observation.
