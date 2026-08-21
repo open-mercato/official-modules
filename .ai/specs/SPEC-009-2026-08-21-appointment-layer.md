@@ -60,9 +60,9 @@ Each is stated as the practice behaviour it protects, then as what it costs an e
 | 3 | **Several participants per reservation** | A fitting occupies a practitioner *and* a room *and* sometimes a device; a clash on any of them is a clash | **Schema**: a participant table rather than one resource column. Cheap now, a migration later |
 | 4 | **Conflicts rejected server-side** | Two receptionists on one slot must get a 409, not two bookings and a warning badge | **Write path**: the check runs inside the write transaction, not in the client. Cheap now, a rewrite later |
 | 5 | **Non-attendance as its own terminal state** | "Did not show up" and "cancelled in advance" are different business events; collapsing them destroys the only metric that measures the problem | One extra state and one extra event id |
-| 6 | **Availability computed from `planner` rules** | Reception asks "what is free for a 45-minute fitting next week", not "show me the occupancy and let me subtract" | A read service combining rules, bookings, buffers and blocked time |
+| 6 | **Availability computed from `planner` rules** | Reception asks "what is free for a 45-minute fitting next week", not "show me the occupancy and let me subtract" | A read service combining rules, bookings, buffers and blocked time. **Already satisfied by SPEC-008's design** — it reads `plannerAvailabilityService` and never writes back — so this is a confirmation, not an ask |
 
-Requirements 3 and 4 are the ones worth settling before an MVP ships; the rest are additive afterwards.
+Requirement 6 is already answered by SPEC-008's own integration section, so there are **five** asks rather than six. Of those, 3 and 4 are the ones worth settling before an MVP ships — they are schema and write path — and the rest are additive afterwards.
 
 ## Problem Statement
 
@@ -232,6 +232,8 @@ No hardcoded user-facing strings; all copy resolves through `useT()`.
 
 *The mock is rendered with synthetic data from the SPEC-005 vertical; the layer itself carries no vertical.*
 
+Rendering goes through `@open-mercato/ui/backend/schedule` rather than a new calendar. Its `ScheduleItem` already carries `kind: 'availability' | 'event' | 'exception'` — the free / booked / blocked triple this document treats as three distinct things. It does not carry `checked_in` or `no_show` in `status`, its `subjectType` is a closed `'member' | 'resource'`, and it has no buffer representation, so a multi-participant reservation renders as one item per lane and two status members plus a buffer affordance are contributions to `ui`. Whichever engine wins should make the same choice; a third calendar surface in this repository would be a mistake.
+
 `DataTable` hosts keep `entityId` and `extensionTableId` stable. `pageSize` ≤ 100. Every dialog supports `Cmd/Ctrl+Enter` and `Escape`; icon-only buttons carry `aria-label`.
 
 ## Configuration
@@ -248,6 +250,9 @@ No hardcoded user-facing strings; all copy resolves through `useT()`.
 
 ## Implementation Plan
 
+> **Conditional on Q1b.** Everything from here to the end of the File Manifest describes building a *separate* layer, which only happens if SPEC-008 declines the five requirements. If it takes them, this section is dead text and the requirements table above becomes that engine's acceptance criteria instead. It is kept rather than deleted so that the fallback is costed rather than hand-waved.
+
+
 ### Phase 1: Booking primitive
 1. `BookingType` entity and CRUD; migration.
 2. `Booking` + `BookingParticipant`; commands and the state machine; events.
@@ -263,6 +268,9 @@ No hardcoded user-facing strings; all copy resolves through `useT()`.
 **Done when**: staff leave blocks a slot without cancelling booked reservations, and reprojection rebuilds blocks after a dropped event; a booked slot disappears from availability without a manual cache purge; with `planner` absent a manual time range still books; a two-tenant fixture returns disjoint slots.
 
 ### File Manifest
+
+*(Still conditional on Q1b — see the note above.)*
+
 
 | File | Action | Purpose |
 |------|--------|---------|
@@ -403,6 +411,9 @@ Blocked on **Q1** alone — and the preferred resolution is that SPEC-008 absorb
 ## Changelog
 
 ### [2026-08-21]
+- Marked the implementation plan and file manifest as conditional on Q1b, so the document cannot be read as a package proposal while its own TLDR says it is not one.
+- Acknowledged that requirement 6 is already satisfied by SPEC-008's integration design: five asks, not six.
+- Named what `@open-mercato/ui/backend/schedule` does and does not offer, so whichever engine wins renders through it instead of adding a third calendar.
 - Dropped `Booking.sequence_no`: series position belongs to the consumer, which owns the ordering rules and assigns it transactionally against its own unique index (SPEC-005 does exactly that with `CaseBooking`).
 - Reframed from an engine proposal into a requirements document after finding SPEC-008 (PR #33), which proposes the same engine and was filed eleven days earlier. The engine question is yielded to that PR; what remains here is the six appointment-shaped requirements, a reference shape for each, and the fallback if the answer is no. Renumbered from SPEC-006 to SPEC-009, since 006, 007 and 008 were taken by PRs #31, #26 and #33 while this was being written.
 - Split out of SPEC-005 after review feedback that an architectural question touching one phase should not hold the other two hostage. Carries the appointment layer and its open question; SPEC-005 keeps the patient record and the case lifecycle and depends on nothing here.
