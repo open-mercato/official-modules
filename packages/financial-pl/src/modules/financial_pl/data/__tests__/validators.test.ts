@@ -1,0 +1,620 @@
+import {
+  fa3CorrectionReferenceSchema,
+  fa3InvoiceSchema,
+  jpkPurchaseRecordUpsertSchema,
+  jpkFilingUpsertSchema,
+  jpkGenerateSchema,
+  ksefInvoiceListQuerySchema,
+  ksefIssueOfflineSchema,
+  receiveSyncSchema,
+  nbpRateQuerySchema,
+  batchSendSchema,
+  collectInvoiceFieldProblems,
+  hasAdvanceSettlementData,
+  invoiceDateProblems,
+  isAdvanceInvoiceKind,
+  pruneInvoiceFieldErrors,
+  todayInWarsaw,
+} from '../validators'
+
+// Valid seller/buyer (10-digit + checksum-valid NIPs reused across the FA(3) test suite).
+const seller = {
+  nip: '7980332920',
+  name: 'Sprzedawca Sp. z o.o.',
+  countryCode: 'PL',
+  addressLine1: 'ul. Testowa 1, 00-001 Warszawa',
+} as const
+const buyer = {
+  nip: '3755747347',
+  name: 'Nabywca',
+  countryCode: 'PL',
+  addressLine1: 'ul. Kliencka 2, 00-002 Kraków',
+} as const
+
+describe('invoice field problem collector', () => {
+  const validValue = {
+    buyer: {
+      companyName: 'Nabywca',
+      addressLine1: 'ul. Kliencka 2',
+      nip: '3755747347',
+    },
+    lines: [{
+      name: 'Pozycja',
+      quantity: '1',
+      unitPriceNet: '100',
+      unitPriceGross: '123',
+      discountPercent: '0',
+      taxRate: '23',
+    }],
+    payment: { method: 'transfer' },
+    meta: { invoiceKind: 'vat' as const },
+  }
+  const validHeader = {
+    issueDate: '2026-08-13',
+    saleDate: '2026-08-13',
+    dueDate: '2026-08-27',
+    orderId: '',
+  }
+  const options = {
+    isEdit: false,
+    today: '2026-08-13',
+    priceMode: 'net' as const,
+    marginScheme: null,
+  }
+
+  it('returns the exact field keys consumed by the invoice child editors', () => {
+    const problems = collectInvoiceFieldProblems(
+      {
+        buyer: { companyName: '', addressLine1: '', nip: '1234567890' },
+        lines: [{
+          name: '',
+          quantity: '0',
+          unitPriceNet: '-1',
+          unitPriceGross: '',
+          discountPercent: '12.567',
+          taxRate: '',
+        }],
+        payment: { method: 'other', paid: true },
+        meta: { invoiceKind: 'vat' },
+      },
+      { ...validHeader, orderId: 'not-a-uuid' },
+      options,
+    )
+
+    expect(problems.map((problem) => problem.field)).toEqual(expect.arrayContaining([
+      'orderId',
+      'line.0.name',
+      'line.0.quantity',
+      'line.0.unitPrice',
+      'line.0.discount',
+      'line.0.taxRate',
+      'buyer.nip',
+      'buyer.companyName',
+      'buyer.addressLine1',
+      'payment.paidDate',
+      'payment.methodOther',
+    ]))
+  })
+
+  it('returns no problems for a complete, valid invoice', () => {
+    expect(collectInvoiceFieldProblems(validValue, validHeader, options)).toEqual([])
+  })
+
+  it('keeps edit-only line checks out of the collector', () => {
+    const problems = collectInvoiceFieldProblems(
+      { ...validValue, lines: [] },
+      validHeader,
+      { ...options, isEdit: true },
+    )
+    expect(problems.map((problem) => problem.field)).not.toContain('lines')
+  })
+})
+
+describe('invoiceDateProblems', () => {
+  it('blocks due-before-issue and future issue dates for every invoice kind', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-14',
+      saleDate: '2026-08-20',
+      dueDate: '2026-08-13',
+      today: '2026-08-13',
+      invoiceKind: 'zal',
+    })
+    expect(result.errors.map((problem) => problem.messageKey)).toEqual(expect.arrayContaining([
+      'financial_pl.validation.dueBeforeIssue',
+      'financial_pl.validation.issueDateFuture',
+    ]))
+  })
+
+  it('blocks due-before-sale for a regular invoice', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-10',
+      saleDate: '2026-08-13',
+      dueDate: '2026-08-12',
+      today: '2026-08-13',
+      invoiceKind: 'vat',
+    })
+    expect(result.errors.map((problem) => problem.messageKey)).toContain(
+      'financial_pl.validation.dueBeforeSale',
+    )
+  })
+
+  it('warns without blocking for issue-before-sale and a future sale on a regular invoice', () => {
+    const result = invoiceDateProblems({
+      issueDate: '2026-08-13',
+      saleDate: '2026-08-20',
+      dueDate: '2026-08-20',
+      today: '2026-08-13',
+      invoiceKind: 'vat',
+    })
+    expect(result.errors).toEqual([])
+    expect(result.warnings.map((problem) => problem.messageKey)).toEqual([
+      'financial_pl.validation.issueBeforeSaleWarning',
+      'financial_pl.validation.saleDateFutureWarning',
+    ])
+  })
+
+  it.each(['zal', 'roz', 'kor_zal', 'kor_roz'] as const)(
+    'exempts %s from due-before-sale and the non-advance warnings',
+    (invoiceKind) => {
+      const result = invoiceDateProblems({
+        issueDate: '2026-08-10',
+        saleDate: '2026-08-20',
+        dueDate: '2026-08-12',
+        today: '2026-08-13',
+        invoiceKind,
+      })
+      expect(result).toEqual({ errors: [], warnings: [] })
+    },
+  )
+
+  it('uses the Warsaw calendar day across the UTC-midnight boundary', () => {
+    const afterWarsawMidnight = new Date('2026-08-12T22:30:00.000Z')
+    const today = todayInWarsaw(afterWarsawMidnight)
+    expect(today).toBe('2026-08-13')
+    expect(invoiceDateProblems({
+      issueDate: '2026-08-13',
+      saleDate: '2026-08-13',
+      dueDate: '2026-08-13',
+      today,
+      invoiceKind: 'vat',
+    }).errors).toEqual([])
+  })
+})
+
+describe('invoice live validation helpers', () => {
+  it('prunes resolved errors and never adds a newly failing field', () => {
+    expect(pruneInvoiceFieldErrors(
+      { issueDate: 'old issue', dueDate: 'old due' },
+      { dueDate: 'current due', saleDate: 'new failure' },
+    )).toEqual({ dueDate: 'current due' })
+  })
+
+  it('detects every advance/order data shape used by the submit guard', () => {
+    expect(['zal', 'roz', 'kor_zal', 'kor_roz'].every(isAdvanceInvoiceKind)).toBe(true)
+    expect(isAdvanceInvoiceKind('vat')).toBe(false)
+    expect(hasAdvanceSettlementData({ advancePayments: [{}] })).toBe(true)
+    expect(hasAdvanceSettlementData({ advanceRefs: [{}] })).toBe(true)
+    expect(hasAdvanceSettlementData({ orderSnapshot: { lines: [] } })).toBe(true)
+    expect(hasAdvanceSettlementData({ advancePayments: [], advanceRefs: [], orderSnapshot: null })).toBe(false)
+  })
+})
+
+type InvoiceOverrides = Partial<Parameters<typeof fa3InvoiceSchema.parse>[0]>
+
+function baseInvoice(overrides: InvoiceOverrides = {}) {
+  return {
+    invoiceNumber: 'FV/2026/06/1',
+    issueDate: '2026-06-28',
+    currencyCode: 'PLN',
+    seller,
+    buyer,
+    vatBreakdown: [{ rate: 23, net: '100.00', vat: '23.00' }],
+    totalGross: '123.00',
+    lines: [
+      { lineNumber: 1, name: 'Pozycja', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 },
+    ],
+    ...overrides,
+  }
+}
+
+// The corrected-invoice KSeF number flows into FA(3) `NrKSeFFaKorygowanej`. KSeF rejects a
+// malformed value with a 450 `TNumerKSeF` pattern error; we want that caught locally instead.
+describe('fa3CorrectionReferenceSchema.correctedKsefNumber', () => {
+  const base = { correctedIssueDate: '2026-06-28', correctedInvoiceNumber: 'OM-FV-2026-0001' }
+
+  it('accepts a real (hyphenated) KSeF number', () => {
+    expect(() =>
+      fa3CorrectionReferenceSchema.parse({ ...base, correctedKsefNumber: '2481632647-20260628-3E8AD3400000-09' }),
+    ).not.toThrow()
+  })
+
+  it('rejects a structurally invalid corrected KSeF number (caught before KSeF 450)', () => {
+    expect(() =>
+      fa3CorrectionReferenceSchema.parse({ ...base, correctedKsefNumber: 'TOTALLY-INVALID-NUMBER' }),
+    ).toThrow()
+  })
+
+  it('allows an absent corrected KSeF number (original issued outside KSeF → NrKSeFN)', () => {
+    expect(() => fa3CorrectionReferenceSchema.parse(base)).not.toThrow()
+  })
+})
+
+describe('fa3InvoiceSchema — baseline VAT (backward compatibility)', () => {
+  it('accepts a standard PLN VAT invoice', () => {
+    expect(() => fa3InvoiceSchema.parse(baseInvoice())).not.toThrow()
+  })
+
+  it('accepts a standard VAT invoice with the kind explicitly set', () => {
+    expect(() => fa3InvoiceSchema.parse(baseInvoice({ invoiceKind: 'VAT' }))).not.toThrow()
+  })
+})
+
+describe('fa3InvoiceSchema — per-kind requirements', () => {
+  it('ZAL requires the order (Zamowienie) block; FaWiersz is optional', () => {
+    expect(() => fa3InvoiceSchema.parse(baseInvoice({ invoiceKind: 'ZAL', lines: [] }))).toThrow()
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'ZAL',
+          lines: [],
+          order: { totalValue: '123.00', lines: [{ lineNumber: 1, name: 'Pos', netValue: '100.00', vatRate: 23 }] },
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('ROZ requires advanceInvoiceRefs and at least one FaWiersz', () => {
+    expect(() => fa3InvoiceSchema.parse(baseInvoice({ invoiceKind: 'ROZ' }))).toThrow()
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({ invoiceKind: 'ROZ', advanceInvoiceRefs: [{ invoiceNumber: 'ZAL/2026/1' }] }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('KOR_ZAL requires the correction block + preCorrectionPaymentAmount + order', () => {
+    // missing correction
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'KOR_ZAL',
+          lines: [],
+          order: { totalValue: '123.00', lines: [{ lineNumber: 1, name: 'Pos', netValue: '100.00', vatRate: 23 }] },
+        }),
+      ),
+    ).toThrow()
+    // missing preCorrectionPaymentAmount
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'KOR_ZAL',
+          lines: [],
+          order: { totalValue: '123.00', lines: [{ lineNumber: 1, name: 'Pos', netValue: '100.00', vatRate: 23 }] },
+          correction: { correctedInvoices: [{ correctedIssueDate: '2026-05-01', correctedInvoiceNumber: 'ZAL/2026/1' }] },
+        }),
+      ),
+    ).toThrow()
+    // complete
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'KOR_ZAL',
+          lines: [],
+          order: { totalValue: '123.00', lines: [{ lineNumber: 1, name: 'Pos', netValue: '100.00', vatRate: 23 }] },
+          correction: {
+            correctedInvoices: [{ correctedIssueDate: '2026-05-01', correctedInvoiceNumber: 'ZAL/2026/1' }],
+            preCorrectionPaymentAmount: '100.00',
+          },
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('rejects a correction block on a non-correction kind', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'VAT',
+          correction: { correctedInvoices: [{ correctedIssueDate: '2026-05-01', correctedInvoiceNumber: 'X' }] },
+        }),
+      ),
+    ).toThrow()
+  })
+})
+
+describe('fa3InvoiceSchema — UPR (simplified) buyer + threshold', () => {
+  it('accepts a NIP-only buyer for UPR', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({ invoiceKind: 'UPR', buyer: { nip: '3755747347', countryCode: 'PL' } }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('rejects a UPR total over the 450 PLN threshold', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'UPR',
+          buyer: { nip: '3755747347', countryCode: 'PL' },
+          vatBreakdown: [{ rate: 23, net: '500.00', vat: '115.00' }],
+          totalGross: '615.00',
+          lines: [{ lineNumber: 1, name: 'Pozycja', quantity: '1', unitNetPrice: '500.00', netValue: '500.00', vatRate: 23 }],
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('accepts a UPR total at/under the 450 PLN threshold', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          invoiceKind: 'UPR',
+          buyer: { nip: '3755747347', countryCode: 'PL' },
+          vatBreakdown: [{ rate: 23, net: '300.00', vat: '69.00' }],
+          totalGross: '369.00',
+          lines: [{ lineNumber: 1, name: 'Pozycja', quantity: '1', unitNetPrice: '300.00', netValue: '300.00', vatRate: 23 }],
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('a non-UPR kind still requires the buyer name + address', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(baseInvoice({ buyer: { nip: '3755747347', countryCode: 'PL' } })),
+    ).toThrow()
+  })
+})
+
+describe('fa3InvoiceSchema — OSS / WSTO_EE lines', () => {
+  function ossLine(extra: Record<string, unknown> = {}) {
+    return {
+      lineNumber: 1,
+      name: 'Distance sale',
+      quantity: '1',
+      unitNetPrice: '100.00',
+      netValue: '100.00',
+      vatRate: 23,
+      ossRate: '19',
+      ...extra,
+    }
+  }
+
+  it('accepts an OSS line with ossRate + Procedura=WSTO_EE and an oss bucket', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          currencyCode: 'EUR',
+          vatBreakdown: [{ rate: 'oss', net: '100.00', vat: '19.00' }],
+          totalGross: '119.00',
+          lines: [ossLine({ procedure: 'WSTO_EE', fxRate: '4.30' })],
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('rejects an OSS line that omits the Procedura=WSTO_EE marker', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          currencyCode: 'EUR',
+          vatBreakdown: [{ rate: 'oss', net: '100.00', vat: '19.00' }],
+          totalGross: '119.00',
+          lines: [ossLine()],
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('keeps rejecting a truly-unmapped Polish line rate', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          vatBreakdown: [{ rate: 19, net: '100.00', vat: '19.00' }],
+          lines: [{ lineNumber: 1, name: 'Pozycja', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 19 }],
+        }),
+      ),
+    ).toThrow()
+  })
+})
+
+describe('fa3InvoiceSchema — foreign currency (jury resolution 1)', () => {
+  it('accepts a PURE-OSS foreign-currency invoice WITHOUT an exchange rate', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          currencyCode: 'EUR',
+          vatBreakdown: [{ rate: 'oss', net: '100.00', vat: '19.00' }],
+          totalGross: '119.00',
+          lines: [
+            { lineNumber: 1, name: 'Distance sale', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23, ossRate: '19', procedure: 'WSTO_EE' },
+          ],
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it('requires an exchange rate when a non-PLN invoice carries a Polish-rate bucket', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          currencyCode: 'EUR',
+          vatBreakdown: [
+            { rate: 23, net: '100.00', vat: '23.00' },
+            { rate: 'oss', net: '100.00', vat: '19.00' },
+          ],
+          totalGross: '242.00',
+          lines: [
+            { lineNumber: 1, name: 'Krajowa', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23 },
+            { lineNumber: 2, name: 'OSS', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23, ossRate: '19', procedure: 'WSTO_EE' },
+          ],
+        }),
+      ),
+    ).toThrow()
+  })
+
+  it('accepts a non-PLN invoice with a Polish-rate bucket WHEN an exchange rate is supplied', () => {
+    expect(() =>
+      fa3InvoiceSchema.parse(
+        baseInvoice({
+          currencyCode: 'EUR',
+          exchangeRate: '4.3000',
+          vatBreakdown: [
+            { rate: 23, net: '100.00', vat: '23.00', vatPln: '98.90' },
+            { rate: 'oss', net: '100.00', vat: '19.00' },
+          ],
+          totalGross: '242.00',
+          lines: [
+            { lineNumber: 1, name: 'Krajowa', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23, fxRate: '4.3000' },
+            { lineNumber: 2, name: 'OSS', quantity: '1', unitNetPrice: '100.00', netValue: '100.00', vatRate: 23, ossRate: '19', procedure: 'WSTO_EE', fxRate: '4.3000' },
+          ],
+        }),
+      ),
+    ).not.toThrow()
+  })
+})
+
+describe('JPK validators (SPEC-012)', () => {
+  const validKsef = '2481632647-20261005-3F8DD3400000-57'
+  const basePurchase = { year: 2026, month: 6, documentNumber: 'FZ/1', purchaseDate: '2026-06-10' }
+
+  describe('jpkPurchaseRecordUpsertSchema', () => {
+    it('rejects ksefMarking=NrKSeF without a non-empty nrKsef (empty <NrKSeF/> is XSD-invalid)', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF' }).success).toBe(false)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: '   ' }).success).toBe(false)
+    })
+    it('accepts ksefMarking=NrKSeF with a structurally valid nrKsef', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: validKsef }).success).toBe(true)
+    })
+    it('rejects a structurally invalid nrKsef', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, ksefMarking: 'NrKSeF', nrKsef: 'not-a-ksef' }).success).toBe(false)
+    })
+    it('defaults transactionClass to domestic', () => {
+      expect(jpkPurchaseRecordUpsertSchema.parse({ ...basePurchase }).transactionClass).toBe('domestic')
+    })
+    it('optionalMoneySchema accepts an empty string and rejects > 2 fraction digits', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, netOther: '' }).success).toBe(true)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, netOther: '1.234' }).success).toBe(false)
+    })
+    it('accepts selfAssessedRate (L9 — captured rate for self-assessment)', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, selfAssessedRate: '23.00' }).success).toBe(true)
+    })
+    it('rejects out-of-range year/month', () => {
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, year: 2025 }).success).toBe(false)
+      expect(jpkPurchaseRecordUpsertSchema.safeParse({ ...basePurchase, month: 13 }).success).toBe(false)
+    })
+  })
+
+  describe('jpkFilingUpsertSchema', () => {
+    const base = { variant: 'V7M' as const, year: 2026, month: 6, kodUrzedu: '0202' }
+    it('rejects a non-4-digit kodUrzedu', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, kodUrzedu: '20' }).success).toBe(false)
+    })
+    it('defaults celZlozenia=1 and correctionScope=both', () => {
+      const r = jpkFilingUpsertSchema.parse({ ...base })
+      expect(r.celZlozenia).toBe(1)
+      expect(r.correctionScope).toBe('both')
+    })
+    it('L7: rejects a partial correctionScope on a primary filing (celZlozenia=1)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 1, correctionScope: 'declaration' }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 1, correctionScope: 'evidence' }).success).toBe(false)
+    })
+    it('L7: allows a partial correctionScope on a correction filing (celZlozenia=2)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, celZlozenia: 2, correctionScope: 'declaration' }).success).toBe(true)
+    })
+    it('accepts an optional contextNip (H4)', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '7980332920' }).success).toBe(true)
+    })
+    it('rejects a checksum-valid context NIP that violates the JPK_V7 XSD lexical pattern', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '1000000041' }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, contextNip: '1010000031' }).success).toBe(true)
+    })
+    it('rejects out-of-range month/year/quarter', () => {
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, month: 0 }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, year: 2025 }).success).toBe(false)
+      expect(jpkFilingUpsertSchema.safeParse({ ...base, quarter: 5 }).success).toBe(false)
+    })
+  })
+
+  describe('jpkGenerateSchema', () => {
+    it('requires a uuid filingId', () => {
+      expect(jpkGenerateSchema.safeParse({ filingId: 'not-a-uuid' }).success).toBe(false)
+      expect(jpkGenerateSchema.safeParse({ filingId: '550e8400-e29b-41d4-a716-446655440000' }).success).toBe(true)
+    })
+  })
+})
+
+describe('ksefInvoiceListQuerySchema (SPEC-013 — invoices list query)', () => {
+  it('applies safe defaults (page=1, pageSize=25) when page/pageSize are absent', () => {
+    const parsed = ksefInvoiceListQuerySchema.parse({})
+    expect(parsed.page).toBe(1)
+    expect(parsed.pageSize).toBe(25)
+    expect(parsed.search).toBeUndefined()
+    expect(parsed.status).toBeUndefined()
+  })
+
+  it('coerces page/pageSize from query strings', () => {
+    const parsed = ksefInvoiceListQuerySchema.parse({ page: '3', pageSize: '50' })
+    expect(parsed.page).toBe(3)
+    expect(parsed.pageSize).toBe(50)
+  })
+
+  it('enforces the DataTable pageSize ceiling (max 100)', () => {
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 100 }).success).toBe(true)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 101 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: '250' }).success).toBe(false)
+  })
+
+  it('rejects non-positive / non-integer page and pageSize', () => {
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 0 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: -1 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ pageSize: 0 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 1.5 }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ page: 'not-a-number' }).success).toBe(false)
+  })
+
+  it('trims a search term and rejects an empty/whitespace one (min length 1 after trim)', () => {
+    expect(ksefInvoiceListQuerySchema.parse({ search: '  FV/2026  ' }).search).toBe('FV/2026')
+    expect(ksefInvoiceListQuerySchema.safeParse({ search: '   ' }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ search: 'x'.repeat(257) }).success).toBe(false)
+  })
+
+  it('trims a status filter and caps its length (the status union itself is validated at the route)', () => {
+    expect(ksefInvoiceListQuerySchema.parse({ status: ' accepted ' }).status).toBe('accepted')
+    expect(ksefInvoiceListQuerySchema.safeParse({ status: '   ' }).success).toBe(false)
+    expect(ksefInvoiceListQuerySchema.safeParse({ status: 'x'.repeat(65) }).success).toBe(false)
+  })
+})
+
+describe('SPEC-015 route validators', () => {
+  it('receiveSyncSchema accepts a valid sync window and rejects a bad date', () => {
+    expect(
+      receiveSyncSchema.safeParse({ dateFrom: '2026-06-01', dateTo: '2026-06-30', dateType: 'PermanentStorage' }).success,
+    ).toBe(true)
+    expect(receiveSyncSchema.safeParse({ dateFrom: '2026/06/01', dateTo: '2026-06-30' }).success).toBe(false)
+  })
+
+  it('nbpRateQuerySchema accepts a 3-letter currency and rejects a 4-letter currency', () => {
+    expect(nbpRateQuerySchema.safeParse({ currency: 'EUR', date: '2026-06-30' }).success).toBe(true)
+    expect(nbpRateQuerySchema.safeParse({ currency: 'EURO', date: '2026-06-30' }).success).toBe(false)
+  })
+
+  it('batchSendSchema accepts invoice UUIDs and rejects an empty array', () => {
+    expect(batchSendSchema.safeParse({ invoiceIds: ['550e8400-e29b-41d4-a716-446655440000'] }).success).toBe(true)
+    expect(batchSendSchema.safeParse({ invoiceIds: [] }).success).toBe(false)
+  })
+
+  it('ksefIssueOfflineSchema accepts niedostepnosc only with unavailabilityEndsAt', () => {
+    const base = { salesInvoiceId: '550e8400-e29b-41d4-a716-446655440000', mode: 'niedostepnosc' as const }
+
+    expect(ksefIssueOfflineSchema.safeParse({ ...base, unavailabilityEndsAt: '2026-02-06T10:00:00.000Z' }).success).toBe(true)
+    expect(ksefIssueOfflineSchema.safeParse(base).success).toBe(false)
+    expect(
+      ksefIssueOfflineSchema.safeParse({
+        ...base,
+        unavailabilityEndsAt: '2026-02-06T10:00:00.000Z',
+        failureEndsAt: '2026-02-06T10:00:00.000Z',
+      }).success,
+    ).toBe(false)
+  })
+})

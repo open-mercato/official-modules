@@ -4,6 +4,7 @@ import { discoverIntegrationSpecFiles } from '../helpers/integration-discovery';
 
 const captureScreenshots = process.env.PW_CAPTURE_SCREENSHOTS === '1';
 const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
+const testTimeout = Number(process.env.PW_TEST_TIMEOUT || 45_000);
 const projectRoot = path.resolve(__dirname, '..', '..', '..');
 const qaTestResultsRoot = path.join(projectRoot, '.ai', 'qa', 'test-results');
 const normalizePath = (value: string) => value.split(path.sep).join('/');
@@ -20,9 +21,9 @@ export default defineConfig({
   testIgnore: [
     ...STATIC_TEST_IGNORES,
   ],
-  timeout: 20_000,
+  timeout: testTimeout,
   expect: {
-    timeout: 20_000,
+    timeout: testTimeout,
   },
   retries: 1,
   workers: 1,

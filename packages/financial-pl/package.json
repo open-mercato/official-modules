@@ -1,0 +1,118 @@
+{
+  "name": "@open-mercato/financial-pl",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs",
+    "watch": "node watch.mjs",
+    "test": "jest --config jest.config.cjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./*.ts": {
+      "types": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "./*.tsx": {
+      "types": "./src/*.tsx",
+      "default": "./dist/*.js"
+    },
+    "./*.json": "./src/*.json",
+    "./*": {
+      "types": [
+        "./src/*.ts",
+        "./src/*.tsx"
+      ],
+      "default": "./dist/*.js"
+    },
+    "./*/*.json": "./src/*/*.json",
+    "./*/*": {
+      "types": [
+        "./src/*/*.ts",
+        "./src/*/*.tsx"
+      ],
+      "default": "./dist/*/*.js"
+    },
+    "./*/*/*.json": "./src/*/*/*.json",
+    "./*/*/*": {
+      "types": [
+        "./src/*/*/*.ts",
+        "./src/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*.js"
+    },
+    "./*/*/*/*.json": "./src/*/*/*/*.json",
+    "./*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*.ts",
+        "./src/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*.js"
+    },
+    "./*/*/*/*/*.json": "./src/*/*/*/*/*.json",
+    "./*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*.js"
+    }
+  },
+  "peerDependencies": {
+    "@mikro-orm/core": "^7.1.8",
+    "@mikro-orm/decorators": "^7.1.8",
+    "@mikro-orm/migrations": "^7.1.8",
+    "@mikro-orm/postgresql": "^7.1.8",
+    "@open-mercato/core": ">=0.6.6 <0.8.0",
+    "@open-mercato/queue": ">=0.6.6 <0.8.0",
+    "@open-mercato/shared": ">=0.6.6 <0.8.0",
+    "@open-mercato/ui": ">=0.6.6 <0.8.0",
+    "lucide-react": "^1.21.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@open-mercato/core": "0.7.1-develop.7122.1.421cefe668",
+    "@open-mercato/queue": "0.7.1-develop.7122.1.421cefe668",
+    "@open-mercato/shared": "0.7.1-develop.7122.1.421cefe668",
+    "@open-mercato/ui": "0.7.1-develop.7122.1.421cefe668",
+    "@playwright/test": "^1.58.2",
+    "@types/jest": "^30.0.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.17",
+    "bullmq-otel": "^1.3.1",
+    "esbuild": "^0.28.0",
+    "glob": "^13.0.6",
+    "jest": "^30.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-is": "^19.2.8",
+    "ts-jest": "^29.4.9",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "src/modules",
+    "package.json",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mercato/official-modules.git",
+    "directory": "packages/financial-pl"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@peculiar/x509": "^2.0.0",
+    "qrcode": "^1.5.4",
+    "xadesjs": "^2.6.7"
+  }
+}

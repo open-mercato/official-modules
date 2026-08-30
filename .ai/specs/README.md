@@ -43,6 +43,10 @@ Files like `AGENTS.md` and `CLAUDE.md` use UPPERCASE names and are not numbered�
 | [SPEC-001](SPEC-001-2026-01-21-ui-reusable-components.md) | 2026-01-21 | UI Reusable Components | Library of reusable UI components and patterns |
 | [SPEC-002](SPEC-002-2026-01-23-messages-module.md) | 2026-01-23 | Messages Module | Internal messaging and communication system |
 | [SPEC-003](SPEC-003-2026-01-23-notifications-module.md) | 2026-01-23 | Notifications Module | User notification system with multiple channels |
+| [SPEC-005](SPEC-005-2026-07-01-financial-pl-ksef-connector-submission.md) | 2026-07-01 | financial_pl — KSeF connector & submission | KSeF 2.0 transport: token + certificate/XAdES auth, online/offline/batch submit, status/UPO polling, idempotency + reconciliation sweep, inbound receiving, fail-closed immutability guard, per-org credentials + KsefSubmission model |
+| [SPEC-006](SPEC-006-2026-07-01-financial-pl-fa3-documents-corrections-jpk.md) | 2026-07-01 | financial_pl — FA(3) documents, corrections & JPK | FA(3) serializer + all doctypes (VAT/KOR/ZAL/ROZ/UPR/OSS), self-billing, OSS, KOR corrections (credit_memo), NBP FX, JPK_V7 export + MF e-submission, SalesInvoicePlMeta model |
+| [SPEC-007](SPEC-007-2026-07-01-financial-pl-invoice-pdf.md) | 2026-07-01 | financial_pl — Invoice PDF | Paginated FA(3) PDF visualization, KOD I/II QR codes, layout + i18n labels |
+| [SPEC-008](SPEC-008-2026-07-01-financial-pl-invoice-authoring-ui.md) | 2026-07-01 | financial_pl — Invoice authoring UI | Module-owned backoffice pages + the tabbed invoice editor, buyer + MF Wykaz NIP autofill + customer/product pickers, payment/sale-date/smart-defaults, mid-market gap audit |
 
 ## Specification Structure
 
