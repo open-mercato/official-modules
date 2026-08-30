@@ -78,9 +78,9 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/core": "0.6.8-develop.7000.1.0ae682bad1",
-    "@open-mercato/shared": "0.6.8-develop.7000.1.0ae682bad1",
-    "@open-mercato/ui": "0.6.8-develop.7000.1.0ae682bad1",
+    "@open-mercato/core": "0.7.1-develop.7122.1.421cefe668",
+    "@open-mercato/shared": "0.7.1-develop.7122.1.421cefe668",
+    "@open-mercato/ui": "0.7.1-develop.7122.1.421cefe668",
     "@playwright/test": "^1.58.2",
     "@types/chance": "^1.1.7",
     "@types/jest": "^30.0.0",
