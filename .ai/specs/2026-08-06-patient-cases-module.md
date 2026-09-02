@@ -1,4 +1,4 @@
-# SPEC-005: Patient Cases — Made-to-Order Production for a Person
+# Patient Cases — Made-to-Order Production for a Person
 
 ## TLDR
 
@@ -14,21 +14,27 @@
 
 **Concerns:**
 - Core has no booking primitive — the reason SPEC-009 exists. Two candidates are already in flight for that layer (SPEC-008, PR #33, and SPEC-009), and nothing in *this* document depends on which wins, which is why they were separated.
-- Declaring patient names in `defaultEncryptionMaps` does **not** break the internal token search (`query_index` indexes decrypted content); it removes them from external engines. Q3 is narrowed to external engines and to whether tokens derived from Art. 9 names should exist at all.
+- Patient names are **not** searchable, by decision rather than by limitation. Declaring them in `defaultEncryptionMaps` does not break the internal token index — `query_index` tokenizes decrypted content — but that index stores an unkeyed SHA-256 of every token *and of every prefix*, which is reversible offline for a surname. Art. 9 identifiers therefore stay out of it, and patient lookup is exact-match through `hashField` (Q3).
 
-## Open Questions
+## Open Questions — answered
 
-> This is a **design-only PR**. No package is scaffolded and no code is contributed until these are answered, because Q2 changes which entities this module owns.
+> The gate this document opened with is **closed**. Q1 moved to SPEC-009 (where the appointment layer belongs); Q2–Q5 were answered by maintainers in review on 2026-08-26. The numbering is deliberately unchanged, so the review conversation keeps its references.
 >
-> **Q1 has moved to SPEC-009** (where the appointment layer belongs). The numbering of Q2–Q5 is deliberately left unchanged, so the review conversation already referring to them keeps its references.
+> Two answers changed the design and are carried into the body of this document rather than left as notes here: **Q3** (Art. 9 identifiers stay out of the token index) and **Q5** (the clinical-documentation boundary). Two are release conditions rather than design decisions and are tracked under Migration & Compatibility and in the Risk Register: the stable `forms` release behind **Q2**, and the keyed token hash behind **Q3(a)**.
 
-- **Q2**: Consent reuse — **and the release plan behind it**. This spec assumes `patient_cases` consumes `@open-mercato/forms` `FormConsentRecord` with `subject_type = 'patient_cases.patient'` rather than shipping its own consent log, which is what the review recommended and what the module's shape supports. Two things follow that only maintainers can answer:
-  - `forms` is **not part of the framework**. It lives in this repository as an official module (imported by #23 on 2026-06-24), so adopting this design means a tenant installs a package from outside `@open-mercato/core`. Is `forms` an acceptable hard peer dependency for a module of this kind?
-  - On npm it currently publishes **only pre-release versions** (`0.0.0`, dist-tags `canary` and `develop`; no stable release). **When does it reach a stable version, and what compatibility guarantee do `FormConsentRecord`'s `subject_type` / `consent_field_key` / `clause_sha256` carry before 1.0?** This module's GDPR posture rests on that contract, so a silent shape change is not a cosmetic break. If the answer is "no guarantee yet", the honest options are pinning an exact pre-release, or keeping a module-owned consent log until `forms` stabilises — and the second one undoes a decision this spec would rather keep.
-- **Q3**: Search over encrypted fields — **narrowed after review**. `query_index` builds search tokens from *decrypted* documents (`packages/core/src/modules/query_index/lib/indexer.ts` resolves the tenant encryption service and calls `decryptIndexDocForSearch` before `replaceSearchTokensForRecord`), so token search over `first_name` / `last_name` works with those fields declared in `defaultEncryptionMaps`. What excludes them is the external-engine field policy (`packages/search/src/lib/field-policy.ts`), which drops encryption-mapped fields from documents sent to Meilisearch/vector and routes `hashField` fields to hash-only matching. Two questions remain: **(a)** is there a planned direction for fulltext/vector engines over encryption-mapped fields, and **(b)** should search tokens derived from Art. 9 names sit in `search_tokens` at all? (b) is a privacy question rather than a capability one, and it is the one this module most needs answered — if the answer is no, names stay out of the search config entirely and lookup remains identifier-only.
-  - *Related documentation defect*: the standalone search guide shipped with a 0.6.6 scaffold states as MUST rule #5 — "MUST NOT include encrypted/sensitive fields in `buildSource` text" — without distinguishing the internal token path from documents sent to an external engine. That rule is right for external engines and misleading for tokens; this spec was originally written against it. Worth correcting upstream so the next module author does not design around a limit that is not there.
-- **Q4**: Role-scoped field visibility. The requirement is that a workshop role sees a patient's first name, last name, height and weight and nothing else, enforced server-side. Is that a platform concern (RBAC/UMES) or a module concern? If platform, it ships as a separate contribution and this module only configures it. Worth noting that `forms` already ships *role-sliced rendering* for submission content, so the problem has an answer somewhere in the ecosystem — just not one that covers an entity's own columns.
-- **Q5**: Clinical documentation is assumed out of scope — a case carries measurements, specification, schedule and status, not diagnoses (in Poland this additionally touches the EDM/P1 regulatory surface). Confirming this closes the `Case` entity.
+- **Q2 — is `@open-mercato/forms` an acceptable peer dependency, and what does its contract guarantee before 1.0?**
+  **Answered: yes to the dependency, with a release gate.** The direction is right and dropping the module-owned consent entity was the right instinct. The release state is not right: on npm the package publishes only `0.0.0-canary.*` and one `0.0.0-develop.*`, and the `latest` dist-tag points at a canary older than the one `canary` points at, so a plain install resolves to a months-old prerelease with no semver signal. The fields this module's GDPR posture rests on therefore carry **no compatibility guarantee today**. Maintainers will cut a stable `0.1.0` of `forms` and declare `subject_type`, `subject_id`, `consent_field_key`, `clause_sha256` and the status set STABLE in `BACKWARD_COMPATIBILITY.md`. **That release is a precondition for the implementation PR, not for this one.** Until it lands, the dependency is pinned to an exact published version and read through `formsConsentRecordService` rather than through the entity — which is what the risk register already required.
+
+- **Q3 — should search tokens derived from Art. 9 names exist at all?**
+  **Answered: not as things stand — so they will not.** The premise this question had been narrowed to turned out to be worse than assumed. Raw tokens reach the database only under `OM_SEARCH_STORE_RAW_TOKENS=true`, which defaults to false, so `search_tokens.token` is normally null. But `hashToken` is an unkeyed `sha256(token)` with no salt and no per-tenant context, and `enablePartials` defaults to true, so a surname is stored as its whole prefix ladder — each entry an unkeyed digest of a short string drawn from a small dictionary. That is reversible offline and leaks length on top: `search_tokens` holds a recoverable copy of the names sitting next to the encrypted column, which is the `national_id_hash` pepper finding one layer up.
+  **For this module**: Art. 9 identifiers do not enter the token index. Patient lookup stays exact-match through `hashField`, as already specified, and **the exclusion is declared in the module's own search field policy** rather than left to `OM_SEARCH_FIELD_BLOCKLIST`, which is a deployment-level substring match that a module cannot guarantee. This costs the module nothing it had.
+  **(a) For the platform**: keying the token hash through the same secret chain as `hashForLookup`, with per-tenant context, behind an opt-in flag — enabling it invalidates existing rows and requires a full reindex. Filed upstream together with `isLookupPepperConfigured()`, since both need one place that answers whether a secret is configured.
+
+- **Q4 — is role-scoped field visibility a platform concern or a module concern?**
+  **Answered: module, and the design in this document is the one to ship.** The platform has no field-level read policy anywhere — not in the query engine, not in `makeCrudRoute`, not in custom fields; grants are resource plus action, never column. No platform version is promised, because an honest one has to cover CRUD responses, `query_index` documents, search tokens, exports and AI tools in the same change, or the data leaves through a surface nobody checked. That list is the entry condition on the upstream issue. Here the design stays as specified: a reduced projection in the read path keyed on `patient_cases.view_sensitive`, with measurements behind their own `patient_cases.view_measurements` grant.
+
+- **Q5 — is clinical documentation out of scope?**
+  **Answered: confirmed, and the boundary is now stated in the body** (Data Models → *Case*). Measurements, specification, schedule and status are order data. Diagnoses and treatment notes are a different regime — professional secrecy, statutory rather than configurable retention, interoperability with medical systems — and a tenant who needs them gets a separate module referencing `Case` by id, never a column on it.
 
 ---
 
@@ -218,6 +224,8 @@ Optimistic locking is on by default in the platform (`OM_OPTIMISTIC_LOCK`), so e
 - `sales_order_id`: string, nullable, indexed — FK id → `sales`
 - `terms_consent_bypassed`: boolean, default `false` — set when the case was created while no consent source was resolvable
 
+**Clinical documentation is out of scope, and this is where that boundary sits.** `measurements`, `specification`, the schedule and the status are *order* data: what is being made, for whom, to what dimensions, and how far along it is. Diagnoses, treatment notes and anything else a clinician records about a patient's condition belong to a different regime — professional secrecy, statutory rather than tenant-configurable retention, and interoperability obligations with medical systems (in Poland, the EDM/P1 surface). A tenant who needs them gets a separate module referencing `Case` by id. They never become a column here, and no field on this entity may be repurposed to hold them.
+
 ### CaseTransition (`patient_cases_case_transitions`)
 - `case_id`: string, indexed
 - `from_status`, `to_status`: string
@@ -248,7 +256,19 @@ This is the whole of the seam on this side, and it is deliberately three columns
 
 Deliberately not encrypted: `sex`, `preferred_language`, `postal_code`, `height_cm`, `weight_kg` — classification codes and numbers that must be filtered and grouped on, with no compliance benefit from encryption.
 
-**Case, visit and time-block entities carry no direct identifiers** — they reference the patient by id. That is deliberately not the same claim as "no personal data": `measurements` and `specification` are body measurements bound to a patient id, i.e. pseudonymised data concerning health. What the absence of direct identifiers buys is narrower and still worth having — the production board and the calendar can be shown to a role holding no right to the patient record. The workshop's access to measurements is justified on its own footing, as processing necessary to manufacture the device, and that justification is exactly what Q4 has to settle.
+#### Art. 9 identifiers stay out of the search index
+
+`src/modules/patient_cases/search.ts` declares the patient's indexable fields and **excludes `first_name`, `last_name`, `phone`, `email`, `national_id`, `identity_document_number`, `address_line` and `city` from the search source entirely** — not merely from the documents sent to an external engine, but from the internal token index too.
+
+The reason is that `search_tokens` is not the safe half. `hashToken` is an unkeyed `sha256` with no salt and no per-tenant context, and partial matching is on by default, so an indexed surname becomes its entire prefix ladder of unkeyed digests over a small dictionary — recoverable offline, with the ladder leaking length as a bonus. A recoverable copy of the names in a table next to the encrypted column defeats the point of encrypting it (Q3).
+
+Two consequences the implementation must honour:
+- **Patients are not fuzzy-searchable.** Reception finds a patient by exact identifier through `hashField`, or by opening the case. This is a product constraint, stated here so it is not discovered as a missing feature.
+- **The exclusion lives in the module.** `OM_SEARCH_FIELD_BLOCKLIST` is a deployment-level substring match; a module cannot guarantee a deployment sets it. The module's own field policy is the thing under this module's control, so it is the thing that carries the rule.
+
+If the platform later lands a keyed, per-tenant token hash (filed upstream under Q3(a)), this exclusion becomes a tenant-configurable choice rather than a module constant. Until then it is a constant.
+
+**The case, transition and booking-link entities carry no direct identifiers** — they reference the patient by id. That is deliberately not the same claim as "no personal data": `measurements` and `specification` are body measurements bound to a patient id, i.e. pseudonymised data concerning health. What the absence of direct identifiers buys is narrower and still worth having — the production board and the calendar can be shown to a role holding no right to the patient record. The workshop's access to measurements is justified on its own footing, as processing necessary to manufacture the device, and that justification is exactly what Q4 has to settle.
 
 #### Lookup hashes require a pepper
 
@@ -358,15 +378,15 @@ Extracting the shared half of the CRM calendar into `ui` is worth doing before a
 
 ### Illustrative mocks
 
-The three screens below are static mocks of the proposed module, rendered with synthetic data and a deliberately generic made-to-measure product. They illustrate the design described above; they are not screenshots of any customer's system.
+The two screens below are static mocks of the proposed module, rendered with synthetic data and a deliberately generic made-to-measure product. They illustrate the design described above; they are not screenshots of any customer's system. They are linked as pull-request attachments rather than committed under `.ai/specs/`, which is text-only.
 
 **Case timeline** — the case as the parent entity, binding the patient, the production order and the visit series into one lifecycle.
 
-![Case timeline](assets/spec-005/case-timeline.png)
+![Case timeline](https://github.com/user-attachments/assets/48b488e1-0f02-4d0c-aae8-ca382f012535)
 
 **Production board** — workshop stages run in parallel with the booking series and feed back into it: sending an item back to modelling moves the planned handover, which moves the appointment.
 
-![Production board](assets/spec-005/production-board.png)
+![Production board](https://github.com/user-attachments/assets/fca693a5-17a7-40a7-a06d-646c548dee90)
 
 ## Configuration
 
@@ -381,6 +401,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 - Migrations are generated with `yarn mercato db:generate` from entity changes; none are hand-written.
 - No backfill is required for a new installation. For a tenant migrating from a bespoke implementation, patient import must run before the encryption maps are seeded, or `yarn mercato entities seed-encryption` must be re-run afterwards.
 - **Peer dependency**: `@open-mercato/forms` for consent — an official module from this repository, **not part of `@open-mercato/core`**, so installing it is an explicit step for the tenant rather than something the framework brings along. If absent, the terms gate is inactive and the consent block renders an empty state; nothing else degrades. This is the only cross-package dependency.
+- **Release precondition (Q2).** The implementation PR waits for a stable `@open-mercato/forms` `0.1.0` declaring `subject_type`, `subject_id`, `consent_field_key`, `clause_sha256` and the consent status set STABLE in `BACKWARD_COMPATIBILITY.md`. Until then the dependency is pinned to an exact published version — never a range — and every read goes through `formsConsentRecordService`, so a column rename is absorbed where it can be and surfaces as a failed gate with a recorded bypass where it cannot.
 - **Optional peers**: `staff` (practitioner names), `sales` (order reference), and an appointment layer (the booking series on the case timeline; `CaseBooking` rows simply never get created without one). Each absence degrades one capability and none breaks the schema (see the Risk Register).
 
 ## Implementation Plan
@@ -414,6 +435,7 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `.../modules/patient_cases/acl.ts` | Create | `view`, `create`, `edit`, `delete`, `view_sensitive`, `view_measurements` |
 | `.../modules/patient_cases/setup.ts` | Create | `defaultRoleFeatures` (including `forms.view` for reception and practitioner roles), required retention setting |
 | `.../modules/patient_cases/encryption.ts` | Create | `defaultEncryptionMaps` |
+| `.../modules/patient_cases/search.ts` | Create | Search field policy excluding Art. 9 identifiers from the token index (Q3) |
 | `.../modules/patient_cases/events.ts` | Create | `createModuleEvents` declarations |
 | `.../modules/patient_cases/data/entities.ts` | Create | 4 entities |
 | `.../modules/patient_cases/data/validators.ts` | Create | Zod schemas; types via `z.infer` |
@@ -483,6 +505,13 @@ The three screens below are static mocks of the proposed module, rendered with s
 
 ### Tenant & Data Isolation Risks
 
+#### Art. 9 names recoverable from the search index
+- **Scenario**: Patient names are declared in the module's search source so reception can find people by surname. `query_index` tokenizes the *decrypted* value, and `search_tokens` stores an unkeyed `sha256` per token with partial matching on by default — so each surname lands as its full prefix ladder of unkeyed digests over a small dictionary. Anyone holding a database dump recovers the names from the index and never touches the encrypted column.
+- **Severity**: High
+- **Affected area**: `search_tokens`, patient list search, the whole point of encrypting `first_name` / `last_name`
+- **Mitigation**: The module's own `search.ts` excludes every Art. 9 identifier from the search source, so no token is ever produced (Q3). The exclusion is module-owned rather than delegated to `OM_SEARCH_FIELD_BLOCKLIST`, which a module cannot guarantee a deployment configures. Patient lookup is exact-match through `hashField`, which is peppered.
+- **Residual risk**: Patients are not fuzzy-searchable — a real product cost, accepted deliberately and documented in the module README rather than presented as a missing feature. It lifts if the platform lands a keyed, per-tenant token hash (filed upstream under Q3(a)), at which point the exclusion can become a tenant-configurable choice.
+
 #### Encrypted fields returned to an under-privileged role
 - **Scenario**: A workshop role calls the patient endpoint directly and receives the full decrypted record because the visibility filter lives only in the UI.
 - **Severity**: High
@@ -504,10 +533,10 @@ The three screens below are static mocks of the proposed module, rendered with s
 - **Severity**: High
 - **Affected area**: consent gate, GDPR audit trail, release plan
 - **Mitigation**: the dependency is pinned to an exact published version rather than a range, and the read goes through the DI service rather than the entity, so a column rename is absorbed where possible. The terms gate is fail-open with a recorded bypass (see above), so a broken read degrades to a traced gap rather than blocked intake. Q2 asks maintainers directly for the stabilisation plan and the pre-1.0 compatibility guarantee.
-- **Residual risk**: Real until `forms` reaches a stable release. If the answer to Q2 is that no guarantee exists, the fallback is a module-owned consent log — more code and a second GDPR surface, which is exactly what consuming `forms` avoids. That trade is the maintainers' call to inform, not mine to assume.
+- **Residual risk**: Real until `forms` reaches a stable release, and **that release is now the precondition for the implementation PR** (Q2): maintainers will cut `0.1.0` and declare `subject_type`, `subject_id`, `consent_field_key`, `clause_sha256` and the status set STABLE in `BACKWARD_COMPATIBILITY.md`. Until it lands, the fallback stays what the mitigation describes — an exact pin plus the service-level read — rather than a module-owned consent log, which would buy a stable contract at the price of a second GDPR surface.
 
 #### Migration interrupted midway
-- **Scenario**: The migration adding seven tables fails partway.
+- **Scenario**: The migration adding this module's four tables fails partway.
 - **Severity**: Low
 - **Affected area**: installation
 - **Mitigation**: Purely additive DDL, re-runnable, and no existing table is altered.
@@ -556,7 +585,8 @@ The three screens below are static mocks of the proposed module, rendered with s
 | `.ai/specs/AGENTS.md` | Spec includes TLDR, Overview, Problem Statement, Proposed Solution, Architecture, Data Models, API Contracts, Risks & Impact Review, Final Compliance Report, Changelog | Compliant | All present |
 | `.ai/specs/AGENTS.md` | Risks document scenario, severity, affected area, mitigation, residual risk | Compliant | Risk Register format used throughout |
 | spec-writing SKILL.md | Community modules MUST use UMES extension points | Compliant | Subscribers, enrichers and widget injection enumerated; the absence of interceptors is stated as a decision |
-| spec-writing SKILL.md | Open Questions gate — stop before Research/Design until answered | **Partially compliant** | Research and a design sketch are included so maintainers can judge the collision question, but no package is scaffolded and no code is contributed. See Non-Compliant Items |
+| spec-writing SKILL.md | Open Questions gate — stop before Research/Design until answered | Compliant (gate closed) | Design was published ahead of the answers so maintainers had something to judge, and no package was scaffolded until Q2–Q5 came back on 2026-08-26. See Non-Compliant Items for the shape of that deviation |
+| root AGENTS.md | Keep specs implementation-accurate | Compliant | Q3 and Q5 changed the design; both are carried into the body (Encryption → *Art. 9 identifiers stay out of the search index*, Data Models → *Case*) rather than left as answers in a question list |
 
 ### Internal Consistency Check
 
@@ -572,14 +602,25 @@ The three screens below are static mocks of the proposed module, rendered with s
 
 - **Rule**: "STOP after presenting the skeleton. Do not proceed to Research until all questions are answered. This is a hard gate."
 - **Source**: `.ai/skills/spec-writing/SKILL.md`
-- **Gap**: This spec carries Open Questions **and** completed Research, Design and an Implementation Plan, where the skill expects the gate to hold at the skeleton.
-- **Recommendation**: Accepted deliberately, as an external contributor cannot resolve Q1–Q5 without maintainer input, and a bare skeleton would not give maintainers enough to judge the collision question. The gate is honoured where it matters: **no package is scaffolded and no code is contributed until Q1–Q5 are answered.** If maintainers prefer the strict reading, the design sections can be reduced to a skeleton and restored after the gate.
+- **Gap**: This spec carried Open Questions **and** completed Research, Design and an Implementation Plan at the point it was opened for review, where the skill expects the gate to hold at the skeleton.
+- **Resolution**: The deviation was deliberate — an external contributor cannot resolve Q1–Q5 without maintainer input, and a bare skeleton would not have given maintainers enough to judge the collision question. The gate was honoured where it mattered: **no package was scaffolded and no code contributed until the answers landed on 2026-08-26.** In hindsight the deviation earned its keep: Q3's answer inverted a design decision, which a skeleton would not have surfaced until implementation. The gate is now closed and no longer blocks anything.
 
 ### Verdict
 
-- **Non-compliant (by design)**: Blocked on Q1–Q5 by the module's own Open Questions gate. The specification is complete enough to review; implementation starts only after maintainer answers, and Phase 3 in particular is gated on Q1.
+- **Compliant.** Q1 moved to SPEC-009 with the appointment layer; Q2–Q5 were answered on 2026-08-26 and their consequences are carried into the body. Implementation is unblocked, with one remaining external precondition that is not this document's to satisfy: a stable `@open-mercato/forms` `0.1.0` (Q2), tracked under Migration & Compatibility and in the Risk Register.
 
 ## Changelog
+
+### [2026-09-03]
+- **Closed the Open Questions gate.** Q2–Q5 came back from maintainers on 2026-08-26; each question now carries its answer, and the two answers that changed the design are carried into the body rather than left in the question list.
+- **Q3 inverted a design decision and the body now says so.** Art. 9 identifiers are excluded from the search source entirely — not just from documents sent to an external engine — because `search_tokens` stores an unkeyed `sha256` per token with partials on by default, which makes an indexed surname a recoverable copy of the name sitting next to the encrypted column. Added the module-owned `search.ts` field policy, the manifest row for it, the risk-register entry, and the product cost this carries: patients are not fuzzy-searchable, lookup is identifier-only.
+- **Q5's boundary moved into the body** (Data Models → *Case*), so it survives implementation: measurements, specification, schedule and status are order data; diagnoses and treatment notes belong to a separate module referencing `Case` by id, and no field here may be repurposed to hold them.
+- **Q2 recorded as a release precondition** rather than an open question: a stable `@open-mercato/forms` `0.1.0` with the consent contract declared STABLE gates the implementation PR, not this one. Risk register and Migration & Compatibility updated accordingly.
+- Q4 confirmed as a module concern; the reduced projection and the `patient_cases.view_measurements` split stay exactly as specified.
+- **Removed `.ai/specs/assets/spec-005/`** and pointed the two embeds at the pull-request attachments. `.ai/specs/` is text-only: outside `apps/sandbox` this repository tracks no binaries, it is consumed as a submodule, and git keeps every rerender of a mock forever without diffing it.
+- **Renamed the file to `2026-08-06-patient-cases-module.md`** and dropped the number from the title, per the new convention — specs are no longer numbered, because the number is claimed at merge and a race is built into that. The collision with #21 disappears without either side giving up a number. This document was circulated as SPEC-005 in PR #32.
+- Corrected two references left stale by the SPEC-009 split: the encryption note named `visit` and `time-block` entities this document no longer owns, and the migration risk counted seven tables where four remain.
+- Final Compliance Report updated: the gate row and the verdict now read as closed, and the deviation is recorded with what it bought — Q3's answer inverted a decision that a bare skeleton would not have surfaced until implementation.
 
 ### [2026-08-21]
 - Recorded what consuming `forms` actually costs: it is an official module of this repository rather than part of `@open-mercato/core`, and it publishes only `0.0.0` pre-releases today. Added the risk entry, sharpened Q2 into the two questions only maintainers can answer (acceptable peer dependency? stabilisation plan and pre-1.0 contract guarantee?), and noted the fallback if the answer is no.
