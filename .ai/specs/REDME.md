@@ -43,6 +43,7 @@ Files like `AGENTS.md` and `CLAUDE.md` use UPPERCASE names and are not numberedâ
 | [SPEC-001](SPEC-001-2026-01-21-ui-reusable-components.md) | 2026-01-21 | UI Reusable Components | Library of reusable UI components and patterns |
 | [SPEC-002](SPEC-002-2026-01-23-messages-module.md) | 2026-01-23 | Messages Module | Internal messaging and communication system |
 | [SPEC-003](SPEC-003-2026-01-23-notifications-module.md) | 2026-01-23 | Notifications Module | User notification system with multiple channels |
+| [reservations](2026-08-10-reservations-module.md) | 2026-08-10 | Reservations Module | Resource reservations: bookable resources, availability, and conflict handling |
 
 ## Specification Structure
 
