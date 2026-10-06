@@ -108,6 +108,7 @@ yarn platform:sync --check
 | Package | Description | Author |
 |---------|-------------|--------|
 | [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato |
+| [`@open-mercato/enrichment-treg`](packages/enrichment-treg) | CRM enrichment via treg.to — review-then-apply profile data for people and companies, plus hiring and news signals for companies | Open Mercato |
 
 ## ⚡ Installing a Module
 
