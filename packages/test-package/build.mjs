@@ -67,4 +67,20 @@ await esbuild.build({
   plugins: [addJsExtension],
 })
 
-console.log('test-package built successfully')
+// Pack-time guard: the exports map sends the runtime `default` condition to
+// dist/*.js while `types` resolves against src/*.ts, so tsc can pass even when
+// dist is empty/stale. Refuse to ship unless the build mirrored the source
+// tree, otherwise consumers hit ERR_MODULE_NOT_FOUND on deep imports.
+const builtFiles = await glob('dist/**/*.js', { cwd: __dirname, absolute: true })
+if (!existsSync(join(__dirname, 'dist/index.js'))) {
+  console.error('[test-package] build incomplete — missing dist/index.js; refusing to publish')
+  process.exit(1)
+}
+if (builtFiles.length < entryPoints.length) {
+  console.error(
+    `[test-package] build incomplete — emitted ${builtFiles.length} JS files for ${entryPoints.length} source entry points; refusing to publish`,
+  )
+  process.exit(1)
+}
+
+console.log(`test-package built successfully (${builtFiles.length} files)`)

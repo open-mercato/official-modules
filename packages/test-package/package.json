@@ -3,8 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
   "scripts": {
     "build": "node build.mjs",
+    "prepack": "node build.mjs",
     "watch": "node watch.mjs",
     "test": "jest --config jest.config.cjs",
     "typecheck": "tsc --noEmit"
@@ -59,8 +65,8 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@open-mercato/shared": "0.4.9-develop.1013.aa3a9dea92",
-    "@open-mercato/ui": "0.4.9-develop.1013.aa3a9dea92",
+    "@open-mercato/shared": "0.6.3-develop.3778.1.25fdb35f2e",
+    "@open-mercato/ui": "0.6.3-develop.3778.1.25fdb35f2e",
     "@types/jest": "^30.0.0",
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
