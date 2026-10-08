@@ -1,5 +1,17 @@
 # Contributing to Open Mercato Official Modules
 
+> ⚠️ **This repository is deprecated and no longer actively maintained.** Its
+> modules are being migrated into
+> [Open Mercato Core](https://github.com/open-mercato/open-mercato) one by one,
+> and the repo will be archived once the last one has moved. See the
+> [README](README.md#deprecated) for the migration status.
+>
+> **New modules and features go to
+> [open-mercato/open-mercato](https://github.com/open-mercato/open-mercato)**,
+> and follow that repo's contributing guide. The only changes still accepted
+> here are migration commits and release-critical fixes for a package that has
+> not migrated yet. The guide below applies to those.
+
 We’re excited to collaborate with folks building on top of Open Mercato. This guide explains how we organize releases, structure branches, and prepare pull requests so changes land smoothly.
 
 ## Branch Model

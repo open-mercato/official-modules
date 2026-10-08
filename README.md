@@ -4,30 +4,70 @@
 
 # Open Mercato Official Modules
 
+[![Status: deprecated](https://img.shields.io/badge/status-deprecated-red.svg)](#deprecated)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
 [![Core Repo](https://img.shields.io/badge/core-open--mercato-24292F.svg)](https://github.com/open-mercato/open-mercato)
 [![Docs](https://img.shields.io/badge/docs-modules.openmercato.com-1F7AE0.svg)](https://modules.openmercato.com/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/open-mercato/official-modules/issues)
 
-A community monorepo for publishing ready-to-install `@open-mercato/*` modules that extend [Open Mercato](https://github.com/open-mercato/open-mercato) without touching its core.
+<a id="deprecated"></a>
 
-Install and operations docs for the published modules live at [modules.openmercato.com](https://modules.openmercato.com/).
+## ⚠️ Deprecated / Archived
 
-## What this is
+> **This repository is deprecated and no longer actively maintained.**
+>
+> We are migrating every module that lives here into
+> [Open Mercato Core](https://github.com/open-mercato/open-mercato), one by one.
+> Once a module has moved, its code is removed from this repo and Core becomes
+> the only place it is developed, released, and supported.
+>
+> **What this means for you:**
+>
+> - 🚫 **No new modules are accepted here.** Contribute to
+>   [open-mercato/open-mercato](https://github.com/open-mercato/open-mercato) instead.
+> - 🧊 **No new features, and no support, for what is still here.** The remaining
+>   packages are frozen until they are migrated; expect only migration commits.
+> - 📦 **Already-published npm packages keep working**, but they will not be
+>   updated past the platform line they currently pin. Move to the Core
+>   equivalent when your module's migration lands.
+> - 🗂️ **This repo will be archived** once the last module has moved.
+>
+> See [Migration status](#migration-status) for what has already moved and where
+> it went.
 
-Open Mercato ships with a module system that lets you add features to your app without forking or modifying the platform. **This repo is where the community publishes those features.**
+<a id="migration-status"></a>
 
-If you're looking for the main Open Mercato application and the core framework code, see the [Open Mercato core repository](https://github.com/open-mercato/open-mercato).
+## 🚚 Migration status
 
-Every module here:
+Modules are migrated into Open Mercato Core one at a time. When a migration PR
+merges, the module's package is deleted from this repo and the row below is the
+pointer to its new home.
 
-- 🔌 **Installs in one command** — no manual wiring, no config files to edit
-- 🔒 **Stays isolated** — each module is its own npm package that hooks into the platform through declared extension points, never by patching core code
-- 🧬 **Is ejectable** — run `--eject` to copy the module into your app and own it fully
-- 🤝 **Gets reviewed** — every submission goes through core team review before reaching npm
+### Already migrated
 
-Whether you're adding a small UI widget or shipping a full vertical feature with its own entities, API routes, and admin pages — if it runs on Open Mercato, it belongs here.
+| Module | Migrated into | Migration PR |
+|--------|---------------|--------------|
+| `forms` | [Open Mercato Core](https://github.com/open-mercato/open-mercato) | [open-mercato#6770](https://github.com/open-mercato/open-mercato/pull/6770) |
+
+### Still awaiting migration
+
+The packages remaining under `packages/` (see [Module List](#-module-list)) have
+not moved yet. They are maintenance-only: no new features, bug fixes only where
+a release is already in flight.
+
+## What this was
+
+Open Mercato ships with a module system that lets you add features to your app without forking or modifying the platform. **This repo used to be where those features were published separately from the platform.**
+
+That split is being undone: the modules are moving into the
+[Open Mercato core repository](https://github.com/open-mercato/open-mercato),
+which is also where the main application and the framework code live. The module
+system itself is unchanged — modules still install in one command, stay isolated
+behind declared extension points, and remain ejectable. Only their home repo
+changes.
+
+If you want to build a module today, build it in
+[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato).
 
 ## How it works
 
@@ -50,7 +90,11 @@ Each package integrates through [UMES extension points](https://docs.openmercato
 
 ## 🚀 Getting Started
 
-Clone the repo and spin up the sandbox environment to start building:
+> ⚠️ **Deprecated.** This setup is kept only so the not-yet-migrated packages can
+> still be built and released. Do not start a new module here — see
+> [Deprecated / Archived](#deprecated).
+
+Clone the repo and spin up the sandbox environment:
 
 ```bash
 git clone https://github.com/open-mercato/official-modules.git
@@ -105,9 +149,12 @@ yarn platform:sync --check
 
 ## 🧩 Module List
 
-| Package | Description | Author |
-|---------|-------------|--------|
-| [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato |
+Modules still hosted here, pending migration into Open Mercato Core. For modules
+that have already moved, see [Migration status](#migration-status).
+
+| Package | Description | Author | Status |
+|---------|-------------|--------|--------|
+| [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato | Awaiting migration |
 
 ## ⚡ Installing a Module
 
@@ -157,6 +204,12 @@ Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmerca
 
 ## 🏗️ Building a Module
 
+> ⚠️ **Do not start a new module in this repo.** It is deprecated and will be
+> archived. New modules belong in
+> [open-mercato/open-mercato](https://github.com/open-mercato/open-mercato); the
+> workflow below is retained as reference, and because it still applies to the
+> packages waiting to be migrated.
+
 Community modules live in `packages/<module-name>/` and are published under the `@open-mercato/` scope. Before starting module work, first complete the [Getting Started](#-getting-started) setup above. Once your local environment is ready, the recommended workflow is:
 
 ```
@@ -204,7 +257,11 @@ Navigate to `/backend/<module-name>` and confirm the module loads, pages render,
 
 ### Step 5 — Open a pull request
 
-Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist. The core team will review and, once approved, publish to npm.
+For a new module, open the PR against
+[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato) — this
+repo no longer accepts them. For migration or release-critical work on a package
+still hosted here, open a PR against `develop`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist.
 
 **Note**: The `app/sandbox` changes should be limited to enabling your module, and potentially nothing more - as the users will be using your module without this app (with their own, created with the `create-mercato-app` command). 
 
@@ -228,14 +285,16 @@ Open a PR against `develop`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
 
 ## Contributing
 
-We welcome modules of all sizes — from thin UI extensions to full vertical feature sets.
+**This repo is closed to new modules.** We still welcome modules of all sizes —
+from thin UI extensions to full vertical feature sets — but they now go to
+[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato). Open
+your PR there and follow that repo's contributing guide.
 
-1. Fork [open-mercato/official-modules](https://github.com/open-mercato/official-modules) and create a branch: `feat/<module-name>`.
-2. Follow the [Getting Started](#-getting-started) guide to set up your local environment.
-3. Write a spec in `.ai/specs/`, scaffold the package, implement the spec — see [AGENTS.md](AGENTS.md) for the full agentic workflow.
-4. Open a PR against `develop` with a description of what the module does, screenshots or a short demo, and the testing you performed.
+The only changes still accepted here are migration commits moving a package to
+Core, and release-critical fixes for a package that has not migrated yet. If you
+are doing one of those, read [CONTRIBUTING.md](CONTRIBUTING.md) for the branching
+conventions and PR checklist.
 
-The core team reviews all submissions. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full branching conventions and PR checklist.
 Open Mercato is proudly supported by [Catch The Tornado](https://catchthetornado.com/).
 
 <div align="center">
