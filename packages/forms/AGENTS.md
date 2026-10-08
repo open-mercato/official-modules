@@ -1,0 +1,205 @@
+# Forms Package — Agent Guidelines
+
+Use `@open-mercato/forms` for the audit-grade questionnaire / form primitive: versioned form definitions, append-only submission revisions, role-sliced rendering, and GDPR-safe anonymization. First consumer is a medical-questionnaire vertical; same primitives serve B2B onboarding, RFPs, NPS, HR, and maintenance checklists.
+
+The module ships in phases — see `.ai/specs/2026-04-22-forms-module.md` and the per-phase sub-specs (`2026-04-22-forms-phase-1a` … `phase-3`).
+
+## MUST Rules
+
+1. **MUST treat published `form_version` rows as immutable** — once `status = published`, never UPDATE `schema`, `ui_schema`, or `roles`. All edits fork a new `draft` row. Phase 1b enforces this in the command layer; phase 1a only ships the DB-shape constraint (`UNIQUE (form_id, version_number)`).
+2. **MUST scope every entity query by `organization_id` AND `tenant_id`** — both columns live on `forms_form` and `forms_form_version` and are mandatory in every read filter.
+3. **MUST keep event IDs frozen** — the catalog in `events.ts` is a contract surface (root AGENTS.md § BC § 5). Adding new IDs is additive; renaming/removing is a breaking change requiring the deprecation protocol.
+4. **MUST register new field types via `FieldTypeRegistry.register(...)`** with the full `{ validator, renderer, defaultUiSchema, exportAdapter }` quartet. `renderer` may be `null` until the renderer module wires it via `setRenderer(...)`. Never bypass the registry in compilers, runners, or exporters.
+5. **MUST add the OM extension keyword to `OM_FIELD_KEYWORDS` / `OM_ROOT_KEYWORDS`** before consuming it in the compiler — `x-om-*` keywords are part of the schema-format contract and must be discoverable from one place.
+6. **MUST canonicalize before hashing** — `schema_hash` is the SHA-256 of `canonicalize({ schema, ui_schema })`. Order-sensitive hashes break cache, signed PDFs, and audit trails.
+7. **MUST capture `registry_version` at publish time** on `form_version.registry_version`. The renderer (phase 1d) compares it to the live registry to detect drift (R2 mitigation).
+8. **MUST resolve services via DI** — `formVersionCompiler` and `fieldTypeRegistry` are the registered keys. Never `new FormVersionCompiler()` outside `di.ts`.
+9. **MUST register every layout-affecting `x-om-*` key** before consuming it. When adding a new layout container or layout-affecting `x-om-*` key, list it in `OM_FIELD_KEYWORDS` / `OM_ROOT_KEYWORDS`, register a validator in `OM_FIELD_VALIDATORS` / `OM_ROOT_VALIDATORS`, and extend the schema-extensions catalog before consuming it from the studio. New keys MUST be additive and optional (R-1 mitigation in `.ai/specs/2026-05-10-forms-visual-builder.md`).
+10. **MUST NOT write `registry_version` on draft saves** — that field is set exclusively by the publish command (Decision 25 in `.ai/specs/2026-05-10-forms-visual-builder.md`, parent spec 1a). Drafts must round-trip through the studio without producing a publish-equivalent stamp.
+11. **MUST keep pack-registered layout entries field-shaped** — third-party packs that want a layout-category palette entry beyond `info_block` MUST use `FieldTypeRegistry.register({ category: 'layout' })` and persist as fields in `properties` (not as new `OmSection.kind` values). The registry asserts `validator(undefined) === true` and `exportAdapter(undefined) === ''` at register time and throws on violation (Decisions 16a/16b).
+12. **MUST NOT silently rewrite the persisted schema on load** — read-time defaults for additive layout keys (`columns`, `gap`, `divider`, `hideTitle`, page mode, supported locales, grid-span clamp) are applied to derived views only. The compiler / studio MUST keep the persisted bytes verbatim so `schemaHash` survives a round-trip (Decision 12, R-9 mitigation).
+13. **MUST gate all persisted jsonlogic expressions through `jsonlogic-grammar.ts`** — visibility predicates, jump `if` clauses, and variable formulas can only use the operators in `ALLOWED_JSONLOGIC_OPS`. The validator (`validateOmCrossKeyword`) throws at save/publish time on unknown operators; the runtime evaluator (`form-logic-evaluator`) is the second line of defence (R-5 mitigation). Sensitive fields (`x-om-sensitive: true`) MUST NOT resolve via recall — the resolver returns the empty string for any token referencing them (R-4 mitigation).
+14. **MUST keep identifier namespaces disjoint** — field keys in `properties`, hidden-field names in `x-om-hidden-fields`, and variable names in `x-om-variables` MUST NOT collide. `validateOmCrossKeyword` enforces this at save/publish time and is invoked from both `schema-helpers.validateSchemaExtensions` and the compiler's `compileFresh` path.
+15. **MUST compile validation rules at AJV-compile time AND surface them on `FieldDescriptor.validations`** for runtime parity. The studio preview, the public runner, and the submission service all consume `FieldDescriptor.validations` / `FieldDescriptor.validationMessages`; the runner re-runs the same rule set server-side before persisting (defence in depth). `services/field-validation-service.ts` is pure — no I/O, no DI, only a module-scoped regex cache keyed on the source string. Regex evaluation is wrapped in a 50ms wall-clock guard (R-1 mitigation — catastrophic regex).
+
+## DI Keys (FROZEN)
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `formVersionCompiler` | `FormVersionCompiler` | Compiles `(schema, ui_schema)` into `{ ajv, zod, fieldIndex, rolePolicyLookup, schemaHash, registryVersion }` with LRU cache keyed on `${id}:${updatedAt.toISOString()}` |
+| `fieldTypeRegistry` | `FieldTypeRegistry` | Singleton lookup of registered field types — preloaded with the 11 v1 core types |
+
+## Encryption Env Vars
+
+Per-tenant envelope encryption (`services/encryption-service.ts`) wraps each
+tenant DEK under a master key. Select the wrap posture via env:
+
+| Env var | Purpose |
+|---------|---------|
+| `FORMS_ENCRYPTION_MASTER_KEY` | Production master key — base64- or hex-encoded, MUST decode to exactly 32 bytes. When set, `EnvMasterKeyKmsAdapter` is used. Deliver it from a secret manager / cloud KMS at boot. |
+| `FORMS_ENCRYPTION_KMS_KEY_ID` | DEV-ONLY seed for `DevDeterministicKmsAdapter` (deterministic wrap key). Never protects PHI in production. |
+
+`resolveKmsAdapter(env)` chooses: operator-registered factory
+(`setKmsAdapterFactory(...)`) → `EnvMasterKeyKmsAdapter` (master key set) →
+`DevDeterministicKmsAdapter` (dev fallback). When `NODE_ENV=production` and only
+the dev fallback is available, it throws `INSECURE_KMS_IN_PRODUCTION` (W1 / R-1).
+Cloud KMS (AWS/GCP/Vault) integrates by implementing `KmsAdapter` and registering
+it via `setKmsAdapterFactory(...)` — no cloud SDK ships with this module.
+
+## CAPTCHA Env Vars
+
+The public start route (`api/public/start/route.ts`) gates anonymous submissions
+behind an optional CAPTCHA when `distribution.settings.captcha` is truthy. The
+verifier is resolved from DI (`formsCaptchaVerifier`) — see
+`services/captcha-verifier.ts`.
+
+| Env var | Purpose |
+|---------|---------|
+| `FORMS_CAPTCHA_PROVIDER` | `turnstile` (Cloudflare) or `recaptcha` (Google). When set together with `FORMS_CAPTCHA_SECRET`, tokens are verified against the provider's siteverify endpoint (fail-closed: any transport/parse error rejects). |
+| `FORMS_CAPTCHA_SECRET` | The provider's secret key. Never logged. |
+
+When no provider is configured the verifier is a no-op: a non-empty
+`captchaToken` is still *required* on CAPTCHA-enabled distributions
+(`422 CAPTCHA_REQUIRED` if missing) for backward-compat, but the token is
+accepted without remote verification. With a provider configured, a failed
+verification returns `422 CAPTCHA_FAILED`. Operators inject a custom verifier by
+overriding `formsCaptchaVerifier`.
+
+## Schema Format (v1) — Locked In
+
+Every form definition is a JSON Schema 7-shaped object decorated with `x-om-*` extension keywords. The full keyword catalog lives in `src/modules/forms/schema/jsonschema-extensions.ts`. v1 keywords are FROZEN; new keywords are additive.
+
+| Keyword | Level | Type |
+|---------|-------|------|
+| `x-om-roles` | root | `string[]` |
+| `x-om-default-actor-role` | root | `string` |
+| `x-om-sections` | root | `{ key, title: { [locale]: string }, fieldKeys: string[] }[]` |
+| `x-om-type` | field | `string` (resolves in `FieldTypeRegistry`) |
+| `x-om-label` | field | `{ [locale]: string }` |
+| `x-om-help` | field | `{ [locale]: string }` |
+| `x-om-editable-by` | field | `string[]` (defaults to `['admin']`) |
+| `x-om-visible-to` | field | `string[]` (defaults to editable ∪ `admin`) |
+| `x-om-sensitive` | field | `boolean` |
+| `x-om-visibility-if` | field | jsonlogic — evaluated by phase 2c |
+| `x-om-options` | field | `{ value, label: { [locale]: string } }[]` |
+| `x-om-min` / `x-om-max` | field | `number` |
+| `x-om-widget` | field | `string` (uiSchema widget override) |
+| `x-om-prefill` | field | `string` (logical prefill attribute key — W8 / FD-1) |
+| `x-om-answer-mappings` | root | `{ [fieldKey]: targetPath }` (consumer answer→target map — W8 / INT-5) |
+
+## v1 Field Types (FROZEN core list)
+
+`text`, `textarea`, `number`, `integer`, `boolean`, `date`, `datetime`, `select_one`, `select_many`, `scale`, `info_block`. Vertical extensions (signature, file, tooth chart, body diagram) land in phases 2c/3.
+
+Tier-2 types (`email`, `phone`, `website`, …) register via the same `FieldTypeRegistry.register(...)` API and are additive — they do not appear in the FROZEN v1 list.
+
+## Module Structure
+
+```text
+packages/forms/src/modules/forms/
+├── acl.ts                          # Phase 1a — feature catalog
+├── events.ts                       # Phase 1a — event ID catalog (FROZEN)
+├── events-payloads.ts              # Phase 1a — Zod payload schemas keyed by event ID
+├── di.ts                           # Phase 1a — DI registrar
+├── index.ts                        # Phase 1a — module metadata
+├── setup.ts                        # Phase 1a — defaultRoleFeatures
+├── translations.ts                 # Phase 1a — translatable fields stub
+├── data/
+│   ├── entities.ts                 # Phase 1a — Form, FormVersion (1c adds submission entities)
+│   └── validators.ts               # Phase 1a — formKeySchema, localeSchema, roleIdentifierSchema
+├── migrations/                     # Per-phase progressive migrations
+├── schema/
+│   ├── field-type-registry.ts      # Phase 1a — registry + 11 v1 core types
+│   └── jsonschema-extensions.ts    # Phase 1a — OM keyword catalog + AJV registration
+└── services/
+    └── form-version-compiler.ts    # Phase 1a — schema → AJV + Zod + role policy
+```
+
+Future phases append `commands/`, `api/`, `ui/`, `subscribers/`, more entities under `data/`, and additional services. The directory above is canonical for phase 1a.
+
+## Phase Map
+
+| Phase | Lands |
+|-------|-------|
+| 1a Foundation | This phase. Module scaffold, entities, schema, registry, compiler, events catalog, ACL, setup. |
+| 1b Authoring | Admin CRUD, fork-draft / publish commands, FormVersionDiffer, studio UI. |
+| 1c Submission Core | `form_submission`, `form_submission_actor`, `form_submission_revision`, EncryptionService, RolePolicyService, runtime API. |
+| 1d Public Renderer | Hand-rolled FormRunner, ResumeGate, autosave loop, sectioned flow, review step. |
+| 2a Admin Inbox | Submission list, drawer, revision replay, reopen, actor assign/revoke. |
+| 2b Compliance | Access audit, PDF snapshot, anonymize command + UI. |
+| 2c Advanced Fields | Conditional visibility (jsonlogic), version history + diff viewer, signature field, file field. |
+| 2d Distribution | `FormDistribution` + `FormInvitation` entities, public anonymous runtime (token-authenticated `/api/forms/public/*` + `/f/:slug`, `/i/:token` runner pages), admin distribution UI (`DistributionsPanel`, `CreateDistributionDialog`, `RecipientsTable`), `forms.distribute` feature. |
+| 3 Vertical Extensions | Tooth chart, body diagram, analytics, webhook wiring, consent aggregate. |
+| Render Surfaces | Single `<EmbeddedForm>` primitive over `FormRunner`; surface taxonomy S1–S6 — portal page (S1), hosted link (S2), injectable widget `forms.injection.embedded-form` on `forms:embed` (S3), external iframe embed via embed-loader script + `/embed/:slug` (S4), `<FormTrigger>`/`useFormDialog()` dialog (S5), documented headless `/run/context` (S6). See the Render Surfaces section above and `.ai/specs/2026-05-21-forms-render-surfaces.md`. |
+| Custom Styling | Constrained, injection-proof visual styling at form/section/field levels (`x-om-theme`, `OmSection.style`, `x-om-style`) compiled to scoped CSS variables that remap DS tokens; authored in the studio Appearance panels + presets, applied once in the shared `<FormRunner>` so every render surface is themed; preview parity via the same `style-compiler`. Backgrounds = color/gradient in v1 (image = Phase 2). See the Custom Styling section below and `.ai/specs/2026-05-22-forms-custom-styling.md`. |
+
+## Render Surfaces
+
+A published form is rendered through **one** primitive — `<EmbeddedForm>` (`ui/public/EmbeddedForm.tsx`, exported from `ui/public/index.ts`). It runs the shared bootstrap (resolve context → start/load submission → build the right `RuntimeClient` → mount `<FormRunner>`) and picks the client from a `source` discriminator. `FormRunner` is never forked; every surface below is a thin wrapper around `<EmbeddedForm>`. See `.ai/specs/2026-05-21-forms-render-surfaces.md`.
+
+`source` (`EmbeddedFormSource`) union:
+
+| `source.kind` | Fields | Client |
+|---|---|---|
+| `portal` | `formKey`, `subjectType`, `subjectId` | `createAuthRuntimeClient` |
+| `distribution` | `slug` | `createAnonymousRuntimeClient` |
+| `invitation` | `token` | `createAnonymousRuntimeClient` |
+
+| # | Surface | How to mount / route | Client | Auth | Status |
+|---|---------|----------------------|--------|------|--------|
+| S1 | Customer portal page | `frontend/[orgSlug]/portal/forms/[key]/page.tsx` mounts `<EmbeddedForm source={{ kind:'portal', … }} />` | auth | portal customer | Done |
+| S2 | Standalone hosted link | `/f/:slug`, `/i/:token` → `ui/public/PublicFormRunnerPage.tsx` delegates to `<EmbeddedForm>` | anonymous | none / token | Done |
+| S3 | Injectable widget | widget `forms.injection.embedded-form` (`widgets/injection/embedded-form/widget.tsx`) on the `forms:embed` spot | auth or anonymous | host-dependent | Done |
+| S4 | External website embed | `<script src=".../api/forms/public/embed-loader">` + `<div data-om-form="SLUG">` → iframe `frontend/embed/[slug]/page.tsx` (framing via `apps/mercato/src/proxy.ts`) | anonymous | none | Done |
+| S5 | Trigger / dialog | `<FormTrigger source … />` / `useFormDialog()` (`ui/public/FormTrigger.tsx`) mount `<EmbeddedForm>` in a DS `Dialog` | any | source-dependent | Done |
+| S6 | Headless API render | `GET /api/forms/:id/run/context` (compiled schema + field descriptors) + the public/auth save/submit routes | caller-built | caller-defined | Done — documented |
+
+**S3 widget prop contract.** The host module places `forms.injection.embedded-form` on a spot and passes `context.source` (an `EmbeddedFormSource`) plus optional `onReturnHome` and `className`. The widget itself adds no ACL feature — gating is the host page's own guard (admin renders typically also require `forms.view`).
+
+**S4 external-framing wiring.** Third-party framing is enabled end-to-end. Per-request `frame-ancestors` for `/embed/:slug` is applied by the app proxy/middleware (`apps/mercato/src/proxy.ts`, Next 16's `proxy` convention), which resolves the allowlist from `GET /api/forms/public/distributions/:slug/embed-policy` (→ `DistributionService.getEmbedPolicyBySlug` → `buildFrameAncestorsCsp(readEmbedSettings(distribution.settings))` in `lib/embed-frame-policy.ts`). The global app CSP rule in `apps/mercato/next.config.ts` EXCLUDES `/embed/` (`source: '/((?!embed/).*)'`) so the proxy is the sole authority there and omits `X-Frame-Options`; it fails closed (`frame-ancestors 'none'`) for non-embeddable / unknown slugs. The shared CSP body lives in `apps/mercato/src/lib/security-headers.ts` so config and proxy stay identical apart from the framing directive. Per-distribution `theme` (`light`/`dark`/`auto`) is applied inside the iframe by `frontend/embed/[slug]/page.tsx` (toggles `.dark` on the document root); `autoResize: false` disables the resize `postMessage`.
+
+## Custom Styling
+
+Authors give a form brand colors, a background, card sections, and per-field emphasis through a **constrained, validated styling vocabulary** persisted in the version schema like every other `x-om-*` keyword. See `.ai/specs/2026-05-22-forms-custom-styling.md`.
+
+**Vocabulary (3 additive, optional levels).** All absent ⇒ the form renders exactly as before (byte-identical, hash-stable).
+
+| Level | Keyword | Type | Notes |
+|---|---|---|---|
+| root | `x-om-theme` | `OmTheme` | form-wide background, surface, foreground, accent, border, fontFamily, fontScale, radius, contentWidth |
+| section | `OmSection.style` | `OmSectionStyle` | per-section background, foreground, padding, border, radius, card, align |
+| field | `x-om-style` | `OmFieldStyle` | per-field labelWeight, labelColor, textColor, accent, align |
+
+Types + value enums live in `schema/style-extensions.ts`; strict validators in `schema/style-validators.ts` (wired into `OM_ROOT_VALIDATORS['x-om-theme']`, `OM_FIELD_VALIDATORS['x-om-style']`, and the inline `OmSection` check). Density/grid/label-position layout keywords are unchanged and orthogonal.
+
+**MUST: styling is *data*, never CSS (security keystone — R-CS-1 / D1).** There is no field anywhere that accepts a CSS declaration, selector, `url()`, `var()`, `calc()`, `expression()`, or free text. A color is either a curated DS-role token (`surface | surface-muted | foreground | muted-foreground | accent | border | transparent | inherit`) or a strict hex literal matching `OM_HEX_COLOR` (`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`). Spaces/radii/borders/fonts/weights/aligns are fixed enums; gradient angle is an integer `0..360`; unknown object keys are rejected at save. `services/style-compiler.ts` is the **sole** CSS producer: it re-validates defensively, resolves tokens → DS var references, re-checks hex, builds gradients from a fixed template, and returns a plain object consumed as a React `style` prop — never a `<style>` string and never `dangerouslySetInnerHTML`.
+
+**Apply seam (one place per render path).** The compiler emits a `ResolvedStyle` = `{ cssVars, classNames }`. `<FormRunner>` wraps the form in a single `<div class="om-form-theme" style={cssVars}>`; setting `--background`/`--primary`/`--card`/`--border`/`--radius`/`--foreground` on that scope re-themes every DS-token renderer inside it with no per-component edits. Section/field wrappers set additional `--om-*` vars. Because the seam lives in the shared `<FormRunner>`, **all six render surfaces are themed for free**; the studio `PreviewSurface` consumes the same compiler at the same root/section/field seams, so preview cannot diverge from runtime (R-CS-7). Read-time derivation (`resolveFormTheme` / `resolveSectionStyle` / `resolveFieldStyle` in `form-version-compiler.ts`) applies defaults to derived views only and never rewrites persisted bytes, so `schema_hash` survives a round-trip.
+
+**Backgrounds: color + gradient in v1.** `background` is `{ kind: 'none' | 'color' | 'gradient' }`; gradient = two hex stops + integer angle. **Image backgrounds + a `FormAsset` upload pipeline are an explicit Phase 2** (kept out of v1 to minimize attack surface — no SSRF, no author-supplied URLs).
+
+**Audit/PDF stay neutral (R-CS-5 / D9).** The signed-PDF snapshot (`services/pdf-snapshot-service.ts`) renders from submission answers + schema labels and ignores every styling keyword; styling affects only the interactive runtime + preview. `__tests__/pdf-style-neutrality.test.ts` locks this in.
+
+**Studio authoring** (gated by the existing `forms.design`, no new feature). Form-level Appearance panel `studio/palette/FormAppearancePanel.tsx` with static `studio/style/presets.ts` (Minimal/Card/Branded/Dark-friendly, all AA-safe); `studio/style/ColorControl.tsx` (token swatches + validated hex input + WCAG contrast warning) and `studio/style/BackgroundControl.tsx` (none/color/gradient); section/field Appearance tabs in `FormStudio.tsx`. i18n keys live under `forms.studio.style.*` in `i18n/en.json`.
+
+## ACL Features
+
+| Feature | Granted by default to | Purpose |
+|---------|-----------------------|---------|
+| `forms.view` | `admin` | Read forms, versions, and submissions from admin surfaces |
+| `forms.design` | `admin` | Create / edit / publish forms (1b consumer) |
+| `forms.submissions.manage` | `admin` | Reopen, assign actors, export PDF (2a consumer) |
+| `forms.submissions.export` | `admin` | GDPR data-subject export — Art. 15/20 structured JSON (W5 consumer) |
+| `forms.submissions.anonymize` | `admin` | Trigger GDPR erasure (2b consumer) |
+| `forms.distribute` | `admin` | Create / manage distributions and invitations (2d consumer) |
+
+When a medical or other vertical introduces a `clinician` (or similar) role, extend `setup.ts` `defaultRoleFeatures` to grant `forms.view + forms.submissions.manage` and run `yarn mercato auth sync-role-acls`.
+
+## Cross-Reference
+
+- Parent spec: `.ai/specs/2026-04-22-forms-module.md`
+- Phase 1a spec: `.ai/specs/2026-04-22-forms-phase-1a-foundation.md`
+- Module Development Quick Reference: root `AGENTS.md` and `packages/core/AGENTS.md`
+- Reference module for CRUD copy-paste: `packages/core/src/modules/customers/`
+- Event factory: `packages/shared/src/modules/events/factory.ts`
+- DI container types: `packages/shared/src/lib/di/container.ts`
