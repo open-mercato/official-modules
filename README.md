@@ -1,3 +1,5 @@
+> **Archived (October 2026).** Official modules now live in the [open-mercato](https://github.com/open-mercato/open-mercato). A CLI for publishing your own modules to npm or GitHub is coming.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/open-mercato/open-mercato/main/apps/mercato/public/open-mercato.svg" alt="Open Mercato logo" width="120" />
 </p>
