@@ -48,12 +48,14 @@ pointer to its new home.
 | Module | Migrated into | Migration PR |
 |--------|---------------|--------------|
 | `forms` | [Open Mercato Core](https://github.com/open-mercato/open-mercato) | [open-mercato#6770](https://github.com/open-mercato/open-mercato/pull/6770) |
+| `carrier-inpost` | [Open Mercato Core](https://github.com/open-mercato/open-mercato) (`@open-mercato/carrier-inpost`) | [open-mercato#7081](https://github.com/open-mercato/open-mercato/pull/7081) |
 
 ### Still awaiting migration
 
-The packages remaining under `packages/` (see [Module List](#-module-list)) have
-not moved yet. They are maintenance-only: no new features, bug fixes only where
-a release is already in flight.
+No modules remain awaiting migration. `packages/test-package` is scaffolding
+infrastructure (the export-map reference used by [Package Conventions](#-package-conventions)),
+not a published module, so there is nothing left to move — this repo can be
+archived once the last migration PR above merges.
 
 ## What this was
 
@@ -149,12 +151,9 @@ yarn platform:sync --check
 
 ## 🧩 Module List
 
-Modules still hosted here, pending migration into Open Mercato Core. For modules
-that have already moved, see [Migration status](#migration-status).
-
-| Package | Description | Author | Status |
-|---------|-------------|--------|--------|
-| [`@open-mercato/carrier-inpost`](packages/carrier-inpost) | InPost shipping carrier — rate calculation, shipment creation, cancellation, and webhook tracking for InPost locker and courier services (Poland) | Open Mercato | Awaiting migration |
+No modules are currently hosted here — every module that was has moved into
+Open Mercato Core; see [Migration status](#migration-status). `packages/test-package`
+is scaffolding reference infrastructure, not a published module.
 
 ## ⚡ Installing a Module
 
