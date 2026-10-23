@@ -1,3 +1,11 @@
+> **Archived (October 2026).** The modules from this repository were ported to the
+> [Open Mercato monorepo](https://github.com/open-mercato/open-mercato): `forms`
+> ([open-mercato#6770](https://github.com/open-mercato/open-mercato/pull/6770)) and
+> `carrier-inpost` ([open-mercato#7081](https://github.com/open-mercato/open-mercato/pull/7081)).
+> New modules are built and published with
+> [create-mercato-module](https://github.com/open-mercato/create-mercato-module).
+> A community module catalog is coming.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/open-mercato/open-mercato/main/apps/mercato/public/open-mercato.svg" alt="Open Mercato logo" width="120" />
 </p>
@@ -8,7 +16,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-openmercato.com-1F7AE0.svg)](https://docs.openmercato.com/)
 [![Core Repo](https://img.shields.io/badge/core-open--mercato-24292F.svg)](https://github.com/open-mercato/open-mercato)
-[![Docs](https://img.shields.io/badge/docs-modules.openmercato.com-1F7AE0.svg)](https://modules.openmercato.com/)
 
 <a id="deprecated"></a>
 
@@ -23,8 +30,8 @@
 >
 > **What this means for you:**
 >
-> - 🚫 **No new modules are accepted here.** Contribute to
->   [open-mercato/open-mercato](https://github.com/open-mercato/open-mercato) instead.
+> - 🚫 **No new modules are accepted here.** Build and publish your own module with
+>   [create-mercato-module](https://github.com/open-mercato/create-mercato-module).
 > - 🧊 **No new features, and no support, for what is still here.** The remaining
 >   packages are frozen until they are migrated; expect only migration commits.
 > - 📦 **Already-published npm packages keep working**, but they will not be
@@ -66,8 +73,9 @@ system itself is unchanged — modules still install in one command, stay isolat
 behind declared extension points, and remain ejectable. Only their home repo
 changes.
 
-If you want to build a module today, build it in
-[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato).
+If you want to build a module today, build it in your own Open Mercato app and
+publish it with
+[create-mercato-module](https://github.com/open-mercato/create-mercato-module).
 
 ## How it works
 
@@ -205,8 +213,8 @@ Full CLI reference: [docs.openmercato.com/cli/module-add](https://docs.openmerca
 ## 🏗️ Building a Module
 
 > ⚠️ **Do not start a new module in this repo.** It is deprecated and will be
-> archived. New modules belong in
-> [open-mercato/open-mercato](https://github.com/open-mercato/open-mercato); the
+> archived. New modules are built and published with
+> [create-mercato-module](https://github.com/open-mercato/create-mercato-module); the
 > workflow below is retained as reference, and because it still applies to the
 > packages waiting to be migrated.
 
@@ -257,9 +265,9 @@ Navigate to `/backend/<module-name>` and confirm the module loads, pages render,
 
 ### Step 5 — Open a pull request
 
-For a new module, open the PR against
-[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato) — this
-repo no longer accepts them. For migration or release-critical work on a package
+For a new module, use
+[create-mercato-module](https://github.com/open-mercato/create-mercato-module) —
+this repo no longer accepts them. For migration or release-critical work on a package
 still hosted here, open a PR against `develop`. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist.
 
@@ -278,7 +286,7 @@ still hosted here, open a PR against `develop`. See
 ## 🔗 Resources
 
 - [Open Mercato core repo](https://github.com/open-mercato/open-mercato)
-- [Official modules documentation](https://modules.openmercato.com/)
+- [create-mercato-module](https://github.com/open-mercato/create-mercato-module) — build and publish a module
 - [Module development guide](https://docs.openmercato.com/framework/modules/overview)
 - [CLI reference](https://docs.openmercato.com/cli/overview)
 - [Discord community](https://discord.gg/f4qwPtJ3qA)
@@ -286,9 +294,11 @@ still hosted here, open a PR against `develop`. See
 ## Contributing
 
 **This repo is closed to new modules.** We still welcome modules of all sizes —
-from thin UI extensions to full vertical feature sets — but they now go to
-[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato). Open
-your PR there and follow that repo's contributing guide.
+from thin UI extensions to full vertical feature sets — built in your own Open
+Mercato app and published with
+[create-mercato-module](https://github.com/open-mercato/create-mercato-module).
+Changes to the modules ported here go to
+[open-mercato/open-mercato](https://github.com/open-mercato/open-mercato).
 
 The only changes still accepted here are migration commits moving a package to
 Core, and release-critical fixes for a package that has not migrated yet. If you
